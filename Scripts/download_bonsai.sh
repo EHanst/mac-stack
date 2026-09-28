@@ -19,18 +19,17 @@ if ! command -v python3 &>/dev/null; then
     exit 1
 fi
 
-python3 - <<PYEOF
-import sys
-try:
-    from huggingface_hub import snapshot_download
-except ImportError:
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "huggingface_hub"])
-    from huggingface_hub import snapshot_download
+VENV_DIR="$(mktemp -d)/hf_venv"
+python3 -m venv "${VENV_DIR}"
+"${VENV_DIR}/bin/pip" install -q huggingface_hub
 
+"${VENV_DIR}/bin/python" - <<PYEOF
+from huggingface_hub import snapshot_download
 dest = "${DEST}"
 repo = "${REPO}"
 print(f"Downloading {repo} (~8.6 GB)...")
 snapshot_download(repo_id=repo, local_dir=dest, ignore_patterns=["*.py"])
 print(f"\nDone: {dest}")
 PYEOF
+
+rm -rf "${VENV_DIR}"
