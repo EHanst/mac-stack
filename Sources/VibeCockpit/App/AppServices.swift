@@ -54,6 +54,8 @@ public final class AppServices {
             }
         }
 
+        await credentials.registerEnvVarKey("BRAVE_SEARCH_API_KEY", for: "brave-search")
+
         let remoteConfigs = (try? ModelRegistry.loadRemoteConfigs()) ?? []
         let modelsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("VibeCockpit/Models")
@@ -163,7 +165,12 @@ public final class AppServices {
         let ragContext = await retrieveContext(for: text)
         let intent = PromptEngineer.classify(text)
 
-        let agentTools: [AgentToolHandler] = [FileReaderTool(), FileWriterTool()]
+        let agentTools: [AgentToolHandler] = [
+            FileReaderTool(),
+            FileWriterTool(),
+            WebFetchTool(),
+            WebSearchTool(credentials: credentials),
+        ]
         let toolDefs = agentTools.map { h in
             ToolDefinition(name: h.toolDefinition.name, description: h.toolDefinition.description ?? "")
         }
