@@ -1,0 +1,8 @@
+SWIFT_VERSION = 6.0
+MACOSX_DEPLOYMENT_TARGET = 14.0
+ENABLE_HARDENED_RUNTIME = YES
+CODE_SIGN_ENTITLEMENTS = Config/VibeCockpit.entitlements
+METAL_LIBRARY_OUTPUT_DIR = $(BUILT_PRODUCTS_DIR)/VibeCockpit.app/Contents/Resources
+OTHER_LDFLAGS = -lsqlite3 -L/opt/homebrew/lib -lgit2
+HEADER_SEARCH_PATHS = /opt/homebrew/include
+SWIFT_STRICT_CONCURRENCY = complete

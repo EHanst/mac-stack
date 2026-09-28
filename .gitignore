@@ -1,0 +1,34 @@
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.moved-aside
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Build artifacts
+build/
+*.metallib
+*.air
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Credentials / secrets
+*.env
+credentials.json

@@ -1,0 +1,108 @@
+name: VibeCockpit
+options:
+  bundleIdPrefix: com.vibecockpit
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+packages:
+  swift-syntax:
+    url: https://github.com/swiftlang/swift-syntax.git
+    from: "600.0.0"
+  swift-sdk:
+    url: https://github.com/modelcontextprotocol/swift-sdk.git
+    from: "0.9.0"
+  swift-crypto:
+    url: https://github.com/apple/swift-crypto.git
+    from: "3.0.0"
+
+targets:
+  VibeCockpit:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/VibeCockpit
+    resources:
+      - path: Shaders
+        buildPhase: none
+    dependencies:
+      - target: CSQLiteVec
+      - target: BuildRunnerXPCService
+      - package: swift-syntax
+        product: SwiftSyntax
+      - package: swift-syntax
+        product: SwiftParser
+      - package: swift-sdk
+        product: MCP
+      - package: swift-crypto
+        product: Crypto
+    settings:
+      base:
+        INFOPLIST_FILE: Sources/VibeCockpit/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.app
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_ENTITLEMENTS: Config/VibeCockpit.entitlements
+        HEADER_SEARCH_PATHS: /opt/homebrew/include
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Modules/CLibGit2
+        OTHER_LDFLAGS: "-L/opt/homebrew/lib -lgit2"
+      configs:
+        Debug:
+          xcconfig: Config/App.xcconfig
+        Release:
+          xcconfig: Config/App.xcconfig
+    buildPhases:
+      - type: shellScript
+        name: Compile Metal Shaders
+        script: |
+          if [ -f "$SRCROOT/Shaders/Kernels.metal" ]; then
+            xcrun metal "$SRCROOT/Shaders/Kernels.metal" -o "$BUILT_PRODUCTS_DIR/default.air"
+            xcrun metallib "$BUILT_PRODUCTS_DIR/default.air" -o "$BUILT_PRODUCTS_DIR/VibeCockpit.app/Contents/Resources/default.metallib"
+          fi
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/VibeCockpit.app/Contents/Resources/default.metallib
+
+  CSQLiteVec:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Modules/CSQLiteVec/sqlite-vec.c
+      - path: Modules/CSQLiteVec/include
+        buildPhase: headers
+    settings:
+      base:
+        OTHER_CFLAGS: "-DSQLITE_CORE -DSQLITE_ENABLE_FTS5"
+        HEADER_SEARCH_PATHS: $(SRCROOT)/Modules/CSQLiteVec/include
+        PUBLIC_HEADERS_FOLDER_PATH: include/CSQLiteVec
+
+  CLibGit2System:
+    type: library.static
+    platform: macOS
+    sources: []
+    settings:
+      base:
+        OTHER_LDFLAGS: "-L/opt/homebrew/lib -lgit2"
+        HEADER_SEARCH_PATHS: /opt/homebrew/include
+
+  BuildRunnerXPCService:
+    type: "com.apple.product-type.xpc-service"
+    platform: macOS
+    sources:
+      - path: BuildRunnerXPCService
+        excludes: ["*.entitlements", "*.plist"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.buildrunner
+        INFOPLIST_FILE: BuildRunnerXPCService/Info.plist
+        CODE_SIGN_ENTITLEMENTS: BuildRunnerXPCService/BuildRunnerXPCService.entitlements
+
+  VibeCockpitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/VibeCockpitTests
+    dependencies:
+      - target: VibeCockpit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.tests

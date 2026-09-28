@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Allow unsigned memory (required by MLX for Metal compute buffers) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- JIT entitlement EXCLUDED: MLX uses Metal compute shaders, not CPU JIT.
+         Audit with: nm -U .build/.../VibeCockpitCore | grep -i jit
+         Add only if MLX explicitly requires it. -->
+
+    <!-- Keychain access for API credential storage -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.vibecockpit.credentials</string>
+    </array>
+
+    <!-- App Sandbox: disabled for developer tool (requires broad filesystem access).
+         BuildRunnerXPCService has its own sandboxed entitlements. -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+</dict>
+</plist>
