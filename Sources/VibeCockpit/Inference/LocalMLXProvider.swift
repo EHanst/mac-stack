@@ -116,23 +116,32 @@ public actor LocalMLXProvider: ModelProvider {
         let maxTokens = options.maxTokens > 0 ? options.maxTokens : 64000
         let temperature = Float(max(options.temperature, 0))
 
+        // Accumulate IDs and diff full decode each step — byte-level BPE tokens
+        // can't be decoded individually (partial UTF-8 bytes produce garbage).
+        var allGeneratedIds: [Int] = []
+        var prevDecoded = ""
+
         repeat {
-            let logits = mdl(inputTokens, cache: &cache)  // (1, 1, vocab)
+            let logits = mdl(inputTokens, cache: &cache)  // (1, vocab)
             MLX.eval(logits)
 
-            let nextId = sampleToken(logits[0, 0, 0...], temperature: temperature)
+            let nextId = sampleToken(logits[0, 0...], temperature: temperature)
             if eosIds.contains(nextId) { break }
 
-            let decoded = tok.decode(tokens: [nextId])
-            continuation.yield(.token(decoded))
+            allGeneratedIds.append(nextId)
+            let fullDecoded = tok.decode(tokens: allGeneratedIds)
+            let newText = String(fullDecoded.dropFirst(prevDecoded.count))
+            prevDecoded = fullDecoded
+
+            if !newText.isEmpty {
+                continuation.yield(.token(newText))
+            }
             generated += 1
 
             inputTokens = MLXArray([Int32(nextId)])[.newAxis]
 
             if !options.stopSequences.isEmpty {
-                // Check stop sequences in the most recent decoded text
-                let recent = decoded
-                if options.stopSequences.contains(where: { recent.contains($0) }) { break }
+                if options.stopSequences.contains(where: { prevDecoded.contains($0) }) { break }
             }
         } while generated < maxTokens
 
