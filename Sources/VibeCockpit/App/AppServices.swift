@@ -1,4 +1,5 @@
 import Foundation
+import MCP
 import Observation
 import os
 
@@ -50,31 +51,82 @@ public final class AppServices {
 
     public func processIntent(_ text: String, coordinator: AppCoordinator) async {
         guard let provider = await registry.preferredProvider(for: .textGeneration) else {
-            coordinator.send(.tokenReceived("\n\n⚠️ No model provider configured. Complete onboarding first."))
+            coordinator.send(.generationFailed("No model provider configured. Complete onboarding first."))
             coordinator.send(.generationFinished)
             return
         }
 
         coordinator.send(.generationStarted)
-        let messages = buildMessages(coordinator.state)
+
+        let agentTools: [AgentToolHandler] = [FileReaderTool(), FileWriterTool()]
+        let toolDefs = agentTools.map { h in
+            ToolDefinition(name: h.toolDefinition.name, description: h.toolDefinition.description ?? "")
+        }
 
         do {
-            let stream = await provider.generate(messages: messages, tools: [], options: GenerationOptions())
-            for try await event in stream {
-                switch event {
-                case .token(let t):
-                    coordinator.send(.tokenReceived(t))
-                case .toolCall(let call):
-                    coordinator.send(.toolCallMade(call.name, call.arguments))
-                case .finished:
-                    break
+            var continueLoop = true
+            while continueLoop {
+                let messages = buildMessages(coordinator.state)
+                let stream = await provider.generate(messages: messages, tools: toolDefs, options: GenerationOptions())
+                var pendingToolCalls: [ToolCall] = []
+                for try await event in stream {
+                    switch event {
+                    case .token(let t):
+                        coordinator.send(.tokenReceived(t))
+                    case .toolCall(let call):
+                        coordinator.send(.toolCallMade(call.name, call.arguments, call.id))
+                        pendingToolCalls.append(call)
+                    case .finished:
+                        break
+                    }
+                }
+                if pendingToolCalls.isEmpty {
+                    continueLoop = false
+                } else {
+                    for call in pendingToolCalls {
+                        let result = await executeTool(call, handlers: agentTools)
+                        coordinator.send(.toolResultReceived(call.id, result))
+                    }
                 }
             }
         } catch {
-            coordinator.send(.tokenReceived("\n\n⚠️ Generation error: \(error.localizedDescription)"))
+            coordinator.send(.generationFailed(error.localizedDescription))
         }
 
         coordinator.send(.generationFinished)
+    }
+
+    private func executeTool(_ call: ToolCall, handlers: [AgentToolHandler]) async -> String {
+        guard let handler = handlers.first(where: { $0.toolDefinition.name == call.name }) else {
+            return "Unknown tool: \(call.name)"
+        }
+        do {
+            let args = parseToolArguments(call.arguments)
+            let contents = try await handler.execute(arguments: args)
+            return contents.compactMap { item -> String? in
+                if case .text(let t) = item { return t } else { return nil }
+            }.joined(separator: "\n")
+        } catch {
+            return "Tool error: \(error.localizedDescription)"
+        }
+    }
+
+    private func parseToolArguments(_ json: String) -> [String: MCP.Value] {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return obj.compactMapValues { anyToMCPValue($0) }
+    }
+
+    private func anyToMCPValue(_ value: Any) -> MCP.Value? {
+        switch value {
+        case let s as String:  return .string(s)
+        case let i as Int:     return .int(i)
+        case let b as Bool:    return .bool(b)
+        case let d as Double:  return .double(d)
+        default:               return nil
+        }
     }
 
     // MARK: - Onboarding helpers
@@ -123,35 +175,78 @@ public final class AppServices {
         do {
             try await mgr.restoreSnapshot(ref)
         } catch {
-            coordinator.send(.tokenReceived("\n\n⚠️ Restore failed: \(error.localizedDescription)"))
+            coordinator.send(.generationFailed("Restore failed: \(error.localizedDescription)"))
         }
     }
 
     // MARK: - Private helpers
 
     private func buildMessages(_ state: AppState) -> [Message] {
-        var msgs: [Message] = [
-            Message(role: .system, content: "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications.")
-        ]
+        let systemContent = buildSystemPrompt()
+        let system = Message(role: .system, content: systemContent)
+
+        // Assemble candidate messages from history, newest-first for budget trimming
+        var candidates: [Message] = []
         var pendingAssistant = ""
-        for event in state.intentHistory {
+        for event in state.intentHistory.reversed() {
             switch event.kind {
+            case .assistantToken:
+                pendingAssistant = event.content + pendingAssistant
             case .userPrompt:
                 if !pendingAssistant.isEmpty {
-                    msgs.append(Message(role: .assistant, content: pendingAssistant))
+                    candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
                     pendingAssistant = ""
                 }
-                msgs.append(Message(role: .user, content: event.content))
-            case .assistantToken:
-                pendingAssistant += event.content
+                candidates.insert(Message(role: .user, content: event.content), at: 0)
+            case .toolResult:
+                if !pendingAssistant.isEmpty {
+                    candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
+                    pendingAssistant = ""
+                }
+                candidates.insert(
+                    Message(role: .tool, content: event.content, toolCallID: event.toolCallID),
+                    at: 0
+                )
             case .toolCall, .error:
                 break
             }
         }
         if !pendingAssistant.isEmpty {
-            msgs.append(Message(role: .assistant, content: pendingAssistant))
+            candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
         }
-        return msgs
+
+        // Budget: ~80% of maxTokens, approximated as chars/4
+        let budget = (GenerationOptions().maxTokens * 4 * 4) / 5  // chars budget
+        var usedChars = systemContent.count
+        var kept: [Message] = []
+        for msg in candidates.reversed() {
+            usedChars += msg.content.count
+            if usedChars > budget && !kept.isEmpty { break }
+            kept.insert(msg, at: 0)
+        }
+
+        return [system] + kept
+    }
+
+    private func buildSystemPrompt() -> String {
+        var lines = [
+            "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications.",
+        ]
+        if let workspace = detectWorkspaceURL() {
+            lines.append("Workspace root: \(workspace.path)")
+        }
+        if let swiftVersion = cachedSwiftVersion() {
+            lines.append("Swift version: \(swiftVersion)")
+        }
+        if snapshotManager != nil {
+            lines.append("Git snapshots are available. Prefer small, focused edits.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func cachedSwiftVersion() -> String? {
+        // Best-effort: runs only in background; nil is a safe no-op for the system prompt
+        return nil
     }
 
     private func detectWorkspaceURL() -> URL? {

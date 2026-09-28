@@ -17,15 +17,19 @@ public struct AppState: Sendable {
 }
 
 public struct IntentEvent: Sendable, Identifiable {
-    public enum Kind: Sendable { case userPrompt, assistantToken, toolCall, error }
+    public enum Kind: Sendable {
+        case userPrompt, assistantToken, toolCall, toolResult, error
+    }
     public let id: UUID = UUID()
     public let kind: Kind
     public let content: String
+    public let toolCallID: String?
     public let timestamp: Date = Date()
 
-    public init(kind: Kind, content: String) {
+    public init(kind: Kind, content: String, toolCallID: String? = nil) {
         self.kind = kind
         self.content = content
+        self.toolCallID = toolCallID
     }
 }
 
@@ -39,7 +43,8 @@ public final class AppCoordinator {
     public enum Command: Sendable {
         case submitIntent(String)
         case tokenReceived(String)
-        case toolCallMade(String, String)           // name, arguments
+        case toolCallMade(String, String, String)    // name, arguments, id
+        case toolResultReceived(String, String)     // toolCallID, result
         case diffUpdated(UnifiedDiff)
         case snapshotCreated(SnapshotRef)
         case correctionNeeded(BuildResult)
@@ -48,6 +53,7 @@ public final class AppCoordinator {
         case previewUpdated(String)
         case generationStarted
         case generationFinished
+        case generationFailed(String)
         case onboardingRequired
         case onboardingCompleted
     }
@@ -81,8 +87,11 @@ public final class AppCoordinator {
                 next.intentHistory.append(IntentEvent(kind: .assistantToken, content: token))
             }
 
-        case .toolCallMade(let name, let args):
-            next.intentHistory.append(IntentEvent(kind: .toolCall, content: "\(name)(\(args))"))
+        case .toolCallMade(let name, let args, let callID):
+            next.intentHistory.append(IntentEvent(kind: .toolCall, content: "\(name)(\(args))", toolCallID: callID))
+
+        case .toolResultReceived(let callID, let result):
+            next.intentHistory.append(IntentEvent(kind: .toolResult, content: result, toolCallID: callID))
 
         case .diffUpdated(let diff):
             next.currentDiff = diff
@@ -117,6 +126,9 @@ public final class AppCoordinator {
 
         case .generationFinished:
             next.isGenerating = false
+
+        case .generationFailed(let reason):
+            next.intentHistory.append(IntentEvent(kind: .error, content: reason))
 
         case .onboardingRequired:
             next.onboardingNeeded = true

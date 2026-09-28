@@ -103,12 +103,67 @@ public actor RemoteAPIProvider: ModelProvider {
     }
 
     public func healthCheck() async -> ProviderHealth {
+        let token: String
         do {
-            _ = try await credentials.token(for: config.id)
-            return .healthy
+            token = try await credentials.token(for: config.id)
         } catch {
             return .unavailable("No credential: \(error.localizedDescription)")
         }
+        do {
+            switch config.apiStyle {
+            case .openAIChat:
+                try await probeOpenAI(token: token)
+            case .anthropicMessages:
+                try await probeAnthropic(token: token)
+            case .ollamaGenerate:
+                try await probeOllama()
+            }
+            return .healthy
+        } catch ProviderError.httpError(let code) {
+            return .degraded("HTTP \(code)")
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
+    }
+
+    private func probeOpenAI(token: String) async throws {
+        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/chat/completions"))
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+        let body: [String: Any] = [
+            "model": config.modelIdentifier,
+            "messages": [["role": "user", "content": "hi"]],
+            "max_tokens": 1,
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (_, response) = try await session.data(for: request)
+        try validate(response: response)
+    }
+
+    private func probeAnthropic(token: String) async throws {
+        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/messages"))
+        request.httpMethod = "POST"
+        request.setValue(token, forHTTPHeaderField: "x-api-key")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 10
+        let body: [String: Any] = [
+            "model": config.modelIdentifier,
+            "messages": [["role": "user", "content": "hi"]],
+            "max_tokens": 1,
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (_, response) = try await session.data(for: request)
+        try validate(response: response)
+    }
+
+    private func probeOllama() async throws {
+        var request = URLRequest(url: config.baseURL.appendingPathComponent("api/tags"))
+        request.timeoutInterval = 5
+        let (_, response) = try await session.data(for: request)
+        try validate(response: response)
     }
 
     // MARK: - Private streaming implementations
@@ -194,13 +249,12 @@ public actor RemoteAPIProvider: ModelProvider {
         options: GenerationOptions,
         continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     ) async throws {
-        var request = URLRequest(url: config.baseURL.appendingPathComponent("api/generate"))
+        var request = URLRequest(url: config.baseURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let prompt = messages.map { "\($0.role.rawValue): \($0.content)" }.joined(separator: "\n")
         let body: [String: Any] = [
             "model": config.modelIdentifier,
-            "prompt": prompt,
+            "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
             "stream": true,
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -208,9 +262,11 @@ public actor RemoteAPIProvider: ModelProvider {
         try validate(response: response)
         for try await line in stream.lines {
             if let data = line.data(using: .utf8),
-               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let response = obj["response"] as? String {
-                continuation.yield(.token(response))
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let message = obj["message"] as? [String: Any],
+                   let content = message["content"] as? String {
+                    continuation.yield(.token(content))
+                }
                 if (obj["done"] as? Bool) == true { continuation.yield(.finished(.stop)) }
             }
         }

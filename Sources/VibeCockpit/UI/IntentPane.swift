@@ -82,19 +82,21 @@ private struct IntentEventRow: View {
 
     private var iconName: String {
         switch event.kind {
-        case .userPrompt:    "person.circle"
+        case .userPrompt:     "person.circle"
         case .assistantToken: "sparkles"
-        case .toolCall:      "wrench.and.screwdriver"
-        case .error:         "exclamationmark.triangle"
+        case .toolCall:       "wrench.and.screwdriver"
+        case .toolResult:     "checkmark.seal"
+        case .error:          "exclamationmark.triangle"
         }
     }
 
     private var iconColor: Color {
         switch event.kind {
-        case .userPrompt:    .blue
+        case .userPrompt:     .blue
         case .assistantToken: .purple
-        case .toolCall:      .orange
-        case .error:         .red
+        case .toolCall:       .orange
+        case .toolResult:     .green
+        case .error:          .red
         }
     }
 }
