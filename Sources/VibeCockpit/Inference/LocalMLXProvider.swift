@@ -24,10 +24,32 @@ public actor LocalMLXProvider: ModelProvider {
 
     private var model: Qwen35ForCausalLM?
     private var tokenizer: (any Tokenizer)?
+    private var _runtime: ModelRuntime?
+
+    private var runtime: ModelRuntime {
+        if let r = _runtime { return r }
+        let r = ModelRuntime(
+            loader: { [weak self] in try await self?._loadModel() },
+            unloader: { [weak self] in await self?._unloadModel() },
+            idleTimeout: .seconds(300)
+        )
+        _runtime = r
+        return r
+    }
 
     public init(id: ProviderID, modelDirectory: URL) {
         self.id = id
         self.modelDirectory = modelDirectory
+    }
+
+    private func _loadModel() async throws {
+        _ = try await ensureLoaded()
+    }
+
+    private func _unloadModel() async {
+        model = nil
+        tokenizer = nil
+        logger.info("Model weights unloaded (idle eviction)")
     }
 
     // MARK: ModelProvider
@@ -74,6 +96,8 @@ public actor LocalMLXProvider: ModelProvider {
         options: GenerationOptions,
         continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     ) async throws {
+        try await runtime.acquire()
+        defer { Task { await self.runtime.release() } }
         let (mdl, tok) = try await ensureLoaded()
 
         let prompt = buildPrompt(from: messages, tokenizer: tok)
