@@ -9,6 +9,7 @@ import os
 public final class AppServices {
 
     public let credentials = CredentialStore()
+    public private(set) var workspaceName: String?
     private let registry = ModelRegistry()
     private var snapshotManager: GitSnapshotManager?
     private var startupComplete = false
@@ -24,6 +25,7 @@ public final class AppServices {
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
             snapshotManager = GitSnapshotManager(workspaceURL: url)
+            workspaceName = url.lastPathComponent
         }
 
         let remoteConfigs = (try? ModelRegistry.loadRemoteConfigs()) ?? []

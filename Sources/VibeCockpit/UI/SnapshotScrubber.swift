@@ -6,36 +6,40 @@ struct SnapshotScrubber: View {
     @Environment(AppServices.self) private var services
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            snapshotList
-        }
-    }
-
-    private var header: some View {
-        Text("Snapshots")
-            .font(.headline)
-            .padding(12)
-    }
-
-    private var snapshotList: some View {
-        Group {
+        List {
             if coordinator.state.snapshotTimeline.isEmpty {
-                Text("No snapshots yet")
-                    .foregroundStyle(.secondary)
-                    .padding(12)
+                emptyState
             } else {
-                List(coordinator.state.snapshotTimeline) { snap in
+                ForEach(coordinator.state.snapshotTimeline) { snap in
                     SnapshotRow(snapshot: snap) {
                         Task { await services.diffAgainstSnapshot(snap, coordinator: coordinator) }
                     } onRestore: {
                         Task { await services.restoreSnapshot(snap, coordinator: coordinator) }
                     }
                 }
-                .listStyle(.plain)
             }
         }
+        .listStyle(.sidebar)
+        .navigationTitle("Snapshots (\(coordinator.state.snapshotTimeline.count))")
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 28))
+                .foregroundStyle(.tertiary)
+            Text("No snapshots yet")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Text("Snapshots are created automatically\nas you build.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 24)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 }
 
@@ -43,31 +47,43 @@ private struct SnapshotRow: View {
     let snapshot: SnapshotRef
     let onDiff: () -> Void
     let onRestore: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(snapshot.message)
                 .lineLimit(2)
-            HStack {
+                .font(.subheadline)
+            HStack(spacing: 0) {
                 Text(snapshot.branchName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer()
-                Text(snapshot.createdAt, style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                if isHovered {
+                    HStack(spacing: 8) {
+                        Button("Diff") { onDiff() }
+                            .buttonStyle(.borderless)
+                            .controlSize(.mini)
+                            .foregroundStyle(.secondary)
+                        Button("Restore") { onRestore() }
+                            .buttonStyle(.borderless)
+                            .controlSize(.mini)
+                            .foregroundStyle(.orange)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                } else {
+                    Text(snapshot.createdAt, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .transition(.opacity)
+                }
             }
-            HStack(spacing: 8) {
-                Button("Diff") { onDiff() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                Button("Restore") { onRestore() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.mini)
-                    .tint(.orange)
-            }
+            .animation(.easeInOut(duration: 0.12), value: isHovered)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 3)
+        .onHover { isHovered = $0 }
     }
 }
 #endif

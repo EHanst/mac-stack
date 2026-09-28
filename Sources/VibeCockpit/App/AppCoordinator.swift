@@ -50,6 +50,7 @@ public final class AppCoordinator {
         case generationFinished
         case onboardingRequired
         case onboardingCompleted
+        case clearSession
     }
 
     public private(set) var state: AppState
@@ -123,6 +124,13 @@ public final class AppCoordinator {
 
         case .onboardingCompleted:
             next.onboardingNeeded = false
+
+        case .clearSession:
+            next.intentHistory = []
+            next.currentDiff = nil
+            next.previewHTML = nil
+            next.activeIntent = nil
+            next.correctionLoopState = .init(maxRetries: next.correctionLoopState.maxRetries)
         }
         return next
     }
