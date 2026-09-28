@@ -8,6 +8,14 @@ public struct SnapshotRef: Sendable, Identifiable, Codable {
     public let message: String
     public let createdAt: Date
     public let branchName: String
+
+    public init(id: UUID, oid: String, message: String, createdAt: Date, branchName: String) {
+        self.id = id
+        self.oid = oid
+        self.message = message
+        self.createdAt = createdAt
+        self.branchName = branchName
+    }
 }
 
 public struct UnifiedDiff: Sendable {

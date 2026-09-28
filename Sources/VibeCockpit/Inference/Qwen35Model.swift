@@ -38,7 +38,7 @@ struct Qwen35Config {
 
 // MARK: - Hadamard metadata
 
-struct HadamardMeta {
+struct HadamardMeta: @unchecked Sendable {
     let block: Int
     /// Weight key prefix → signs MLXArray (nil if no rotation for that key)
     let rotations: [String: MLXArray?]
