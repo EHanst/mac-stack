@@ -27,8 +27,10 @@ public final class AppServices {
         }
 
         let remoteConfigs = (try? ModelRegistry.loadRemoteConfigs()) ?? []
+        let modelsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("VibeCockpit/Models")
         try? await registry.discover(
-            localDirectory: nil,
+            localDirectory: modelsDir,
             remoteConfigs: remoteConfigs,
             credentials: credentials
         )

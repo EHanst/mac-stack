@@ -95,13 +95,37 @@ public actor ModelRegistry {
         for item in enumerator {
             guard let url = item as? URL else { continue }
             let configURL = url.appendingPathComponent("config.json")
-            guard FileManager.default.fileExists(atPath: configURL.path) else { continue }
+            let hasSafetensors = FileManager.default.fileExists(
+                atPath: url.appendingPathComponent("model.safetensors").path) ||
+                FileManager.default.fileExists(
+                    atPath: url.appendingPathComponent("model.safetensors.index.json").path)
+            guard FileManager.default.fileExists(atPath: configURL.path) && hasSafetensors else {
+                continue
+            }
             bundleURLs.append(url)
         }
+
         for url in bundleURLs {
             let name = url.lastPathComponent
-            // LocalMLXProvider is only available when compiled with Xcode + Metal.
-            logger.info("Found local model bundle at \(name, privacy: .public) — requires Xcode build with MLX enabled.")
+            guard isMLXCompatibleModel(at: url) else {
+                logger.info("Skipping \(name, privacy: .public): unsupported model type")
+                continue
+            }
+            let providerID = "local:\(name)"
+            if providers[providerID] == nil {
+                providers[providerID] = LocalMLXProvider(id: providerID, modelDirectory: url)
+                logger.info("Registered local model: \(name, privacy: .public)")
+            }
         }
+    }
+
+    private func isMLXCompatibleModel(at url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url.appendingPathComponent("config.json")),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return true }  // no config → assume compatible
+        let modelType = dict["model_type"] as? String ?? ""
+        // Supported: Prism Hadamard Qwen3.5, standard Qwen3/Qwen2, and unknowns
+        let unsupported = ["llama", "mistral", "gemma", "phi"]
+        return !unsupported.contains(modelType.lowercased())
     }
 }

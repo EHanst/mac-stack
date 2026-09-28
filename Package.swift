@@ -11,12 +11,8 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0"),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
-        // mlx-swift and swift-transformers are excluded until their transitive dependencies
-        // (swift-argument-parser ≤ 1.8.2, CudaBuild plugin) are fixed for macOS 26 SDK 27.
-        // LocalMLXProvider.swift stubs the ModelProvider protocol until then.
-        // To re-enable: add back the two packages below and uncomment in VibeCockpitCore deps.
-        // .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.21.0"),
-        // .package(url: "https://github.com/huggingface/swift-transformers.git", "0.1.13"..<"0.1.14"),
+        .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.31.0"),
+        .package(url: "https://github.com/huggingface/swift-transformers.git", from: "0.1.17"),
     ],
     targets: [
         // C module: sqlite-vec (compiled amalgamation)
@@ -48,10 +44,10 @@ let package = Package(
                 .product(name: "SwiftParser", package: "swift-syntax"),
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                // .product(name: "MLX", package: "mlx-swift"),
-                // .product(name: "MLXNN", package: "mlx-swift"),
-                // .product(name: "MLXRandom", package: "mlx-swift"),
-                // .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "Transformers", package: "swift-transformers"),
             ],
             path: "Sources/VibeCockpit",
             exclude: [

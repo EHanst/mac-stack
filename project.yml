@@ -16,6 +16,12 @@ packages:
   swift-crypto:
     url: https://github.com/apple/swift-crypto.git
     from: "3.0.0"
+  mlx-swift:
+    url: https://github.com/ml-explore/mlx-swift.git
+    from: "0.31.0"
+  swift-transformers:
+    url: https://github.com/huggingface/swift-transformers.git
+    from: "0.1.17"
 
 targets:
   VibeCockpit:
@@ -37,6 +43,14 @@ targets:
         product: MCP
       - package: swift-crypto
         product: Crypto
+      - package: mlx-swift
+        product: MLX
+      - package: mlx-swift
+        product: MLXNN
+      - package: mlx-swift
+        product: MLXRandom
+      - package: swift-transformers
+        product: Transformers
     settings:
       base:
         INFOPLIST_FILE: Sources/VibeCockpit/Info.plist
