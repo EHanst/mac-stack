@@ -109,7 +109,7 @@ public actor LocalMLXProvider: ModelProvider {
             repeating: nil, count: mdl.config.numHiddenLayers)
 
         var generated = 0
-        let maxTokens = options.maxTokens > 0 ? options.maxTokens : 2048
+        let maxTokens = options.maxTokens > 0 ? options.maxTokens : 64000
         let temperature = Float(max(options.temperature, 0))
 
         repeat {

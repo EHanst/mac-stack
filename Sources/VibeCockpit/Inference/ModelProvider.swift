@@ -59,7 +59,7 @@ public struct GenerationOptions: Sendable {
     public var temperature: Double
     public var stopSequences: [String]
 
-    public init(maxTokens: Int = 2048, temperature: Double = 0.0, stopSequences: [String] = []) {
+    public init(maxTokens: Int = 64000, temperature: Double = 0.0, stopSequences: [String] = []) {
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.stopSequences = stopSequences
