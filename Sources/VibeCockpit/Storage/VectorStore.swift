@@ -39,6 +39,10 @@ public actor VectorStore {
     private let embeddingDimension: Int
     private let logger = Logger(subsystem: "com.vibecockpit", category: "VectorStore")
 
+    // LRU query embedding cache (in-memory, evicts oldest when over capacity)
+    private var queryCache: [(key: String, value: [Float])] = []
+    private let queryCacheCapacity = 128
+
     public enum StoreError: LocalizedError {
         case openFailed(String)
         case setupFailed(String)
@@ -70,6 +74,8 @@ public actor VectorStore {
         }
         self.writeDB = db
 
+        sqlite3_busy_timeout(db, 3000)
+
         // Load sqlite-vec extension
         sqlite3_vec_init(db, nil, nil)
 
@@ -85,6 +91,7 @@ public actor VectorStore {
             var rdb: OpaquePointer?
             let rflags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
             if sqlite3_open_v2(dbURL.path, &rdb, rflags, nil) == SQLITE_OK, let rdb {
+                sqlite3_busy_timeout(rdb, 3000)
                 sqlite3_exec(rdb, "PRAGMA mmap_size=268435456;", nil, nil, nil)
                 sqlite3_vec_init(rdb, nil, nil)
                 readPool.append(rdb)
@@ -95,8 +102,11 @@ public actor VectorStore {
 
     public func upsertChunks(_ chunks: [CodeChunk]) async throws {
         guard let db = writeDB else { throw StoreError.openFailed("Not open") }
-        try exec(db: db, sql: "BEGIN;")
-        defer { sqlite3_exec(db, "COMMIT;", nil, nil, nil) }
+        try exec(db: db, sql: "BEGIN IMMEDIATE;")
+        defer {
+            sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+            sqlite3_exec(db, "INSERT INTO chunk_fts(chunk_fts) VALUES('optimize');", nil, nil, nil)
+        }
 
         for chunk in chunks {
             let upsertSQL = """
@@ -169,6 +179,23 @@ public actor VectorStore {
         guard let ptr = blobPtr else { return nil }
         let count = Int(blobSize) / MemoryLayout<Float>.stride
         return Array(UnsafeBufferPointer(start: ptr.assumingMemoryBound(to: Float.self), count: count))
+    }
+
+    public func cacheQueryEmbedding(_ embedding: [Float], for query: String) {
+        if let idx = queryCache.firstIndex(where: { $0.key == query }) {
+            queryCache.remove(at: idx)
+        }
+        queryCache.append((key: query, value: embedding))
+        if queryCache.count > queryCacheCapacity {
+            queryCache.removeFirst()
+        }
+    }
+
+    public func cachedQueryEmbedding(for query: String) -> [Float]? {
+        guard let idx = queryCache.firstIndex(where: { $0.key == query }) else { return nil }
+        let entry = queryCache.remove(at: idx)
+        queryCache.append(entry)
+        return entry.value
     }
 
     public func hybridSearch(
