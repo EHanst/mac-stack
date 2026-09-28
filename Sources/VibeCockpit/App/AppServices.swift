@@ -78,6 +78,7 @@ public final class AppServices {
         coordinator.send(.generationStarted)
 
         let ragContext = await retrieveContext(for: text)
+        let intent = PromptEngineer.classify(text)
 
         let agentTools: [AgentToolHandler] = [FileReaderTool(), FileWriterTool()]
         let toolDefs = agentTools.map { h in
@@ -88,7 +89,8 @@ public final class AppServices {
             var continueLoop = true
             var isFirstTurn = true
             while continueLoop {
-                let messages = buildMessages(coordinator.state, ragContext: isFirstTurn ? ragContext : nil)
+                let raw = buildMessages(coordinator.state, ragContext: isFirstTurn ? ragContext : nil)
+                let messages = isFirstTurn ? PromptEngineer.engineer(messages: raw, intent: intent) : raw
                 isFirstTurn = false
                 let stream = await provider.generate(messages: messages, tools: toolDefs, options: GenerationOptions())
                 var pendingToolCalls: [ToolCall] = []
