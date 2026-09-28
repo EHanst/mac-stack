@@ -1,6 +1,14 @@
 import Foundation
 import MCP
 
+// MARK: - WebSession (injectable for testing)
+
+public protocol WebSession: Sendable {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
+
+extension URLSession: WebSession {}
+
 // MARK: - Web Fetch
 
 public struct WebFetchTool: AgentToolHandler {
@@ -13,7 +21,8 @@ public struct WebFetchTool: AgentToolHandler {
         ])
     )
 
-    public init() {}
+    private let session: any WebSession
+    public init(session: any WebSession = URLSession.shared) { self.session = session }
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let rawURL) = arguments["url"],
@@ -29,7 +38,7 @@ public struct WebFetchTool: AgentToolHandler {
             forHTTPHeaderField: "User-Agent"
         )
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode) else {
             throw WebResearchError.httpError((response as? HTTPURLResponse)?.statusCode ?? 0)
@@ -56,7 +65,11 @@ public struct WebSearchTool: AgentToolHandler {
     )
 
     private let credentials: CredentialStore
-    public init(credentials: CredentialStore) { self.credentials = credentials }
+    private let session: any WebSession
+    public init(credentials: CredentialStore, session: any WebSession = URLSession.shared) {
+        self.credentials = credentials
+        self.session = session
+    }
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let query) = arguments["query"] else {
@@ -80,7 +93,7 @@ public struct WebSearchTool: AgentToolHandler {
         request.setValue(apiKey, forHTTPHeaderField: "X-Subscription-Token")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode) else {
             throw WebResearchError.httpError((response as? HTTPURLResponse)?.statusCode ?? 0)

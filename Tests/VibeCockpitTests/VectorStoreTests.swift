@@ -41,6 +41,40 @@ struct VectorStoreTests {
         #expect(recent != nil)
     }
 
+    @Test("hybridSearch returns matching result after upsert")
+    func hybridSearchFindsUpsertedChunk() async throws {
+        let (store, tmp) = try await makeStore()
+        defer { try? FileManager.default.removeItem(at: tmp.deletingLastPathComponent()) }
+        let chunk = CodeChunk(filePath: "/ws/Auth.swift", declarationKind: "class",
+                              startLine: 1, endLine: 8,
+                              content: "class AuthenticationManager { func login(user: String) {} }")
+        try await store.upsertChunks([chunk])
+        let results = try await store.hybridSearch(
+            query: "AuthenticationManager", queryEmbedding: [], topK: 5)
+        #expect(results.contains { $0.filePath == "/ws/Auth.swift" })
+    }
+
+    @Test("hybridSearch returns empty array when store is empty")
+    func hybridSearchEmptyStore() async throws {
+        let (store, tmp) = try await makeStore()
+        defer { try? FileManager.default.removeItem(at: tmp.deletingLastPathComponent()) }
+        let results = try await store.hybridSearch(query: "anything", queryEmbedding: [], topK: 5)
+        #expect(results.isEmpty)
+    }
+
+    @Test("hybridSearch topK caps the result count")
+    func hybridSearchTopKCap() async throws {
+        let (store, tmp) = try await makeStore()
+        defer { try? FileManager.default.removeItem(at: tmp.deletingLastPathComponent()) }
+        let chunks = (0..<10).map { i in
+            CodeChunk(filePath: "/ws/F\(i).swift", declarationKind: "func",
+                      startLine: 1, endLine: 2, content: "func search\(i)() -> Int { \(i) }")
+        }
+        try await store.upsertChunks(chunks)
+        let results = try await store.hybridSearch(query: "search", queryEmbedding: [], topK: 3)
+        #expect(results.count <= 3)
+    }
+
     @Test("no SQLITE_BUSY during concurrent reads and write")
     func noBusyErrors() async throws {
         let (store, tmp) = try await makeStore()

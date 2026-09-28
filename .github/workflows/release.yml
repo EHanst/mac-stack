@@ -1,0 +1,78 @@
+# Triggered by a version tag (e.g. v1.2.3).
+# Builds, signs, packages, and notarizes a distributable DMG, then
+# attaches it to a GitHub Release.
+#
+# Required repository secrets:
+#   DEVELOPER_ID_APPLICATION  — e.g. "Developer ID Application: Acme (TEAMID)"
+#   NOTARYTOOL_APPLE_ID       — Apple ID used for notarization
+#   NOTARYTOOL_TEAM_ID        — 10-character Team ID
+#   NOTARYTOOL_APP_PASSWORD   — app-specific password for notarytool
+#
+# The signing certificate must be imported into the runner's keychain.
+# Use the `apple-actions/import-codesign-certs` action or a pre-baked
+# self-hosted runner with the certificate already installed.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  release:
+    name: Build & Notarize
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls /Applications | grep -E '^Xcode_2[6-9]|^Xcode_[3-9]' | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then
+            sudo xcode-select -s "/Applications/$XCODE/Contents/Developer"
+          fi
+          xcodebuild -version
+
+      - name: Install build tools
+        run: brew install libgit2 xcodegen create-dmg xcbeautify
+
+      - name: Cache SPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.swiftpm
+          key: ${{ runner.os }}-spm-rel-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-rel-
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build, sign & package DMG
+        env:
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          NOTARYTOOL_APPLE_ID: ${{ secrets.NOTARYTOOL_APPLE_ID }}
+          NOTARYTOOL_TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
+          NOTARYTOOL_APP_PASSWORD: ${{ secrets.NOTARYTOOL_APP_PASSWORD }}
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+        run: bash Scripts/release.sh
+
+      - name: Locate DMG
+        id: dmg
+        run: |
+          DMG=$(ls *.dmg 2>/dev/null | head -1)
+          echo "path=$DMG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: VibeCockpit ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: ${{ steps.dmg.outputs.path }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

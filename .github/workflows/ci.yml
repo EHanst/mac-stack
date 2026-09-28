@@ -1,0 +1,73 @@
+# Runs on every push to main and on pull requests targeting main.
+# Requires: macOS runner with Xcode 26 (macOS 26 SDK) and Homebrew.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & Test
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pin to the Xcode release that ships the macOS 26 SDK.
+      # Update this when a newer Xcode is available on the runner image.
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls /Applications | grep -E '^Xcode_2[6-9]|^Xcode_[3-9]' | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then
+            sudo xcode-select -s "/Applications/$XCODE/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Install libgit2
+        run: brew install libgit2
+
+      # Cache the SPM build artefacts between runs.
+      - name: Cache SPM build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            ~/.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build (debug)
+        run: swift build 2>&1 | tee /tmp/build-debug.log
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+      - name: Run tests
+        run: swift test --parallel 2>&1 | tee /tmp/test-results.log
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+      - name: Build (release)
+        run: swift build -c release
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: /tmp/*.log
+          retention-days: 7
