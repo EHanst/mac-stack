@@ -9,6 +9,8 @@ public struct SnapshotRef: Sendable, Identifiable, Codable {
     public let createdAt: Date
     public let branchName: String
 
+    public var shortOID: String { String(oid.prefix(7)) }
+
     public init(id: UUID, oid: String, message: String, createdAt: Date, branchName: String) {
         self.id = id
         self.oid = oid
@@ -50,12 +52,14 @@ public actor GitSnapshotManager {
         case notARepository(String)
         case operationFailed(String)
         case lockContention
+        case cleanTree
 
         public var errorDescription: String? {
             switch self {
             case .notARepository(let path): "'\(path)' is not a git repository."
             case .operationFailed(let msg): "Git operation failed: \(msg)"
             case .lockContention: "Git index.lock held after retries."
+            case .cleanTree: "Nothing to snapshot — working tree is clean."
             }
         }
     }
@@ -132,6 +136,23 @@ public actor GitSnapshotManager {
         guard git_index_write_tree(&treeOid, index) == 0 else {
             throw GitError.operationFailed(lastGitError())
         }
+
+        // Clean-tree guard: refuse to snapshot when nothing changed since HEAD
+        var headOidForCheck = git_oid()
+        if git_reference_name_to_id(&headOidForCheck, repo, "HEAD") == 0 {
+            var headCommitForCheck: OpaquePointer?
+            git_commit_lookup(&headCommitForCheck, repo, &headOidForCheck)
+            if let hc = headCommitForCheck {
+                defer { git_commit_free(hc) }
+                if let headTreeOidPtr = git_commit_tree_id(hc) {
+                    // git_oid_equal returns 1 when equal
+                    if git_oid_equal(&treeOid, headTreeOidPtr) != 0 {
+                        throw GitError.cleanTree
+                    }
+                }
+            }
+        }
+
         var tree: OpaquePointer?
         git_tree_lookup(&tree, repo, &treeOid)
         defer { git_tree_free(tree) }
