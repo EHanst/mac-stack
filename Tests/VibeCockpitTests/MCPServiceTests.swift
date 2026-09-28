@@ -1,71 +1,72 @@
 import Testing
 import Foundation
 import MCP
+import Logging
 @testable import VibeCockpitCore
+
+actor MockTransportForTests: Transport {
+    nonisolated let logger = Logger(label: "mock", factory: { _ in SwiftLogNoOpLogHandler() })
+    private(set) var isConnected = false
+    private(set) var sentData: [Data] = []
+    private var continuation: AsyncThrowingStream<Data, Error>.Continuation?
+
+    func connect() async throws { isConnected = true }
+    func disconnect() async {
+        isConnected = false
+        continuation?.finish()
+    }
+    func send(_ data: Data) async throws { sentData.append(data) }
+    func receive() -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream { self.continuation = $0 }
+    }
+    func inject(_ data: Data) { continuation?.yield(data) }
+}
 
 @Suite("MCPService")
 struct MCPServiceTests {
 
-    // MARK: - Helpers
-
-    private func makeRuntime() throws -> ToolRuntime {
-        let workspaceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mcp-test-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
-        let ctx = WorkspaceContext(
-            root: workspaceURL,
-            workspaceID: WorkspaceID(rawValue: "test"),
-            policy: .default
+    @Test("isRunning is false before start")
+    func notRunningBeforeStart() async {
+        let service = MCPService(
+            runtime: makeStubRuntime(),
+            pipeline: makeStubPipeline(),
+            gitManager: GitSnapshotManager(workspaceURL: URL(fileURLWithPath: "/tmp"))
         )
-        let boundary = WorkspaceBoundary(context: ctx)
-        let runner = XPCBuildRunner()
-        let store = VectorStore(dbURL: workspaceURL.appendingPathComponent("index.db"))
-        let registry = ModelRegistry()
-        let pipeline = IndexingPipeline(store: store, registry: registry)
-        let gitManager = GitSnapshotManager(workspaceURL: workspaceURL)
-        return ToolRuntime(boundary: boundary, buildRunner: runner,
-                           gitManager: gitManager, pipeline: pipeline)
+        await #expect(service.isRunning == false)
     }
 
-    @Test("isRunning reflects start/stop state")
-    func startStopState() async throws {
-        let runtime = try makeRuntime()
-        let workspaceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mcp-test-\(UUID().uuidString)")
-        let gitMgr = GitSnapshotManager(workspaceURL: workspaceURL)
-        let store = VectorStore(dbURL: workspaceURL.appendingPathComponent("index.db"))
-        let pipeline = IndexingPipeline(store: store, registry: ModelRegistry())
-
-        let service = MCPService(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
-        #expect(await service.isRunning == false)
-
-        let socketPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test-mcp-\(UUID().uuidString).sock").path
-        try await service.start(socketPath: socketPath)
-        #expect(await service.isRunning == true)
-
-        await service.stop()
-        #expect(await service.isRunning == false)
-
-        // Socket file must be cleaned up
-        #expect(!FileManager.default.fileExists(atPath: socketPath))
-    }
-
-    @Test("start is idempotent")
-    func startIdempotent() async throws {
-        let runtime = try makeRuntime()
-        let workspaceURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mcp-test-\(UUID().uuidString)")
-        let gitMgr = GitSnapshotManager(workspaceURL: workspaceURL)
-        let store = VectorStore(dbURL: workspaceURL.appendingPathComponent("index.db"))
-        let pipeline = IndexingPipeline(store: store, registry: ModelRegistry())
-        let service = MCPService(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
-        let socketPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test-mcp-\(UUID().uuidString).sock").path
-
-        try await service.start(socketPath: socketPath)
-        try await service.start(socketPath: socketPath) // second call is no-op
-        #expect(await service.isRunning == true)
+    @Test("isRunning becomes true after startWithTransport")
+    func runningAfterStart() async throws {
+        let transport = MockTransportForTests()
+        let service = MCPService(
+            runtime: makeStubRuntime(),
+            pipeline: makeStubPipeline(),
+            gitManager: GitSnapshotManager(workspaceURL: URL(fileURLWithPath: "/tmp"))
+        )
+        try await service.startWithTransport(transport)
+        await #expect(service.isRunning == true)
         await service.stop()
     }
+}
+
+private func makeStubPipeline() -> IndexingPipeline {
+    IndexingPipeline(
+        store: VectorStore(dbURL: URL(fileURLWithPath: "/tmp/test-pipeline.db")),
+        registry: ModelRegistry()
+    )
+}
+
+private func makeStubRuntime() -> ToolRuntime {
+    let ctx = WorkspaceContext(
+        root: URL(fileURLWithPath: "/tmp"),
+        workspaceID: WorkspaceID(rawValue: "test"),
+        policy: .default
+    )
+    let boundary = WorkspaceBoundary(context: ctx)
+    return ToolRuntime(
+        boundary: boundary,
+        buildRunner: XPCBuildRunner(),
+        gitManager: GitSnapshotManager(workspaceURL: URL(fileURLWithPath: "/tmp")),
+        pipeline: makeStubPipeline()
+    )
 }

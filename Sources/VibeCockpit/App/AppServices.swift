@@ -20,6 +20,10 @@ public final class AppServices {
 
     public init() {}
 
+    public var isMCPRunning: Bool {
+        get async { await mcpService?.isRunning ?? false }
+    }
+
     // MARK: - Startup
 
     public func startup(coordinator: AppCoordinator, workspaceURL: URL? = nil) async {

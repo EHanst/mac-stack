@@ -1,163 +1,133 @@
-import Foundation
-import MCP
-import os
-#if canImport(Darwin)
 import Darwin
-#endif
+import Foundation
+import Logging
+import MCP
 
-/// POSIX Unix domain socket transport for the embedded MCP server.
-/// Accepts one client at a time; a new connection replaces the previous one.
-/// Framing: newline-delimited UTF-8 JSON, identical to StdioTransport.
 public actor UnixSocketTransport: Transport {
 
+    public nonisolated let logger: Logger
     private let socketPath: String
-    private let logger: Logger
 
-    private var listenFD: Int32 = -1
-    private var clientFD: Int32 = -1
-    private var continuation: AsyncThrowingStream<Data, Error>.Continuation?
+    // nonisolated(unsafe): accessed from actor (send/disconnect) and the DispatchQueue accept loop.
+    // Safe because MCP is sequential: send() is only called after a message arrives on clientFD,
+    // so clientFD is stable for the duration of each request-response pair.
+    nonisolated(unsafe) private var serverFD: Int32 = -1
+    nonisolated(unsafe) private var clientFD: Int32 = -1
 
-    public init(socketPath: String,
-                logger: Logger = Logger(subsystem: "com.vibecockpit", category: "UnixSocketTransport")) {
-        self.socketPath = socketPath
-        self.logger = logger
+    private let messageStream: AsyncThrowingStream<Data, Error>
+    private let messageContinuation: AsyncThrowingStream<Data, Error>.Continuation
+    private let ioQueue = DispatchQueue(label: "mcp.unix.io", qos: .utility)
+
+    public enum TransportError: Error {
+        case socketCreationFailed
+        case bindFailed(Int32)
+        case listenFailed(Int32)
+        case notConnected
     }
 
-    // MARK: - Transport conformance
+    public init(socketPath: String, logger: Logger? = nil) {
+        self.socketPath = socketPath
+        self.logger = logger ?? Logger(label: "mcp.transport.unix",
+                                       factory: { _ in SwiftLogNoOpLogHandler() })
+        var cont: AsyncThrowingStream<Data, Error>.Continuation!
+        self.messageStream = AsyncThrowingStream { cont = $0 }
+        self.messageContinuation = cont
+    }
 
-    public func connect() throws {
-        // Remove stale socket file from a prior crash
-        unlink(socketPath)
-
-        // Create parent directory if needed
+    public func connect() async throws {
+        try? FileManager.default.removeItem(atPath: socketPath)
         let dir = (socketPath as NSString).deletingLastPathComponent
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            throw TransportError.bindFailed(errno: errno)
-        }
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw TransportError.socketCreationFailed }
+        serverFD = fd
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutableBytes(of: &addr.sun_path) { ptr in
-            socketPath.withCString { cStr in
-                _ = strncpy(ptr.baseAddress!.assumingMemoryBound(to: CChar.self),
-                            cStr, MemoryLayout.size(ofValue: addr.sun_path) - 1)
+        withUnsafeMutableBytes(of: &addr.sun_path) { dst in
+            socketPath.withCString { src in
+                _ = memcpy(dst.baseAddress!, src, min(strlen(src) + 1, dst.count))
             }
         }
-
-        let bindResult = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
+        let bindRC = withUnsafePointer(to: addr) {
+            Darwin.bind(fd, UnsafeRawPointer($0).assumingMemoryBound(to: sockaddr.self),
+                        socklen_t(MemoryLayout<sockaddr_un>.size))
         }
-        guard bindResult == 0 else {
-            close(fd)
-            throw TransportError.bindFailed(errno: errno)
-        }
+        guard bindRC == 0 else { throw TransportError.bindFailed(errno) }
+        guard Darwin.listen(fd, 1) == 0 else { throw TransportError.listenFailed(errno) }
 
-        guard listen(fd, 1) == 0 else {
-            close(fd)
-            throw TransportError.bindFailed(errno: errno)
-        }
-
-        listenFD = fd
-        logger.info("MCP Unix socket listening at \(self.socketPath, privacy: .public)")
+        logger.info("MCP server listening", metadata: ["path": .string(socketPath)])
+        startAcceptLoop()
     }
 
-    public func disconnect() {
-        if clientFD >= 0 { close(clientFD); clientFD = -1 }
-        if listenFD >= 0 { close(listenFD); listenFD = -1 }
-        unlink(socketPath)
-        continuation?.finish()
-        continuation = nil
-        logger.info("MCP Unix socket closed")
+    public func disconnect() async {
+        let cfd = clientFD
+        let sfd = serverFD
+        if cfd >= 0 { Darwin.close(cfd); clientFD = -1 }
+        if sfd >= 0 { Darwin.close(sfd); serverFD = -1 }
+        try? FileManager.default.removeItem(atPath: socketPath)
+        messageContinuation.finish()
+        logger.info("MCP server stopped")
     }
 
     public func send(_ data: Data) async throws {
-        guard clientFD >= 0 else { throw TransportError.notConnected }
+        let fd = clientFD
+        guard fd >= 0 else { throw TransportError.notConnected }
         var payload = data
-        payload.append(UInt8(ascii: "\n"))
-        try payload.withUnsafeBytes { ptr in
-            guard let base = ptr.baseAddress else { return }
-            var written = 0
-            while written < payload.count {
-                let n = Darwin.write(clientFD, base.advanced(by: written), payload.count - written)
-                if n <= 0 { throw TransportError.writeFailed(errno: errno) }
-                written += n
+        payload.append(0x0A) // newline delimiter
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            ioQueue.async {
+                let result = payload.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, $0.count) }
+                if result == payload.count {
+                    cont.resume()
+                } else {
+                    cont.resume(throwing: TransportError.notConnected)
+                }
             }
         }
     }
 
     public func receive() -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { cont in
-            self.continuation = cont
-            Task.detached { [weak self] in
-                await self?.acceptLoop(cont)
+        messageStream
+    }
+
+    // MARK: - Private
+
+    private func startAcceptLoop() {
+        let sfd = serverFD
+        let cont = messageContinuation
+        let log = logger
+        ioQueue.async { [weak self] in
+            while true {
+                let cfd = Darwin.accept(sfd, nil, nil)
+                guard cfd >= 0 else { break }
+                self?.clientFD = cfd
+                log.info("MCP client connected")
+                Self.readLines(fd: cfd, into: cont, logger: log)
+                Darwin.close(cfd)
+                self?.clientFD = -1
+                log.info("MCP client disconnected, accepting next connection")
             }
+            cont.finish()
         }
     }
 
-    // MARK: - Accept loop
-
-    private func acceptLoop(_ cont: AsyncThrowingStream<Data, Error>.Continuation) async {
-        while listenFD >= 0 {
-            let fd = accept(listenFD, nil, nil)
-            guard fd >= 0 else {
-                if listenFD < 0 { break }  // disconnect() was called
-                logger.error("accept() failed errno=\(errno)")
-                continue
-            }
-
-            // Close previous client
-            if clientFD >= 0 { close(clientFD) }
-            clientFD = fd
-            logger.debug("MCP client connected fd=\(fd)")
-
-            await readLines(from: fd, into: cont)
-
-            logger.debug("MCP client disconnected fd=\(fd)")
-            if clientFD == fd { clientFD = -1 }
-        }
-    }
-
-    private func readLines(from fd: Int32,
-                           into cont: AsyncThrowingStream<Data, Error>.Continuation) async {
-        var buffer = Data()
-        let chunk = 4096
-        var raw = [UInt8](repeating: 0, count: chunk)
-
+    private static func readLines(
+        fd: Int32,
+        into cont: AsyncThrowingStream<Data, Error>.Continuation,
+        logger: Logger
+    ) {
+        var pending = Data()
+        var chunk = [UInt8](repeating: 0, count: 4096)
         while true {
-            let n = Darwin.read(fd, &raw, chunk)
+            let n = chunk.withUnsafeMutableBufferPointer { Darwin.read(fd, $0.baseAddress!, $0.count) }
             if n <= 0 { break }
-            buffer.append(contentsOf: raw[0..<n])
-
-            // Yield every complete newline-delimited JSON line
-            while let nl = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let line = buffer[buffer.startIndex..<nl]
-                if !line.isEmpty {
-                    cont.yield(Data(line))
-                }
-                buffer = buffer[buffer.index(after: nl)...]
-            }
-
-            if Task.isCancelled { break }
-        }
-    }
-
-    // MARK: - Errors
-
-    public enum TransportError: LocalizedError {
-        case bindFailed(errno: Int32)
-        case writeFailed(errno: Int32)
-        case notConnected
-
-        public var errorDescription: String? {
-            switch self {
-            case .bindFailed(let e):  "Unix socket bind failed: errno \(e)"
-            case .writeFailed(let e): "Unix socket write failed: errno \(e)"
-            case .notConnected:       "No connected client"
+            pending.append(contentsOf: chunk[..<n])
+            while let idx = pending.firstIndex(of: 0x0A) {
+                let line = pending[..<idx]
+                if !line.isEmpty { cont.yield(Data(line)) }
+                pending = Data(pending[pending.index(after: idx)...])
             }
         }
     }
