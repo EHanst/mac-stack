@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS("26.0")],
     products: [
         .library(name: "VibeCockpitCore", targets: ["VibeCockpitCore"]),
+        .executable(name: "VibeCockpit", targets: ["VibeCockpit"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0"),
@@ -54,6 +55,19 @@ let package = Package(
                 "UI/",
                 "App/VibeCockpitApp.swift",
                 "Info.plist",
+            ],
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete"]),
+            ]
+        ),
+
+        .executableTarget(
+            name: "VibeCockpit",
+            dependencies: ["VibeCockpitCore"],
+            path: "Sources/VibeCockpit",
+            sources: [
+                "App/VibeCockpitApp.swift",
+                "UI/",
             ],
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=complete"]),
