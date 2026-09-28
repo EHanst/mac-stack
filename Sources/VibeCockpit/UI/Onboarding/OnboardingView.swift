@@ -8,38 +8,51 @@ struct OnboardingView: View {
     enum OnboardingPath { case localModel, remoteAPI }
 
     var body: some View {
-        VStack(spacing: 24) {
-            header
-            Picker("Setup method", selection: $selection) {
-                Text("Local Model").tag(OnboardingPath.localModel)
-                Text("Remote API").tag(OnboardingPath.remoteAPI)
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 400)
-
-            Group {
-                switch selection {
-                case .localModel:
-                    LocalModelPickerView()
-                case .remoteAPI:
-                    CredentialEntryView()
+        ZStack {
+            Color.mtSurfaceContainerLowest.ignoresSafeArea()
+            VStack(spacing: 32) {
+                header
+                Picker("Setup method", selection: $selection) {
+                    Text("Local Model").tag(OnboardingPath.localModel)
+                    Text("Remote API").tag(OnboardingPath.remoteAPI)
                 }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 360)
+
+                MTCard(elevation: 2, padding: 24) {
+                    Group {
+                        switch selection {
+                        case .localModel:
+                            LocalModelPickerView()
+                        case .remoteAPI:
+                            CredentialEntryView()
+                        }
+                    }
+                    .frame(maxWidth: 440)
+                }
+                .frame(maxWidth: 480)
             }
-            .frame(maxWidth: 500)
+            .padding(48)
         }
-        .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "bolt.circle")
-                .font(.system(size: 56))
-                .foregroundStyle(.purple)
+        VStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 24)
+                    .fill(Color.mtPrimaryContainer)
+                    .frame(width: 80, height: 80)
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 38, weight: .semibold))
+                    .foregroundStyle(Color.mtOnPrimaryContainer)
+            }
             Text("Welcome to VibeCockpit")
-                .font(.largeTitle.bold())
-            Text("Connect a model to get started.")
-                .foregroundStyle(.secondary)
+                .font(.mtHeadlineMedium)
+                .foregroundStyle(Color.mtOnSurface)
+            Text("Connect a model to start building.")
+                .font(.mtBodyLarge)
+                .foregroundStyle(Color.mtOnSurfaceVariant)
         }
     }
 }

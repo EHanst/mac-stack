@@ -91,15 +91,63 @@ public final class AppServices {
             do {
                 try await service.start(socketPath: socketPath)
                 mcpService = service
+                await refreshMCPTools(coordinator: coordinator)
             } catch {
                 logger.error("MCPService failed to start: \(error.localizedDescription, privacy: .public)")
             }
         }
+
+        // Populate model info list for the model manager UI.
+        await refreshModels(coordinator: coordinator)
     }
 
     public func stopMCPService() async {
         await mcpService?.stop()
         mcpService = nil
+    }
+
+    // MARK: - Model management
+
+    /// Refresh model info list and push to coordinator.
+    public func refreshModels(coordinator: AppCoordinator) async {
+        let providers = await registry.allProviders
+        var infos: [ModelInfo] = []
+        for provider in providers {
+            let health = await provider.healthCheck()
+            let kind: ModelInfo.Kind = provider.id.hasPrefix("local:") ? .local : .remote
+            let displayName = provider.id.hasPrefix("local:")
+                ? String(provider.id.dropFirst("local:".count))
+                : provider.id
+            let info = ModelInfo(
+                id: provider.id,
+                displayName: displayName,
+                kind: kind,
+                capabilities: provider.capabilities,
+                health: health,
+                isLoaded: health == .healthy
+            )
+            infos.append(info)
+        }
+        coordinator.send(.modelsRefreshed(infos))
+        for info in infos {
+            coordinator.send(.providerStatusChanged(info.id, info.health))
+        }
+    }
+
+    /// Unregister a local model provider by ID.
+    public func unregisterModel(id: ProviderID, coordinator: AppCoordinator) async {
+        await registry.unregister(id: id)
+        await refreshModels(coordinator: coordinator)
+    }
+
+    /// Expose MCP tool names to the UI.
+    public func refreshMCPTools(coordinator: AppCoordinator) async {
+        guard let service = mcpService else {
+            coordinator.send(.mcpToolsUpdated([]))
+            return
+        }
+        let names = await service.registeredToolNames()
+        coordinator.send(.mcpToolsUpdated(names))
     }
 
     // MARK: - Inference

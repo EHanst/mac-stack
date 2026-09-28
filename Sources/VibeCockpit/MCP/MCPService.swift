@@ -109,6 +109,19 @@ public actor MCPService {
         logger.info("MCPService stopped")
     }
 
+    /// Returns tool names registered with this service (for the model manager UI).
+    public func registeredToolNames() -> [String] {
+        [
+            "search_code",
+            "index_workspace",
+            "read_file",
+            "write_file",
+            "run_build",
+            "snapshot_create",
+            "snapshot_diff",
+        ]
+    }
+
     private func handleServerError(_ error: Error) {
         logger.error("MCP server error: \(error.localizedDescription, privacy: .public)")
         isRunning = false
