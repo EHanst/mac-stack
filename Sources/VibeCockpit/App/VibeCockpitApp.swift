@@ -1,3 +1,6 @@
+#if SWIFT_PACKAGE
+import VibeCockpitCore
+#endif
 import SwiftUI
 
 @main
