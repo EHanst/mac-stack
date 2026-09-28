@@ -20,12 +20,21 @@ struct MCPServerMain {
 
         let buildRunner = XPCBuildRunner()
 
+        let ctx = WorkspaceContext(
+            root: workspaceURL,
+            workspaceID: WorkspaceID(rawValue: workspaceURL.lastPathComponent),
+            policy: .default
+        )
+        let boundary = WorkspaceBoundary(context: ctx)
+        let runtime = ToolRuntime(boundary: boundary, buildRunner: buildRunner,
+                                  gitManager: gitManager, pipeline: pipeline)
+
         let tools: [any AgentToolHandler] = [
             SearchCodeTool(pipeline: pipeline),
-            IndexWorkspaceTool(pipeline: pipeline, workspaceURL: workspaceURL),
-            FileReaderTool(),
-            WorkspaceScopedFileWriterTool(workspaceURL: workspaceURL),
-            WorkspaceScopedRunBuildTool(runner: buildRunner, workspaceURL: workspaceURL),
+            RuntimeIndexWorkspaceTool(runtime: runtime),
+            RuntimeFileReaderTool(runtime: runtime),
+            RuntimeFileWriterTool(runtime: runtime),
+            RuntimeRunBuildTool(runtime: runtime),
             SnapshotCreateTool(manager: gitManager),
             SnapshotDiffTool(manager: gitManager),
         ]
@@ -49,10 +58,23 @@ struct MCPServerMain {
             guard let handler = tools.first(where: { $0.toolDefinition.name == params.name }) else {
                 throw MCPError.methodNotFound("Unknown tool: \(params.name)")
             }
+            let opID = OperationID()
+            let task = Task<[Tool.Content], Error> {
+                try await handler.execute(arguments: params.arguments ?? [:])
+            }
+            let voidTask: Task<Void, Error> = Task { _ = try await task.value }
+            await runtime.trackTask(opID, task: voidTask)
             do {
-                let content = try await handler.execute(arguments: params.arguments ?? [:])
+                let content = try await task.value
+                await runtime.removeTask(opID)
                 return CallTool.Result(content: content)
+            } catch is CancellationError {
+                return CallTool.Result(
+                    content: [.text(text: "Operation cancelled", annotations: nil, _meta: nil)],
+                    isError: true
+                )
             } catch {
+                await runtime.removeTask(opID)
                 return CallTool.Result(
                     content: [.text(text: "Error: \(error.localizedDescription)", annotations: nil, _meta: nil)],
                     isError: true
@@ -106,9 +128,9 @@ struct SearchCodeTool: AgentToolHandler {
     }
 }
 
-// MARK: - index_workspace
+// MARK: - index_workspace (runtime-backed)
 
-struct IndexWorkspaceTool: AgentToolHandler {
+struct RuntimeIndexWorkspaceTool: AgentToolHandler {
     let toolDefinition = Tool(
         name: "index_workspace",
         description: "Index or re-index all Swift files in a directory so they appear in search_code results.",
@@ -116,65 +138,74 @@ struct IndexWorkspaceTool: AgentToolHandler {
             "path": .object(["type": "string", "description": "Directory to index. Must be within the workspace. Defaults to workspace root."]),
         ])
     )
-
-    let pipeline: IndexingPipeline
-    let workspaceURL: URL
+    let runtime: ToolRuntime
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
-        let targetURL: URL
+        let url: URL
         if case .string(let path) = arguments["path"] {
-            let candidate = URL(fileURLWithPath: path)
-            guard candidate.standardized.path.hasPrefix(workspaceURL.standardized.path) else {
-                throw AgentToolError.missingArgument("path must be within workspace \(workspaceURL.path)")
-            }
-            targetURL = candidate
+            url = URL(fileURLWithPath: path)
         } else {
-            targetURL = workspaceURL
+            url = runtime.workspaceRoot
         }
-        try await pipeline.reindexWorkspace(targetURL)
-        return [.text(text: "Indexed \(targetURL.path)", annotations: nil, _meta: nil)]
+        try await runtime.indexWorkspace(url)
+        return [.text(text: "Indexed \(url.path)", annotations: nil, _meta: nil)]
     }
 }
 
-// MARK: - write_file (workspace-scoped)
+// MARK: - read_file (runtime-backed)
 
-struct WorkspaceScopedFileWriterTool: AgentToolHandler {
+struct RuntimeFileReaderTool: AgentToolHandler {
+    let toolDefinition = Tool(
+        name: "read_file",
+        description: "Read the contents of a file within the workspace.",
+        inputSchema: .object([
+            "path": .object(["type": "string", "description": "Absolute file path within the workspace"]),
+            "startLine": .object(["type": "integer", "description": "First line (1-indexed, optional)"]),
+            "endLine": .object(["type": "integer", "description": "Last line (1-indexed, optional)"]),
+        ])
+    )
+    let runtime: ToolRuntime
+
+    func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
+        guard case .string(let path) = arguments["path"] else {
+            throw AgentToolError.missingArgument("path")
+        }
+        let start = arguments["startLine"].flatMap { if case .int(let n) = $0 { return n } else { return nil } }
+        let end   = arguments["endLine"].flatMap   { if case .int(let n) = $0 { return n } else { return nil } }
+        let content = try await runtime.readFile(path: URL(fileURLWithPath: path), startLine: start, endLine: end)
+        return [.text(text: content, annotations: nil, _meta: nil)]
+    }
+}
+
+// MARK: - write_file (runtime-backed)
+
+struct RuntimeFileWriterTool: AgentToolHandler {
     let toolDefinition = Tool(
         name: "write_file",
-        description: "Write or overwrite a file at the given path. Path must be within the workspace.",
+        description: "Write or overwrite a file within the workspace.",
         inputSchema: .object([
             "path": .object(["type": "string", "description": "Absolute file path within the workspace"]),
             "content": .object(["type": "string", "description": "File content to write"]),
             "createDirectories": .object(["type": "boolean", "description": "Create parent directories if missing"]),
         ])
     )
-
-    let workspaceURL: URL
+    let runtime: ToolRuntime
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let path) = arguments["path"],
-              case .string(let content) = arguments["content"]
-        else {
+              case .string(let content) = arguments["content"] else {
             throw AgentToolError.missingArgument("path or content")
         }
-        let url = URL(fileURLWithPath: path)
-        guard url.standardized.path.hasPrefix(workspaceURL.standardized.path) else {
-            throw AgentToolError.missingArgument("path must be within workspace \(workspaceURL.path)")
-        }
-        if case .bool(true) = arguments["createDirectories"] {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
-            )
-        }
-        let data = Data(content.utf8)
-        try data.write(to: url, options: .atomic)
-        return [.text(text: "Wrote \(data.count) bytes to \(url.lastPathComponent)", annotations: nil, _meta: nil)]
+        let mkdir: Bool
+        if case .bool(let b) = arguments["createDirectories"] { mkdir = b } else { mkdir = false }
+        try await runtime.writeFile(path: URL(fileURLWithPath: path), content: content, createDirectories: mkdir)
+        return [.text(text: "Written: \(path)", annotations: nil, _meta: nil)]
     }
 }
 
-// MARK: - run_build (workspace-scoped)
+// MARK: - run_build (runtime-backed)
 
-struct WorkspaceScopedRunBuildTool: AgentToolHandler {
+struct RuntimeRunBuildTool: AgentToolHandler {
     let toolDefinition = Tool(
         name: "run_build",
         description: "Run a build command in the project workspace. Working directory must be within the workspace.",
@@ -184,27 +215,21 @@ struct WorkspaceScopedRunBuildTool: AgentToolHandler {
             "timeoutSeconds": .object(["type": "integer", "description": "Timeout in seconds (default 120)"]),
         ])
     )
-
-    let runner: XPCBuildRunner
-    let workspaceURL: URL
+    let runtime: ToolRuntime
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let command) = arguments["command"],
-              case .string(let wd) = arguments["workingDirectory"]
-        else {
+              case .string(let wd) = arguments["workingDirectory"] else {
             throw AgentToolError.missingArgument("command or workingDirectory")
-        }
-        let wdURL = URL(fileURLWithPath: wd)
-        guard wdURL.standardized.path.hasPrefix(workspaceURL.standardized.path) else {
-            throw AgentToolError.missingArgument("workingDirectory must be within workspace")
         }
         let timeout: Duration = {
             if case .int(let s) = arguments["timeoutSeconds"] { return .seconds(s) }
             return .seconds(120)
         }()
-        let result = try await runner.run(command: command, workingDirectory: wdURL, timeout: timeout)
-        let output = "exit: \(result.exitCode)\n\(result.stdout)\(result.stderr)"
-        return [.text(text: output, annotations: nil, _meta: nil)]
+        let result = try await runtime.runBuild(command: command,
+                                                 workingDirectory: URL(fileURLWithPath: wd),
+                                                 timeout: timeout)
+        return [.text(text: "exit: \(result.exitCode)\n\(result.stdout)\(result.stderr)", annotations: nil, _meta: nil)]
     }
 }
 
