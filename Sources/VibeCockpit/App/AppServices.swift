@@ -75,6 +75,19 @@ public final class AppServices {
             coordinator.send(.onboardingRequired)
         }
 
+        // Pre-warm local providers in the background so they're healthy before first use.
+        let localProviders = await registry.allProviders(with: .textGeneration)
+            .filter { $0.id.hasPrefix("local:") }
+        Task.detached(priority: .background) { [weak self] in
+            for provider in localProviders {
+                if let local = provider as? LocalMLXProvider {
+                    try? await local.warmUp()
+                    let health = await local.healthCheck()
+                    await self?.notifyHealth(provider.id, health, coordinator: coordinator)
+                }
+            }
+        }
+
         // Start embedded MCP server if we have a workspace
         if let workspaceURL = workspaceURL ?? detectWorkspaceURL(),
            let pipeline = indexingPipeline,
@@ -138,6 +151,10 @@ public final class AppServices {
         for info in infos {
             coordinator.send(.providerStatusChanged(info.id, info.health))
         }
+    }
+
+    private func notifyHealth(_ id: ProviderID, _ health: ProviderHealth, coordinator: AppCoordinator) {
+        coordinator.send(.providerStatusChanged(id, health))
     }
 
     /// Unregister a local model provider by ID.

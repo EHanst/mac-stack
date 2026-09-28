@@ -76,6 +76,10 @@ public actor LocalMLXProvider: ModelProvider {
         throw LocalModelError.unsupportedOperation("embedding")
     }
 
+    public func warmUp() async throws {
+        try await ensureLoaded()
+    }
+
     public func healthCheck() async -> ProviderHealth {
         guard ProcessInfo.processInfo.machineHardwareName.hasPrefix("arm") else {
             return .unavailable("Apple Silicon required for local MLX inference")
