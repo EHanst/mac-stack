@@ -11,39 +11,56 @@ struct CredentialEntryView: View {
     @State private var saveError: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Enter credentials for an OpenAI-compatible remote provider. Tokens are stored in the macOS Keychain — never on disk.")
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Tokens are stored in the macOS Keychain — never written to disk.")
+                .font(.mtBodySmall)
+                .foregroundStyle(Color.mtOnSurfaceVariant)
 
-            LabeledContent("Provider ID") {
-                TextField("e.g. my-openai", text: $providerID)
-                    .textFieldStyle(.roundedBorder)
+            fieldGroup("Provider ID", hint: "e.g. my-openai, anthropic") {
+                MTTextField("provider-id", text: $providerID)
             }
 
-            LabeledContent("Base URL") {
-                TextField("https://api.openai.com/v1", text: $baseURL)
-                    .textFieldStyle(.roundedBorder)
+            fieldGroup("Base URL", hint: "OpenAI-compatible v1 endpoint") {
+                MTTextField("https://api.openai.com/v1", text: $baseURL)
             }
 
-            LabeledContent("API Token") {
+            fieldGroup("API Token", hint: "Stored securely in Keychain") {
                 SecureField("sk-…", text: $apiToken)
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.plain)
+                    .padding(10)
+                    .background(Color.mtSurfaceContainerHighest)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.mtOutline, lineWidth: 1))
             }
 
             if let err = saveError {
-                Text(err).foregroundStyle(.red).font(.caption)
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtError)
+                    .padding(10)
+                    .background(Color.mtErrorContainer)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
             Button(isSaving ? "Saving…" : "Save to Keychain") {
                 saveCredential()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MTFilledButtonStyle())
             .disabled(providerID.isEmpty || apiToken.isEmpty || baseURL.isEmpty || isSaving)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+    }
+
+    private func fieldGroup<C: View>(_ label: String, hint: String, @ViewBuilder content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.mtLabelLarge).foregroundStyle(Color.mtOnSurfaceVariant)
+            content()
+            Text(hint).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.7))
         }
     }
 
     private func saveCredential() {
-        guard let url = URL(string: baseURL), !url.host.isNilOrEmpty else {
+        guard let url = URL(string: baseURL), url.host != nil else {
             saveError = "Enter a valid base URL."
             return
         }
@@ -63,9 +80,5 @@ struct CredentialEntryView: View {
             }
         }
     }
-}
-
-private extension Optional where Wrapped == String {
-    var isNilOrEmpty: Bool { self == nil || self! .isEmpty }
 }
 #endif

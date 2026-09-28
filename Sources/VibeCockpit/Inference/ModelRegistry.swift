@@ -65,6 +65,10 @@ public actor ModelRegistry {
         providers.values.filter { $0.capabilities.contains(capabilities) }
     }
 
+    public var allProviders: [any ModelProvider] {
+        Array(providers.values)
+    }
+
     public func preferredProvider(for task: InferenceTask) -> (any ModelProvider)? {
         let required: ProviderCapabilities
         switch task {

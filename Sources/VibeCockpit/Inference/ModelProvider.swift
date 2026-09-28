@@ -66,7 +66,7 @@ public struct GenerationOptions: Sendable {
     }
 }
 
-public enum ProviderHealth: Sendable {
+public enum ProviderHealth: Sendable, Equatable {
     case healthy
     case degraded(String)
     case unavailable(String)
