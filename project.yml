@@ -9,32 +9,28 @@ options:
 packages:
   swift-syntax:
     url: https://github.com/swiftlang/swift-syntax.git
-    from: "600.0.0"
+    from: 600.0.0
   swift-sdk:
     url: https://github.com/modelcontextprotocol/swift-sdk.git
-    from: "0.9.0"
+    from: 0.9.0
   swift-crypto:
     url: https://github.com/apple/swift-crypto.git
-    from: "3.0.0"
+    from: 3.0.0
   mlx-swift:
     url: https://github.com/ml-explore/mlx-swift.git
-    from: "0.31.0"
+    from: 0.31.0
   swift-transformers:
     url: https://github.com/huggingface/swift-transformers.git
-    from: "0.1.17"
+    from: 0.1.17
 
 targets:
   VibeCockpit:
     type: application
     platform: macOS
+    deploymentTarget: "26.0"
     sources:
-      - path: Sources/VibeCockpit
-    resources:
-      - path: Shaders
-        buildPhase: none
+      - Sources/VibeCockpit
     dependencies:
-      - target: CSQLiteVec
-      - target: BuildRunnerXPCService
       - package: swift-syntax
         product: SwiftSyntax
       - package: swift-syntax
@@ -51,72 +47,41 @@ targets:
         product: MLXRandom
       - package: swift-transformers
         product: Transformers
+      - target: CSQLiteVec
+      - target: CLibGit2
+    info:
+      path: Sources/VibeCockpit/Info.plist
     settings:
       base:
-        INFOPLIST_FILE: Sources/VibeCockpit/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.app
         SWIFT_STRICT_CONCURRENCY: complete
-        CODE_SIGN_ENTITLEMENTS: Config/VibeCockpit.entitlements
-        HEADER_SEARCH_PATHS: /opt/homebrew/include
-        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Modules/CLibGit2
-        OTHER_LDFLAGS: "-L/opt/homebrew/lib -lgit2"
-      configs:
-        Debug:
-          xcconfig: Config/App.xcconfig
-        Release:
-          xcconfig: Config/App.xcconfig
-    buildPhases:
-      - type: shellScript
-        name: Compile Metal Shaders
-        script: |
-          if [ -f "$SRCROOT/Shaders/Kernels.metal" ]; then
-            xcrun metal "$SRCROOT/Shaders/Kernels.metal" -o "$BUILT_PRODUCTS_DIR/default.air"
-            xcrun metallib "$BUILT_PRODUCTS_DIR/default.air" -o "$BUILT_PRODUCTS_DIR/VibeCockpit.app/Contents/Resources/default.metallib"
-          fi
-        outputFiles:
-          - $(BUILT_PRODUCTS_DIR)/VibeCockpit.app/Contents/Resources/default.metallib
+        OTHER_SWIFT_FLAGS: -strict-concurrency=complete
 
   CSQLiteVec:
     type: library.static
     platform: macOS
     sources:
-      - path: Modules/CSQLiteVec/sqlite-vec.c
-      - path: Modules/CSQLiteVec/include
-        buildPhase: headers
+      - Modules/CSQLiteVec/sqlite-vec.c
+    headers:
+      public:
+        - Modules/CSQLiteVec/include
     settings:
       base:
-        OTHER_CFLAGS: "-DSQLITE_CORE -DSQLITE_ENABLE_FTS5"
-        HEADER_SEARCH_PATHS: $(SRCROOT)/Modules/CSQLiteVec/include
-        PUBLIC_HEADERS_FOLDER_PATH: include/CSQLiteVec
+        GCC_PREPROCESSOR_DEFINITIONS: SQLITE_CORE=1 SQLITE_ENABLE_FTS5=1
 
-  CLibGit2System:
+  CLibGit2:
     type: library.static
     platform: macOS
     sources: []
     settings:
       base:
-        OTHER_LDFLAGS: "-L/opt/homebrew/lib -lgit2"
-        HEADER_SEARCH_PATHS: /opt/homebrew/include
-
-  BuildRunnerXPCService:
-    type: "com.apple.product-type.xpc-service"
-    platform: macOS
-    sources:
-      - path: BuildRunnerXPCService
-        excludes: ["*.entitlements", "*.plist"]
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.buildrunner
-        INFOPLIST_FILE: BuildRunnerXPCService/Info.plist
-        CODE_SIGN_ENTITLEMENTS: BuildRunnerXPCService/BuildRunnerXPCService.entitlements
+        OTHER_LDFLAGS: $(shell pkg-config --libs libgit2)
+        OTHER_CFLAGS: $(shell pkg-config --cflags libgit2)
 
   VibeCockpitTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - path: Tests/VibeCockpitTests
+      - Tests/VibeCockpitTests
     dependencies:
       - target: VibeCockpit
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.tests
