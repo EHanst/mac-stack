@@ -40,7 +40,7 @@ public struct CorrectionLoopState: Sendable {
     /// Given a build result, decide whether to retry or surface to the user.
     /// Returns an (Action, new state) pair — the new state must be used for the next call.
     public func next(given result: BuildResult) -> (Action, CorrectionLoopState) {
-        let hash = Data(SHA256.hash(data: Data(result.stderr.utf8)))
+        let hash = BuildFailureFingerprint(normalizing: result.stderr).rawValue
         if attempts.contains(hash) {
             return (.surfaceToUser(.repeatedIdenticalError), self)
         }

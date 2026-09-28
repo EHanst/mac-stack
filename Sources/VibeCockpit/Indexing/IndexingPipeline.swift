@@ -10,10 +10,16 @@ public actor IndexingPipeline {
     private let registry: ModelRegistry
     private let logger = Logger(subsystem: "com.vibecockpit", category: "IndexingPipeline")
 
+    private var embeddingScheduler: EmbeddingScheduler?
+
     public init(store: VectorStore, registry: ModelRegistry) {
         self.chunker = ASTChunker()
         self.store = store
         self.registry = registry
+    }
+
+    public func configure(scheduler: EmbeddingScheduler) {
+        self.embeddingScheduler = scheduler
     }
 
     public func open() async throws {
@@ -78,9 +84,12 @@ public actor IndexingPipeline {
     // MARK: - Private
 
     private func embedNew(chunks: [CodeChunk]) async throws {
+        if let scheduler = embeddingScheduler {
+            await scheduler.schedule(chunks)
+            return
+        }
+        // Legacy path: inline batching when no scheduler is configured
         guard let provider = await registry.preferredProvider(for: .embedding) else { return }
-
-        // Filter to only chunks without a cached embedding (async — filter is synchronous)
         var needsEmbedding: [CodeChunk] = []
         for chunk in chunks {
             if await store.cachedEmbedding(for: chunk.contentHash) == nil {
@@ -88,8 +97,6 @@ public actor IndexingPipeline {
             }
         }
         guard !needsEmbedding.isEmpty else { return }
-
-        // Batch in groups of 32 for throughput
         let batchSize = 32
         var offset = 0
         while offset < needsEmbedding.count {

@@ -17,8 +17,6 @@ public actor XPCBuildRunner {
 
     private var connection: NSXPCConnection?
     private let logger = Logger(subsystem: "com.vibecockpit", category: "XPCBuildRunner")
-    private let healthCheckInterval: Duration = .seconds(30)
-    private var healthCheckTask: Task<Void, Never>?
 
     public enum RunnerError: LocalizedError {
         case timeout(Duration)
@@ -48,7 +46,6 @@ public actor XPCBuildRunner {
         }
         conn.resume()
         connection = conn
-        startHealthCheck()
         logger.info("XPC connection established.")
     }
 
@@ -78,7 +75,6 @@ public actor XPCBuildRunner {
     public func cancel() async {
         connection?.invalidate()
         connection = nil
-        healthCheckTask?.cancel()
     }
 
     // MARK: - XPC path
@@ -147,19 +143,6 @@ public actor XPCBuildRunner {
             throw RunnerError.timeout(timeout)
         }
         return result
-    }
-
-    // MARK: - Health check
-
-    private func startHealthCheck() {
-        healthCheckTask?.cancel()
-        healthCheckTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: healthCheckInterval)
-                if Task.isCancelled { break }
-                if connection == nil { connect() }
-            }
-        }
     }
 
     private func handleInvalidation() {
