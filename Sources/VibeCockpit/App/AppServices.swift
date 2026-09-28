@@ -13,6 +13,8 @@ public final class AppServices {
     private let registry = ModelRegistry()
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
+    private var mcpService: MCPService?
+    private var buildRunner: XPCBuildRunner?
     private var startupComplete = false
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
@@ -25,7 +27,9 @@ public final class AppServices {
         startupComplete = true
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
-            snapshotManager = GitSnapshotManager(workspaceURL: url)
+            let mgr = GitSnapshotManager(workspaceURL: url)
+            try? mgr.open()
+            snapshotManager = mgr
         }
 
         let dbURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -64,6 +68,38 @@ public final class AppServices {
         if await registry.isEmpty {
             coordinator.send(.onboardingRequired)
         }
+
+        // Start embedded MCP server if we have a workspace
+        if let workspaceURL = workspaceURL ?? detectWorkspaceURL(),
+           let pipeline = indexingPipeline,
+           let gitMgr = snapshotManager {
+            let runner = XPCBuildRunner()
+            runner.connect()
+            buildRunner = runner
+            let ctx = WorkspaceContext(
+                root: workspaceURL,
+                workspaceID: WorkspaceID(rawValue: workspaceURL.lastPathComponent),
+                policy: .default
+            )
+            let boundary = WorkspaceBoundary(context: ctx)
+            let runtime = ToolRuntime(boundary: boundary, buildRunner: runner,
+                                      gitManager: gitMgr, pipeline: pipeline)
+            let socketDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".vibecockpit")
+            let socketPath = socketDir.appendingPathComponent("mcp.sock").path
+            let service = MCPService(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
+            do {
+                try await service.start(socketPath: socketPath)
+                mcpService = service
+            } catch {
+                logger.error("MCPService failed to start: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    public func stopMCPService() async {
+        await mcpService?.stop()
+        mcpService = nil
     }
 
     // MARK: - Inference

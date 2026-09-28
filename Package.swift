@@ -60,18 +60,6 @@ let package = Package(
             ]
         ),
 
-        .executableTarget(
-            name: "VibeCockpitMCPServer",
-            dependencies: [
-                "VibeCockpitCore",
-                .product(name: "MCP", package: "swift-sdk"),
-            ],
-            path: "Sources/VibeCockpitMCPServer",
-            swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
-            ]
-        ),
-
         .testTarget(
             name: "VibeCockpitTests",
             dependencies: ["VibeCockpitCore"],

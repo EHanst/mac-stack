@@ -12,6 +12,11 @@ struct VibeCockpitApp: App {
                 .environment(services)
                 .task {
                     await services.startup(coordinator: coordinator)
+                    // Structured teardown: task is cancelled when the window closes
+                    try? await Task.sleep(for: .seconds(86400 * 365))
+                }
+                .onDisappear {
+                    Task { await services.stopMCPService() }
                 }
         }
         .commands {
