@@ -33,11 +33,16 @@ public struct PromptEngineer {
 
     public static func classify(_ prompt: String) -> Intent {
         let lower = prompt.lowercased()
-        var scores: [Intent: Int] = [:]
+        var bestScore = 0
+        var bestIntent = Intent.general
         for (intent, keywords) in patterns {
-            scores[intent] = keywords.filter { lower.contains($0) }.count
+            let score = keywords.filter { lower.contains($0) }.count
+            if score >= bestScore, score > 0 {
+                bestScore = score
+                bestIntent = intent
+            }
         }
-        return scores.filter { $0.value > 0 }.max(by: { $0.value < $1.value })?.key ?? .general
+        return bestIntent
     }
 
     // MARK: - Message transformation

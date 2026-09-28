@@ -1,4 +1,5 @@
 import SwiftUI
+import VibeCockpitCore
 
 @main
 struct VibeCockpitApp: App {

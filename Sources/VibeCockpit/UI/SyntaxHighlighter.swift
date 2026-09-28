@@ -1,4 +1,5 @@
 #if canImport(AppKit)
+import VibeCockpitCore
 import AppKit
 
 public enum SourceLanguage: Sendable {
@@ -9,7 +10,7 @@ public enum SourceLanguage: Sendable {
 /// No external dependencies. Covers the 90% case needed for diff canvas display.
 public struct SyntaxHighlighter {
 
-    public struct Theme {
+    public struct Theme: @unchecked Sendable {
         public let keyword: NSColor
         public let string: NSColor
         public let comment: NSColor

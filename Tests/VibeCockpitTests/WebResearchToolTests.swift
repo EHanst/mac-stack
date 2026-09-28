@@ -161,7 +161,7 @@ struct WebFetchToolTests {
 
     @Test("sends User-Agent header")
     func sendsUserAgent() async throws {
-        var capturedHeaders: [String: String] = [:]
+        nonisolated(unsafe) var capturedHeaders: [String: String] = [:]
         let session = MockWebSession { req in
             capturedHeaders = req.allHTTPHeaderFields ?? [:]
             let resp = makeHTTPResponse(url: req.url!, status: 200, contentType: "text/plain")
@@ -181,7 +181,7 @@ struct WebSearchToolTests {
     @Test("throws missingArgument when query is absent")
     func missingQuery() async {
         let session = MockWebSession { _ in throw URLError(.unknown) }
-        let tool = WebSearchTool(credentials: CredentialStore(), session: session)
+        let tool = WebSearchTool(credentials: CredentialStore(service: "com.vibecockpit.test"), session: session)
         await #expect(throws: AgentToolError.self) {
             _ = try await tool.execute(arguments: [:])
         }
@@ -190,7 +190,7 @@ struct WebSearchToolTests {
     @Test("throws CredentialError.notFound when API key is not stored")
     func missingAPIKey() async {
         let session = MockWebSession { _ in throw URLError(.unknown) }
-        let tool = WebSearchTool(credentials: CredentialStore(), session: session)
+        let tool = WebSearchTool(credentials: CredentialStore(service: "com.vibecockpit.test"), session: session)
         await #expect(throws: CredentialStore.CredentialError.self) {
             _ = try await tool.execute(arguments: ["query": .string("swift actors")])
         }
@@ -208,11 +208,12 @@ struct WebSearchToolTests {
             let resp = makeHTTPResponse(url: req.url!, status: 200, contentType: "application/json")
             return (Data(json.utf8), resp)
         }
-        let creds = CredentialStore()
+        let creds = CredentialStore(service: "com.vibecockpit.test")
+        try? await creds.delete(for: "brave-search")
         try await creds.store(token: "test-key-parse", for: "brave-search")
-        defer { Task { try? await creds.delete(for: "brave-search") } }
         let tool = WebSearchTool(credentials: creds, session: session)
         let result = try await tool.execute(arguments: ["query": .string("swift")])
+        try? await creds.delete(for: "brave-search")
         let text = result.compactMap { if case .text(let t, _, _) = $0 { return t } else { return nil } }
             .joined()
         #expect(text.contains("1. Swift Docs"))
@@ -227,11 +228,12 @@ struct WebSearchToolTests {
             let resp = makeHTTPResponse(url: req.url!, status: 200, contentType: "application/json")
             return (Data(#"{"web":{"results":[]}}"#.utf8), resp)
         }
-        let creds = CredentialStore()
+        let creds = CredentialStore(service: "com.vibecockpit.test")
+        try? await creds.delete(for: "brave-search")
         try await creds.store(token: "test-key-empty", for: "brave-search")
-        defer { Task { try? await creds.delete(for: "brave-search") } }
         let tool = WebSearchTool(credentials: creds, session: session)
         let result = try await tool.execute(arguments: ["query": .string("xyzzy")])
+        try? await creds.delete(for: "brave-search")
         let text = result.compactMap { if case .text(let t, _, _) = $0 { return t } else { return nil } }
             .joined()
         #expect(text == "No results found.")
@@ -239,36 +241,38 @@ struct WebSearchToolTests {
 
     @Test("caps count query parameter at 10")
     func countCappedAtTen() async throws {
-        var capturedURL: URL?
+        nonisolated(unsafe) var capturedURL: URL?
         let session = MockWebSession { req in
             capturedURL = req.url
             let resp = makeHTTPResponse(url: req.url!, status: 200, contentType: "application/json")
             return (Data(#"{"web":{"results":[]}}"#.utf8), resp)
         }
-        let creds = CredentialStore()
+        let creds = CredentialStore(service: "com.vibecockpit.test")
+        try? await creds.delete(for: "brave-search")
         try await creds.store(token: "test-key-cap", for: "brave-search")
-        defer { Task { try? await creds.delete(for: "brave-search") } }
         let tool = WebSearchTool(credentials: creds, session: session)
         _ = try? await tool.execute(arguments: [
             "query": .string("test"),
             "count": .int(999),
         ])
+        try? await creds.delete(for: "brave-search")
         #expect(capturedURL?.query?.contains("count=10") == true)
     }
 
     @Test("sends API key in X-Subscription-Token header")
     func sendsAPIKeyHeader() async throws {
-        var capturedHeaders: [String: String] = [:]
+        nonisolated(unsafe) var capturedHeaders: [String: String] = [:]
         let session = MockWebSession { req in
             capturedHeaders = req.allHTTPHeaderFields ?? [:]
             let resp = makeHTTPResponse(url: req.url!, status: 200, contentType: "application/json")
             return (Data(#"{"web":{"results":[]}}"#.utf8), resp)
         }
-        let creds = CredentialStore()
+        let creds = CredentialStore(service: "com.vibecockpit.test")
+        try? await creds.delete(for: "brave-search")
         try await creds.store(token: "my-brave-key", for: "brave-search")
-        defer { Task { try? await creds.delete(for: "brave-search") } }
         let tool = WebSearchTool(credentials: creds, session: session)
         _ = try? await tool.execute(arguments: ["query": .string("test")])
+        try? await creds.delete(for: "brave-search")
         #expect(capturedHeaders["X-Subscription-Token"] == "my-brave-key")
     }
 
@@ -278,13 +282,14 @@ struct WebSearchToolTests {
             let resp = makeHTTPResponse(url: req.url!, status: 200, contentType: "application/json")
             return (Data(#"{"unexpected":true}"#.utf8), resp)
         }
-        let creds = CredentialStore()
+        let creds = CredentialStore(service: "com.vibecockpit.test")
+        try? await creds.delete(for: "brave-search")
         try await creds.store(token: "test-key-malformed", for: "brave-search")
-        defer { Task { try? await creds.delete(for: "brave-search") } }
         let tool = WebSearchTool(credentials: creds, session: session)
         await #expect(throws: WebResearchError.self) {
             _ = try await tool.execute(arguments: ["query": .string("swift")])
         }
+        try? await creds.delete(for: "brave-search")
     }
 
     @Test("throws WebResearchError.httpError on non-2xx response")
@@ -293,28 +298,30 @@ struct WebSearchToolTests {
             let resp = makeHTTPResponse(url: req.url!, status: 403, contentType: "application/json")
             return (Data(), resp)
         }
-        let creds = CredentialStore()
+        let creds = CredentialStore(service: "com.vibecockpit.test")
+        try? await creds.delete(for: "brave-search")
         try await creds.store(token: "bad-key", for: "brave-search")
-        defer { Task { try? await creds.delete(for: "brave-search") } }
         let tool = WebSearchTool(credentials: creds, session: session)
         await #expect(throws: WebResearchError.self) {
             _ = try await tool.execute(arguments: ["query": .string("swift")])
         }
+        try? await creds.delete(for: "brave-search")
     }
 
     @Test("encodes query string correctly in URL")
     func queryEncoding() async throws {
-        var capturedURL: URL?
+        nonisolated(unsafe) var capturedURL: URL?
         let session = MockWebSession { req in
             capturedURL = req.url
             let resp = makeHTTPResponse(url: req.url!, status: 200, contentType: "application/json")
             return (Data(#"{"web":{"results":[]}}"#.utf8), resp)
         }
-        let creds = CredentialStore()
+        let creds = CredentialStore(service: "com.vibecockpit.test")
+        try? await creds.delete(for: "brave-search")
         try await creds.store(token: "test-key-enc", for: "brave-search")
-        defer { Task { try? await creds.delete(for: "brave-search") } }
         let tool = WebSearchTool(credentials: creds, session: session)
         _ = try? await tool.execute(arguments: ["query": .string("swift async await")])
+        try? await creds.delete(for: "brave-search")
         let query = capturedURL?.query ?? ""
         #expect(query.contains("q=swift"))
     }

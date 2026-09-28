@@ -34,7 +34,6 @@ struct UnixSocketTransportTests {
         let path = tempSocketPath()
         let server = UnixSocketTransport(socketPath: path)
         try await server.connect()
-        defer { Task { await server.disconnect() } }
 
         let clientFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         defer { Darwin.close(clientFD) }
@@ -60,5 +59,6 @@ struct UnixSocketTransportTests {
         let received = Data(buf[..<n])
         #expect(received.last == 0x0A)
         #expect(received.dropLast() == message)
+        await server.disconnect()
     }
 }

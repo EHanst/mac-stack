@@ -20,13 +20,15 @@ public actor CredentialStore {
         }
     }
 
-    private let service = "com.vibecockpit.credentials"
+    private let service: String
     private let logger = Logger(subsystem: "com.vibecockpit", category: "CredentialStore")
 
     // Provider id → env var key, populated from providers config
     private var envVarKeys: [ProviderID: String] = [:]
 
-    public init() {}
+    public init(service: String = "com.vibecockpit.credentials") {
+        self.service = service
+    }
 
     public func registerEnvVarKey(_ key: String, for providerID: ProviderID) {
         envVarKeys[providerID] = key

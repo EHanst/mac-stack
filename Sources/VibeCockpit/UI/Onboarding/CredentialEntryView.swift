@@ -1,4 +1,5 @@
 #if canImport(AppKit)
+import VibeCockpitCore
 import SwiftUI
 
 struct CredentialEntryView: View {

@@ -26,7 +26,8 @@ public struct WebFetchTool: AgentToolHandler {
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let rawURL) = arguments["url"],
-              let url = URL(string: rawURL) else {
+              let url = URL(string: rawURL),
+              let scheme = url.scheme, scheme == "http" || scheme == "https" else {
             throw AgentToolError.missingArgument("url")
         }
         let maxChars: Int

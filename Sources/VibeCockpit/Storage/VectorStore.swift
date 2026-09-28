@@ -223,7 +223,7 @@ public actor VectorStore {
     // MARK: - Private
 
     private func denseSearch(embedding: [Float], topK: Int) throws -> [SearchResult] {
-        guard let db = readPool.first ?? writeDB else { return [] }
+        guard let db = writeDB ?? readPool.first else { return [] }
         let vecSQL = """
             SELECT c.id, c.file_path, c.decl_kind, c.content,
                    vec_distance_cosine(e.embedding, ?) AS distance
@@ -243,12 +243,12 @@ public actor VectorStore {
     }
 
     private func sparseSearch(query: String, topK: Int) throws -> [SearchResult] {
-        guard let db = readPool.first ?? writeDB else { return [] }
+        guard let db = writeDB ?? readPool.first else { return [] }
         let ftsSQL = """
             SELECT c.id, c.file_path, c.decl_kind, c.content,
                    bm25(chunk_fts) AS score
             FROM chunk_fts
-            JOIN chunks c ON c.id = chunk_fts.chunk_id
+            JOIN chunks c ON c.rowid = chunk_fts.rowid
             WHERE chunk_fts MATCH ?
             ORDER BY score ASC
             LIMIT ?;
