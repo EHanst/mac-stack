@@ -160,28 +160,33 @@ public actor LocalMLXProvider: ModelProvider {
     // MARK: - Weight loading
 
     private func loadWeights(from dir: URL) throws -> [String: MLXArray] {
+        var all: [String: MLXArray] = [:]
         let single = dir.appendingPathComponent("model.safetensors")
         if FileManager.default.fileExists(atPath: single.path) {
-            return try MLX.loadArrays(url: single)
+            all = try MLX.loadArrays(url: single)
+        } else {
+            let indexURL = dir.appendingPathComponent("model.safetensors.index.json")
+            guard FileManager.default.fileExists(atPath: indexURL.path) else {
+                throw LocalModelError.noWeightsFound(dir.path)
+            }
+            let idx = try JSONDecoder().decode(SafetensorsIndex.self,
+                                               from: Data(contentsOf: indexURL))
+            for shard in Set(idx.weightMap.values) {
+                let shardWeights = try MLX.loadArrays(url: dir.appendingPathComponent(shard))
+                all.merge(shardWeights) { a, _ in a }
+            }
         }
-        let indexURL = dir.appendingPathComponent("model.safetensors.index.json")
-        guard FileManager.default.fileExists(atPath: indexURL.path) else {
-            throw LocalModelError.noWeightsFound(dir.path)
-        }
-        let idx = try JSONDecoder().decode(SafetensorsIndex.self,
-                                           from: Data(contentsOf: indexURL))
-        var all: [String: MLXArray] = [:]
-        for shard in Set(idx.weightMap.values) {
-            let shardWeights = try MLX.loadArrays(url: dir.appendingPathComponent(shard))
-            all.merge(shardWeights) { a, _ in a }
-        }
-        return all
+        let lmPrefix = "language_model."
+        return Dictionary(uniqueKeysWithValues: all.map { k, v in
+            (k.hasPrefix(lmPrefix) ? String(k.dropFirst(lmPrefix.count)) : k, v)
+        })
     }
 
     private func loadConfig(from dir: URL) throws -> Qwen35Config {
         let data = try Data(contentsOf: dir.appendingPathComponent("config.json"))
         let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        return Qwen35Config.from(dict: dict)
+        let flat = (dict["text_config"] as? [String: Any]) ?? dict
+        return Qwen35Config.from(dict: flat)
     }
 
     private func loadHadamard(from dir: URL, weights: [String: MLXArray]) throws -> HadamardMeta {
@@ -189,25 +194,42 @@ public actor LocalMLXProvider: ModelProvider {
         guard FileManager.default.fileExists(atPath: url.path) else { return .none }
         let data = try Data(contentsOf: url)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let block = json["block"] as? Int, block > 0 else { return .none }
+              let block = json["prism.hadamard.block_size"] as? Int, block > 0 else { return .none }
+
+        let signWidths = json["prism.hadamard.sign_widths"] as? [Int] ?? []
+        let signValues = json["prism.hadamard.sign_values"] as? [Double] ?? []
+
+        var widthSignMap: [Int: MLXArray] = [:]
+        var offset = 0
+        for w in signWidths {
+            guard offset + w <= signValues.count else { break }
+            widthSignMap[w] = MLXArray(Array(signValues[offset..<(offset + w)]).map { Float($0) })
+            offset += w
+        }
+
+        let lmPrefix = "language_model."
+        func toPrefix(_ raw: String) -> String {
+            let k = raw.hasPrefix(lmPrefix) ? String(raw.dropFirst(lmPrefix.count)) : raw
+            return k.hasSuffix(".weight") ? String(k.dropLast(".weight".count)) : k
+        }
+        func signsFor(_ prefix: String) -> MLXArray? {
+            guard let scales = weights["\(prefix).scales"],
+                  let lastDim = scales.shape.last else { return nil }
+            return widthSignMap[lastDim * 128]
+        }
 
         var rotations: [String: MLXArray?] = [:]
         var embeddingKeys = Set<String>()
 
-        let linearKeys   = json["linear_keys"]    as? [String] ?? json["weights"] as? [String] ?? []
-        let embKeys      = json["embedding_keys"] as? [String] ?? json["embeddings"] as? [String] ?? []
-        let signsDict    = json["signs"]          as? [String: [Double]] ?? [:]
-
-        for key in linearKeys + embKeys {
-            let signs: MLXArray?
-            if let sv = signsDict[key] {
-                signs = MLXArray(sv.map { Float($0) })
-            } else {
-                signs = nil
-            }
-            rotations[key] = signs
+        for rawKey in json["prism.hadamard.weight_names"] as? [String] ?? [] {
+            let prefix = toPrefix(rawKey)
+            rotations[prefix] = signsFor(prefix)
         }
-        for key in embKeys { embeddingKeys.insert(key) }
+        for rawKey in json["prism.hadamard.inverse_weight_names"] as? [String] ?? [] {
+            let prefix = toPrefix(rawKey)
+            embeddingKeys.insert(prefix)
+            if rotations[prefix] == nil { rotations[prefix] = signsFor(prefix) }
+        }
 
         return HadamardMeta(block: block, rotations: rotations, embeddingKeys: embeddingKeys)
     }
