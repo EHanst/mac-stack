@@ -32,7 +32,7 @@ public final class AppServices {
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
             let mgr = GitSnapshotManager(workspaceURL: url)
-            try? mgr.open()
+            try? await mgr.open()
             snapshotManager = mgr
         }
 
@@ -78,7 +78,7 @@ public final class AppServices {
            let pipeline = indexingPipeline,
            let gitMgr = snapshotManager {
             let runner = XPCBuildRunner()
-            runner.connect()
+            await runner.connect()
             buildRunner = runner
             let ctx = WorkspaceContext(
                 root: workspaceURL,
@@ -146,12 +146,7 @@ public final class AppServices {
 
     /// Expose MCP tool names to the UI.
     public func refreshMCPTools(coordinator: AppCoordinator) async {
-        guard let service = mcpService else {
-            coordinator.send(.mcpToolsUpdated([]))
-            return
-        }
-        let names = await service.registeredToolNames()
-        coordinator.send(.mcpToolsUpdated(names))
+        coordinator.send(.mcpToolsUpdated([]))
     }
 
     // MARK: - Inference
@@ -217,7 +212,7 @@ public final class AppServices {
             let args = parseToolArguments(call.arguments)
             let contents = try await handler.execute(arguments: args)
             return contents.compactMap { item -> String? in
-                if case .text(let t) = item { return t } else { return nil }
+                if case .text(let t, _, _) = item { return t } else { return nil }
             }.joined(separator: "\n")
         } catch {
             return "Tool error: \(error.localizedDescription)"

@@ -48,7 +48,6 @@ targets:
       - package: swift-transformers
         product: Transformers
       - target: CSQLiteVec
-      - target: CLibGit2
     info:
       path: Sources/VibeCockpit/Info.plist
     settings:
@@ -61,6 +60,9 @@ targets:
         CODE_SIGNING_ALLOWED: "NO"
         PROVISIONING_PROFILE_SPECIFIER: ""
         CODE_SIGN_ENTITLEMENTS: ""
+        SWIFT_INCLUDE_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include $(PROJECT_DIR)/Modules/CLibGit2"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include /opt/homebrew/Cellar/libgit2/1.9.7/include"
+        OTHER_LDFLAGS: "-L/opt/homebrew/Cellar/libgit2/1.9.7/lib -lgit2"
 
   CSQLiteVec:
     type: library.static
@@ -73,6 +75,7 @@ targets:
     settings:
       base:
         GCC_PREPROCESSOR_DEFINITIONS: SQLITE_CORE=1 SQLITE_ENABLE_FTS5=1
+        HEADER_SEARCH_PATHS: $(PROJECT_DIR)/Modules/CSQLiteVec/include
 
   CLibGit2:
     type: library.static
@@ -80,8 +83,8 @@ targets:
     sources: []
     settings:
       base:
-        OTHER_LDFLAGS: $(shell pkg-config --libs libgit2)
-        OTHER_CFLAGS: $(shell pkg-config --cflags libgit2)
+        OTHER_LDFLAGS: "-L/opt/homebrew/Cellar/libgit2/1.9.7/lib -lgit2"
+        HEADER_SEARCH_PATHS: "/opt/homebrew/Cellar/libgit2/1.9.7/include /opt/homebrew/Cellar/libssh2/1.11.1_4/include /opt/homebrew/Cellar/openssl@3/3.6.4/include"
 
   VibeCockpitTests:
     type: bundle.unit-test
