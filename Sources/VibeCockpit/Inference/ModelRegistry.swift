@@ -72,7 +72,10 @@ public actor ModelRegistry {
         case .embedding:      required = .embedding
         case .speculativeDraft: required = .speculativeDraft
         }
-        return providers.values.first { $0.capabilities.contains(required) }
+        return providers.values
+            .filter { $0.capabilities.contains(required) }
+            .sorted { $0.id < $1.id }
+            .first
     }
 
     public var isEmpty: Bool { providers.isEmpty }

@@ -176,7 +176,7 @@ public actor VectorStore {
         queryEmbedding: [Float],
         topK: Int = 10
     ) async throws -> [SearchResult] {
-        let dense = try denseSarch(embedding: queryEmbedding, topK: topK)
+        let dense = try denseSearch(embedding: queryEmbedding, topK: topK)
         let sparse = try sparseSearch(query: query, topK: topK)
         return reciprocalRankFusion(dense: dense, sparse: sparse, k: 60).prefix(topK).map { $0 }
     }
@@ -195,7 +195,7 @@ public actor VectorStore {
 
     // MARK: - Private
 
-    private func denseSarch(embedding: [Float], topK: Int) throws -> [SearchResult] {
+    private func denseSearch(embedding: [Float], topK: Int) throws -> [SearchResult] {
         guard let db = readPool.first ?? writeDB else { return [] }
         let vecSQL = """
             SELECT c.id, c.file_path, c.decl_kind, c.content,

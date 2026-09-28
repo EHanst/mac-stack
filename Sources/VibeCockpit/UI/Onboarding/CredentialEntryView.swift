@@ -3,9 +3,10 @@ import SwiftUI
 
 struct CredentialEntryView: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @Environment(AppServices.self) private var services
     @State private var providerID = ""
     @State private var apiToken = ""
-    @State private var baseURL = ""
+    @State private var baseURL = "https://api.openai.com/v1"
     @State private var isSaving = false
     @State private var saveError: String?
 
@@ -37,17 +38,34 @@ struct CredentialEntryView: View {
                 saveCredential()
             }
             .buttonStyle(.borderedProminent)
-            .disabled(providerID.isEmpty || apiToken.isEmpty || isSaving)
+            .disabled(providerID.isEmpty || apiToken.isEmpty || baseURL.isEmpty || isSaving)
         }
     }
 
     private func saveCredential() {
+        guard let url = URL(string: baseURL), !url.host.isNilOrEmpty else {
+            saveError = "Enter a valid base URL."
+            return
+        }
         isSaving = true
         saveError = nil
-        // Credential storage is handled by CredentialStore actor at runtime.
-        // The UI just signals onboarding completion; the coordinator will
-        // trigger credential storage via its async pipeline.
-        coordinator.send(.onboardingCompleted)
+        Task {
+            do {
+                try await services.saveCredentialAndComplete(
+                    token: apiToken,
+                    providerID: providerID,
+                    baseURL: url,
+                    coordinator: coordinator
+                )
+            } catch {
+                saveError = error.localizedDescription
+                isSaving = false
+            }
+        }
     }
+}
+
+private extension Optional where Wrapped == String {
+    var isNilOrEmpty: Bool { self == nil || self! .isEmpty }
 }
 #endif

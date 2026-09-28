@@ -3,6 +3,7 @@ import SwiftUI
 
 struct IntentPane: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @Environment(AppServices.self) private var services
     @State private var intentText = ""
 
     var body: some View {
@@ -38,21 +39,30 @@ struct IntentPane: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...6)
                 .onSubmit { submitIntent() }
-            Button(action: submitIntent) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
+            if coordinator.state.isGenerating {
+                ProgressView()
+                    .scaleEffect(0.7)
+                    .frame(width: 28, height: 28)
+            } else {
+                Button(action: submitIntent) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                }
+                .buttonStyle(.plain)
+                .disabled(intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .buttonStyle(.plain)
-            .disabled(intentText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(12)
     }
 
     private func submitIntent() {
         let trimmed = intentText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !coordinator.state.isGenerating else { return }
         coordinator.send(.submitIntent(trimmed))
         intentText = ""
+        Task {
+            await services.processIntent(trimmed, coordinator: coordinator)
+        }
     }
 }
 
@@ -61,11 +71,30 @@ private struct IntentEventRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: event.kind == .userPrompt ? "person.circle" : "sparkles")
-                .foregroundStyle(event.kind == .userPrompt ? .blue : .purple)
+            Image(systemName: iconName)
+                .foregroundStyle(iconColor)
             Text(event.content)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(event.kind == .error ? Color.red : Color.primary)
+        }
+    }
+
+    private var iconName: String {
+        switch event.kind {
+        case .userPrompt:    "person.circle"
+        case .assistantToken: "sparkles"
+        case .toolCall:      "wrench.and.screwdriver"
+        case .error:         "exclamationmark.triangle"
+        }
+    }
+
+    private var iconColor: Color {
+        switch event.kind {
+        case .userPrompt:    .blue
+        case .assistantToken: .purple
+        case .toolCall:      .orange
+        case .error:         .red
         }
     }
 }

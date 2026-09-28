@@ -18,6 +18,10 @@ struct ContentView: View {
                 .frame(minWidth: 300, idealWidth: 380)
             DiffCanvas()
                 .frame(minWidth: 400)
+            if coordinator.state.previewHTML != nil {
+                PreviewWebView(html: coordinator.state.previewHTML ?? "")
+                    .frame(minWidth: 300, idealWidth: 380)
+            }
             SnapshotScrubber()
                 .frame(minWidth: 200, idealWidth: 240)
         }
