@@ -12,6 +12,7 @@ public final class AppServices {
     public let credentials = CredentialStore()
     private let registry = ModelRegistry()
     private var snapshotManager: GitSnapshotManager?
+    private var indexingPipeline: IndexingPipeline?
     private var startupComplete = false
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
@@ -25,6 +26,24 @@ public final class AppServices {
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
             snapshotManager = GitSnapshotManager(workspaceURL: url)
+        }
+
+        let dbURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("VibeCockpit/index.db")
+        if let dbURL {
+            let store = VectorStore(dbURL: dbURL)
+            let pipeline = IndexingPipeline(store: store, registry: registry)
+            do {
+                try await pipeline.open()
+                indexingPipeline = pipeline
+                if let workspaceURL = workspaceURL ?? detectWorkspaceURL() {
+                    Task.detached(priority: .background) {
+                        try? await pipeline.reindexWorkspace(workspaceURL)
+                    }
+                }
+            } catch {
+                logger.error("IndexingPipeline open failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
 
         let remoteConfigs = (try? ModelRegistry.loadRemoteConfigs()) ?? []
@@ -58,6 +77,8 @@ public final class AppServices {
 
         coordinator.send(.generationStarted)
 
+        let ragContext = await retrieveContext(for: text)
+
         let agentTools: [AgentToolHandler] = [FileReaderTool(), FileWriterTool()]
         let toolDefs = agentTools.map { h in
             ToolDefinition(name: h.toolDefinition.name, description: h.toolDefinition.description ?? "")
@@ -65,8 +86,10 @@ public final class AppServices {
 
         do {
             var continueLoop = true
+            var isFirstTurn = true
             while continueLoop {
-                let messages = buildMessages(coordinator.state)
+                let messages = buildMessages(coordinator.state, ragContext: isFirstTurn ? ragContext : nil)
+                isFirstTurn = false
                 let stream = await provider.generate(messages: messages, tools: toolDefs, options: GenerationOptions())
                 var pendingToolCalls: [ToolCall] = []
                 for try await event in stream {
@@ -179,9 +202,30 @@ public final class AppServices {
         }
     }
 
+    // MARK: - RAG retrieval
+
+    private func retrieveContext(for query: String) async -> String? {
+        guard let pipeline = indexingPipeline else { return nil }
+        do {
+            let results = try await pipeline.search(query: query, topK: 5)
+            guard !results.isEmpty else { return nil }
+            var lines = ["Relevant code from the workspace:"]
+            for result in results {
+                let fileName = URL(fileURLWithPath: result.filePath).lastPathComponent
+                lines.append("// \(fileName) — \(result.declarationKind)")
+                lines.append(result.content)
+                lines.append("")
+            }
+            return lines.joined(separator: "\n")
+        } catch {
+            logger.debug("RAG search failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     // MARK: - Private helpers
 
-    private func buildMessages(_ state: AppState) -> [Message] {
+    private func buildMessages(_ state: AppState, ragContext: String? = nil) -> [Message] {
         let systemContent = buildSystemPrompt()
         let system = Message(role: .system, content: systemContent)
 
@@ -213,6 +257,16 @@ public final class AppServices {
         }
         if !pendingAssistant.isEmpty {
             candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
+        }
+
+        // Inject RAG context into the last user message
+        if let rag = ragContext,
+           let lastUserIdx = candidates.indices.reversed().first(where: { candidates[$0].role == .user }) {
+            let original = candidates[lastUserIdx]
+            candidates[lastUserIdx] = Message(
+                role: .user,
+                content: "\(rag)\n\nUser request: \(original.content)"
+            )
         }
 
         // Budget: ~80% of maxTokens, approximated as chars/4
