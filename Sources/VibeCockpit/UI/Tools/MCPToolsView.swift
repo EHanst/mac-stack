@@ -1,5 +1,4 @@
 #if canImport(AppKit)
-import VibeCockpitCore
 import SwiftUI
 
 // MARK: - MCP Tools Panel
