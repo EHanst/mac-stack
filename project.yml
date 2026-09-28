@@ -56,6 +56,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.app
         SWIFT_STRICT_CONCURRENCY: complete
         OTHER_SWIFT_FLAGS: -strict-concurrency=complete
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGNING_REQUIRED: "NO"
+        CODE_SIGNING_ALLOWED: "NO"
 
   CSQLiteVec:
     type: library.static
