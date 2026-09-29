@@ -10,7 +10,13 @@ import StackCore
 public final class ScopeBox: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Set<ClientScope>
-    public init(_ scopes: Set<ClientScope>) { value = scopes }
+    private var who: ClientIdentity
+    public init(_ scopes: Set<ClientScope>, identity: ClientIdentity = .unknownLocalApp) { value = scopes; who = identity }
+    /// Who is on the other end (a local tool learns its name when it introduces itself).
+    public var identity: ClientIdentity {
+        get { lock.withLock { who } }
+        set { lock.withLock { who = newValue } }
+    }
     public var scopes: Set<ClientScope> {
         get { lock.withLock { value } }
         set { lock.withLock { value = newValue } }
@@ -23,11 +29,16 @@ public final class ScopeBox: @unchecked Sendable {
 public actor MCPToolHost {
 
     private let inference: InferenceService?
+    private let gate: ToolGate?
     private var workspaceTools: [any AgentToolHandler] = []
     private var runtime: ToolRuntime?
     private let log = Logger(subsystem: "com.vibecockpit", category: "MCPToolHost")
 
-    public init(inference: InferenceService? = nil) { self.inference = inference }
+    /// `gate` decides whether an app may change files or run commands; without one those are refused.
+    public init(inference: InferenceService? = nil, gate: ToolGate? = nil) {
+        self.inference = inference
+        self.gate = gate
+    }
 
     public var hasWorkspace: Bool { runtime != nil }
 
@@ -45,6 +56,9 @@ public actor MCPToolHost {
         ]
     }
 
+    /// Adds one more tool (applies to connections made afterwards).
+    public func register(_ tool: any AgentToolHandler) { workspaceTools.append(tool) }
+
     public func allTools() -> [any AgentToolHandler] {
         var tools: [any AgentToolHandler] = []
         if let inference {
@@ -57,6 +71,7 @@ public actor MCPToolHost {
     public func makeServer(scopes: ScopeBox) async -> Server {
         let tools = allTools()
         let runtime = self.runtime
+        let gate = self.gate
         let log = self.log
         let server = Server(
             name: "vibecockpit",
@@ -79,6 +94,16 @@ public actor MCPToolHost {
                 return CallTool.Result(
                     content: [.text(text: "This app isn't allowed to \(handler.requiredScope.title.lowercased()). Change its permissions in VibeCockpit.", annotations: nil, _meta: nil)],
                     isError: true)
+            }
+            if ApprovalPolicy.needsApproval(handler.requiredScope) {
+                let request = ApprovalRequest(
+                    client: scopes.identity, toolName: params.name, scope: handler.requiredScope,
+                    summary: handler.approvalSummary(arguments: params.arguments ?? [:]))
+                guard let gate, await gate.allows(request) else {
+                    return CallTool.Result(
+                        content: [.text(text: "The user didn't allow this action (\(request.summary)).", annotations: nil, _meta: nil)],
+                        isError: true)
+                }
             }
             let opID = OperationID()
             let task = Task<[Tool.Content], Error> { try await handler.execute(arguments: params.arguments ?? [:]) }

@@ -26,7 +26,7 @@ extension StackAPIServer {
             method: request.method.rawValue, headers: headers,
             body: body.readableBytes > 0 ? Data(body.readableBytesView) : nil, path: request.uri.path)
 
-        let result = await sessions.handle(sdkRequest, clientID: client.id, scopes: client.scopes)
+        let result = await sessions.handle(sdkRequest, clientID: client.id, clientName: client.name, scopes: client.scopes)
         return Self.response(from: result)
     }
 

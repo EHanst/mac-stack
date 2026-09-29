@@ -36,10 +36,15 @@ public actor MCPService {
     private func serve(_ transport: SocketConnectionTransport) async {
         let id = UUID()
         connectedClients += 1
-        let server = await host.makeServer(scopes: ScopeBox(Set(ClientScope.allCases)))
+        let box = ScopeBox(Set(ClientScope.allCases))
+        let server = await host.makeServer(scopes: box)
         let log = self.log
         let task = Task {
-            do { try await server.start(transport: transport) }
+            do {
+                try await server.start(transport: transport, initializeHook: { info, _ in
+                    box.identity = ClientIdentity(key: "socket:\(info.name)", name: info.title ?? info.name)
+                })
+            }
             catch { log.error("MCP connection ended: \(error.localizedDescription, privacy: .public)") }
             await server.waitUntilCompleted()
             await transport.disconnect()
@@ -169,6 +174,14 @@ struct RuntimeFileWriterTool: AgentToolHandler {
     )
     let runtime: ToolRuntime
     var requiredScope: ClientScope { .toolsWrite }
+    func approvalSummary(arguments: [String: Value]) -> String {
+        guard case .string(let path) = arguments["path"] else { return "Write a file" }
+        var size = ""
+        if case .string(let content) = arguments["content"] {
+            size = " (" + ByteCountFormatter.string(fromByteCount: Int64(content.utf8.count), countStyle: .file) + ")"
+        }
+        return "Write \(path)\(size)"
+    }
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let path) = arguments["path"],
@@ -196,6 +209,10 @@ struct RuntimeRunBuildTool: AgentToolHandler {
     )
     let runtime: ToolRuntime
     var requiredScope: ClientScope { .toolsExec }
+    func approvalSummary(arguments: [String: Value]) -> String {
+        guard case .string(let command) = arguments["command"] else { return "Run a command" }
+        return "Run: \(command)"
+    }
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let command) = arguments["command"],
@@ -225,6 +242,7 @@ struct SnapshotCreateTool: AgentToolHandler {
     )
     let manager: GitSnapshotManager
     var requiredScope: ClientScope { .toolsWrite }
+    func approvalSummary(arguments: [String: Value]) -> String { "Save a snapshot of your project" }
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         let message: String

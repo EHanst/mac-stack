@@ -31,12 +31,13 @@ public actor MCPHTTPSessions {
     public var sessionCount: Int { sessions.count }
 
     /// `clientID`/`scopes` come from the bearer token the HTTP layer already verified.
-    public func handle(_ request: HTTPRequest, clientID: UUID, scopes: Set<ClientScope>) async -> HTTPResponse {
+    public func handle(_ request: HTTPRequest, clientID: UUID, clientName: String, scopes: Set<ClientScope>) async -> HTTPResponse {
         if let id = request.header(HTTPHeaderName.sessionID) {
             guard var session = sessions[id], session.owner == clientID else {
                 return .error(statusCode: 404, .invalidRequest("Not Found: unknown session"))
             }
             session.scopes.scopes = scopes          // permission changes apply to running sessions
+            session.scopes.identity = ClientIdentity(key: "client:\(clientID.uuidString)", name: clientName)
             session.lastUsed = Date()
             sessions[id] = session
             let response = await session.transport.handleRequest(request)
@@ -49,7 +50,7 @@ public actor MCPHTTPSessions {
             return .error(statusCode: 400, .invalidRequest("Bad Request: missing MCP-Session-Id header"))
         }
         await evictIfFull()
-        let box = ScopeBox(scopes)
+        let box = ScopeBox(scopes, identity: ClientIdentity(key: "client:\(clientID.uuidString)", name: clientName))
         // Host/Origin are already checked by the server's own loopback guard (which also honours the
         // user's allowed origins), so the SDK's origin validator is left out to avoid two rulebooks.
         let transport = StatefulHTTPServerTransport(validationPipeline: StandardValidationPipeline(validators: [

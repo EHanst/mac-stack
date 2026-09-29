@@ -12,10 +12,13 @@ public protocol AgentToolHandler: Sendable {
     func execute(arguments: [String: Value]) async throws -> [Tool.Content]
     /// What an outside app must be allowed to do before it may call this tool.
     var requiredScope: ClientScope { get }
+    /// One plain-language line for the "Allow?" prompt.
+    func approvalSummary(arguments: [String: Value]) -> String
 }
 
 extension AgentToolHandler {
     public var requiredScope: ClientScope { .toolsRead }
+    public func approvalSummary(arguments: [String: Value]) -> String { "Use \(toolDefinition.name)" }
 }
 
 // MARK: - File Reader
