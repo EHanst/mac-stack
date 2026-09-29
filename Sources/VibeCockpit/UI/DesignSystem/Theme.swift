@@ -49,7 +49,7 @@ extension NSColor {
 }
 
 /// The palette, one light/dark pair per role. Flat 2.0: depth comes from these tonal steps and
-/// the hairline, never from shadows. The `mt*` tokens in `MaterialDS.swift` alias these.
+/// the hairline, never from shadows. The `mt*` tokens in `FlatDS.swift` alias these.
 enum Palette {
     // Surfaces: page < raised. Sunken is for wells inside a raised card.
     static let page         = Color.adaptive(light: 0xF3F4F7, dark: 0x121317)
@@ -80,7 +80,11 @@ enum Palette {
 
     // Status
     static let success        = Color.adaptive(light: 0x1B7F3A, dark: 0x5CCB7C)
+    static let successFill    = Color.adaptive(light: 0xDDF3E3, dark: 0x163523)
+    static let onSuccessFill  = Color.adaptive(light: 0x0D4A22, dark: 0xC8F0D3)
     static let warning        = Color.adaptive(light: 0x9A5B00, dark: 0xF0B44C)
+    static let warningFill    = Color.adaptive(light: 0xFBEBCF, dark: 0x3A2A0E)
+    static let onWarningFill  = Color.adaptive(light: 0x5C3500, dark: 0xF8DFB0)
     static let danger         = Color.adaptive(light: 0xB3261E, dark: 0xF28B82)
     static let onDanger       = Color.adaptive(light: 0xFFFFFF, dark: 0x3B0906)
     static let dangerFill     = Color.adaptive(light: 0xFBE4E2, dark: 0x4A1D1A)

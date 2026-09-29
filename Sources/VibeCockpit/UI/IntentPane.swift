@@ -267,7 +267,7 @@ private struct IntentEventBubble: View {
         case .userPrompt:     Color.mtPrimary
         case .assistantToken: Color.mtPrimaryContainer
         case .toolCall:       Color.mtTertiaryContainer
-        case .toolResult:     Color(red: 0.78, green: 0.95, blue: 0.82)
+        case .toolResult:     Palette.successFill
         case .error:          Color.mtErrorContainer
         case .notice:         Color.mtSurfaceContainerHighest
         }

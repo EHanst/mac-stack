@@ -21,6 +21,28 @@ public struct SyntaxHighlighter {
         public let plain: NSColor
         public let background: NSColor
 
+        /// Follows the appearance the text is drawn in (light, dark, or the system's), so a
+        /// theme switch needs no re-creation. Colors are contrast-checked against both surfaces.
+        public static let adaptive: Theme = {
+            func pair(_ light: NSColor, _ dark: NSColor) -> NSColor {
+                NSColor(name: nil) { appearance in
+                    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+                }
+            }
+            func rgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> NSColor {
+                NSColor(srgbRed: r / 255, green: g / 255, blue: b / 255, alpha: 1)
+            }
+            return Theme(
+                keyword: pair(rgb(163, 13, 181), rgb(255, 122, 178)),
+                string:  pair(rgb(33, 128, 64),  rgb(140, 216, 132)),
+                comment: pair(rgb(99, 112, 125), rgb(127, 140, 152)),
+                type_:   pair(rgb(43, 110, 191), rgb(120, 194, 255)),
+                number:  pair(rgb(153, 51, 0),   rgb(255, 178, 102)),
+                plain:   .textColor,
+                background: .textBackgroundColor
+            )
+        }()
+
         public static let dark = Theme(
             keyword: .systemPink,
             string:  .systemGreen,
@@ -45,7 +67,7 @@ public struct SyntaxHighlighter {
     private let theme: Theme
     private let font: NSFont
 
-    public init(theme: Theme = .dark, font: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)) {
+    public init(theme: Theme = .adaptive, font: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)) {
         self.theme = theme
         self.font = font
     }
