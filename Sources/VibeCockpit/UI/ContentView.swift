@@ -280,6 +280,7 @@ struct SettingsView: View {
                 pageHeader
                 generationSection
                 startupSection
+                AssistantCard()
                 CloudUsageCard()
                 SharingCard()
                 DiagnosticsCard()

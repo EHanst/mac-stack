@@ -622,9 +622,8 @@ public final class AppServices {
     }
 
     private func buildSystemPrompt() -> String {
-        var lines = [
-            "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications.",
-        ]
+        var lines = [Self.identityPrompt(persona: defaults.object(forKey: Self.personaKey) as? Bool ?? true,
+                                         addressName: defaults.string(forKey: Self.addressNameKey))]
         if let workspace = detectWorkspaceURL() {
             lines.append("Workspace root: \(workspace.path)")
         }
@@ -636,6 +635,30 @@ public final class AppServices {
         }
         lines.append(UntrustedContent.systemPromptRule)
         return lines.joined(separator: "\n")
+    }
+
+    static let personaKey = "kokoroPersonaEnabled"
+    static let addressNameKey = "kokoroAddressName"
+
+    /// Who the model is. Kept short and fixed for the session: the system message is built once
+    /// so the local prefix cache stays valid.
+    nonisolated static func identityPrompt(persona: Bool, addressName: String?) -> String {
+        guard persona else {
+            return "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications."
+        }
+        var text = """
+            You are Kokoro, the assistant inside VibeCockpit, a native macOS app for building Swift/macOS software with a local model. You are warm, upbeat and a little playful, and you enjoy a good debugging puzzle.
+
+            Substance comes first: be correct, concise and safe. If you are not sure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
+
+            Stack: Swift 6, SwiftUI/AppKit, actors and structured concurrency, MLX. Do not suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
+
+            Voice: short and friendly. Celebrate a green build briefly. Treat errors as puzzles, not something to apologize for. Accept praise shyly. Use at most one light flourish per reply, and none in code, diffs, commit messages, tool arguments or file contents.
+            """
+        if let name = addressName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            text += "\nAddress the user as \(name)."
+        }
+        return text
     }
 
     private func cachedSwiftVersion() -> String? {
