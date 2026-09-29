@@ -78,9 +78,11 @@ public actor ModelRegistry {
         }
         return providers.values
             .filter { $0.capabilities.contains(required) }
-            .sorted { $0.id < $1.id }
+            .sorted { ($0.isLocal ? 0 : 1, $0.id) < ($1.isLocal ? 0 : 1, $1.id) }  // local before cloud
             .first
     }
+
+    public func provider(id: ProviderID) -> (any ModelProvider)? { providers[id] }
 
     public var isEmpty: Bool { providers.isEmpty }
 
@@ -98,6 +100,9 @@ public actor ModelRegistry {
         var bundleURLs: [URL] = []
         for item in enumerator {
             guard let url = item as? URL else { continue }
+            // Embedding models live under Models/Embedders and are registered separately as
+            // LocalEmbedder; scanning them here would register them as chat models.
+            if url.lastPathComponent == "Embedders" { enumerator.skipDescendants(); continue }
             let configURL = url.appendingPathComponent("config.json")
             let hasSafetensors = FileManager.default.fileExists(
                 atPath: url.appendingPathComponent("model.safetensors").path) ||

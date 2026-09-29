@@ -2,6 +2,9 @@ import Darwin
 import Foundation
 import Logging
 import MCP
+#if SWIFT_PACKAGE
+import StackCore
+#endif
 
 public actor UnixSocketTransport: Transport {
 

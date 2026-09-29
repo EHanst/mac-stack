@@ -1,6 +1,8 @@
 import Testing
 import Foundation
 @testable import VibeCockpitCore
+@testable import StackCore
+@testable import StackMCP
 
 @Suite("GenerationSupport")
 struct GenerationSupportTests {

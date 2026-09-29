@@ -2,6 +2,8 @@ import Testing
 import Foundation
 import Darwin
 @testable import VibeCockpitCore
+@testable import StackCore
+@testable import StackMCP
 
 @Suite("UnixSocketTransport")
 struct UnixSocketTransportTests {

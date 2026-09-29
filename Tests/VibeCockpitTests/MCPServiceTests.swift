@@ -3,6 +3,8 @@ import Foundation
 import MCP
 import Logging
 @testable import VibeCockpitCore
+@testable import StackCore
+@testable import StackMCP
 
 actor MockTransportForTests: Transport {
     nonisolated let logger = Logger(label: "mock", factory: { _ in SwiftLogNoOpLogHandler() })

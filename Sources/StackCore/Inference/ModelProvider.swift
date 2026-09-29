@@ -29,9 +29,15 @@ public struct Message: Sendable, Codable {
 public struct ToolDefinition: Sendable, Codable {
     public let name: String
     public let description: String
-    public let inputSchema: [String: String]
+    /// Full JSON Schema for the tool's arguments (`{"type":"object","properties":{…}}`).
+    public let inputSchema: JSONValue
 
-    public init(name: String, description: String, inputSchema: [String: String] = [:]) {
+    public static let emptySchema: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([:]),
+    ])
+
+    public init(name: String, description: String, inputSchema: JSONValue = ToolDefinition.emptySchema) {
         self.name = name
         self.description = description
         self.inputSchema = inputSchema
@@ -84,7 +90,21 @@ public protocol ModelProvider: Actor {
 
     func embed(_ texts: [String]) async throws -> [[Float]]
 
+    /// Embed a search *query*. Some models want an instruction prefix on queries but not on the
+    /// documents they are matched against; the default treats a query like any other text.
+    func embedQuery(_ text: String) async throws -> [Float]
+
     func healthCheck() async -> ProviderHealth
+
+    /// Largest prompt (in tokens) this provider can take right now, or nil if unbounded/unknown.
+    func maxContextTokens() async -> Int?
+}
+
+extension ModelProvider {
+    public func maxContextTokens() async -> Int? { nil }
+    public func embedQuery(_ text: String) async throws -> [Float] {
+        try await embed([text]).first ?? []
+    }
 }
 
 public enum InferenceTask: Sendable {

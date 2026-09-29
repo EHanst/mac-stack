@@ -189,7 +189,8 @@ public actor RemoteAPIProvider: ModelProvider {
         if !tools.isEmpty {
             body["tools"] = tools.map { ["type": "function",
                                          "function": ["name": $0.name,
-                                                      "description": $0.description]] }
+                                                      "description": $0.description,
+                                                      "parameters": $0.inputSchema.foundationObject]] }
         }
         if !options.stopSequences.isEmpty { body["stop"] = options.stopSequences }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

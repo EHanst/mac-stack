@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 import os
+#if SWIFT_PACKAGE
+import StackCore
+#endif
 
 // Lightweight descriptor for the model manager UI — no actor reference crossing.
 public struct ModelInfo: Sendable, Identifiable {

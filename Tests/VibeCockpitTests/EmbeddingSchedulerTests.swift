@@ -1,6 +1,8 @@
 import Testing
 import Foundation
 @testable import VibeCockpitCore
+@testable import StackCore
+@testable import StackMCP
 
 private actor StubEmbeddingProvider: ModelProvider {
     nonisolated let id: ProviderID = "stub-embed"

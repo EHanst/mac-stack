@@ -98,12 +98,3 @@ final class Qwen35Cache: @unchecked Sendable {
         Qwen35Cache(layers: layers.map { $0.fork() }, tokenCount: tokenCount)
     }
 }
-
-/// Cache state captured after prefilling a prompt, so the next request that starts with the
-/// same tokens (the usual agent-loop pattern: same history plus one more turn) only has to
-/// prefill the new suffix. Recurrent layers can't be rewound, so only an exact, full match of
-/// `tokens` is reusable.
-struct PromptCacheSnapshot: @unchecked Sendable {
-    let tokens: [Int32]
-    let cache: Qwen35Cache
-}

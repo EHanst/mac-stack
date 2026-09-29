@@ -1,6 +1,9 @@
 import Foundation
 import MCP
 import os
+#if SWIFT_PACKAGE
+import StackCore
+#endif
 
 public actor MCPService {
 
