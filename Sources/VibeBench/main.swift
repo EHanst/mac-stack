@@ -154,7 +154,7 @@ func median(_ xs: [Double]) -> Double {
 
 /// One generation with a watchdog. Returns nil stats + `timedOut` if the deadline passes.
 func measure(
-    _ provider: LocalMLXProvider, _ messages: [Message], gen: Int, timeout: Double
+    _ provider: LocalMLXProvider, _ messages: [Message], gen: Int, timeout: Double, cacheSnapshots: Bool = true
 ) async -> (ttft: Double, text: String, stats: GenerationStats?, timedOut: Bool) {
     Memory.peakMemory = 0
     let start = Date()
@@ -163,7 +163,7 @@ func measure(
         var text = ""
         for try await event in await provider.generate(
             messages: messages, tools: [],
-            options: GenerationOptions(maxTokens: gen, temperature: 0, sampling: .greedy)) {
+            options: GenerationOptions(maxTokens: gen, temperature: 0, sampling: .greedy, cacheSnapshots: cacheSnapshots)) {
             if case .token(let t) = event {
                 if ttft.isNaN { ttft = Date().timeIntervalSince(start) }
                 text += t
@@ -455,9 +455,10 @@ func run() async throws {
     }
 
     if opts.longChatTest {
-        // A real multi-turn chat about this repo's own files, following the app's flow: elide/trim before
-        // each send, summarize in the background after a turn. Reports the prefix cache per turn.
-        print("[long chat test] real replies, real files; ceiling is read live each turn")
+        // A real multi-turn chat about this repo's own files, following the app's flow: calibrated
+        // token counts, clear/trim before a send, and after each turn (idle) one-step compaction
+        // (clear + summarize) followed by a background re-read of the new prompt.
+        print("[long chat test] real replies, real files; ceiling is read live each turn (cap: \(opts.ceilingCap.map(String.init) ?? "none"))")
         let files = ["Sources/StackCore/Inference/ContextBudget.swift", "Sources/StackCore/Inference/PromptSnapshotStore.swift",
                      "Sources/StackCore/Inference/ChatPromptRenderer.swift", "Sources/StackCore/Inference/CompactionPlanner.swift",
                      "Sources/StackCore/Inference/InferenceScheduler.swift", "Sources/StackCore/Prompts/PromptLint.swift",
@@ -468,21 +469,24 @@ func run() async throws {
             let text = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
             return text.split(separator: "\n", omittingEmptySubsequences: false).prefix(38).joined(separator: "\n")
         }
-        func tokens(_ m: [Message]) -> Int { InferenceService.estimateTokens(m) }
+        var calibration = TokenCalibration()
+        func tokens(_ m: [Message]) -> Int { calibration.tokens(of: m) }
+        func items() -> [CompactionPlanner.Item] {
+            convo.map { CompactionPlanner.Item(role: $0.role, tokens: tokens([$0]), isUntrusted: $0.role == .tool) }
+        }
+        func liveCeiling() async -> Int { min(await provider.maxContextTokens() ?? 4_000, opts.ceilingCap ?? Int.max) }
         var convo = [Message(role: .system, content: "You are a coding assistant inside VibeCockpit. Answer briefly.")]
         var prevPrompt = 0
-        var lastEvent = "-"
+        var events = 0, idleSeconds = 0.0, stallSeconds = 0.0
         print("  turn | est tok | before send | prompt | cached | prefilled | TTFT s | cache vs previous prompt")
         func send(_ turn: Int, file: String?, question: String, gen: Int = 70) async -> String {
-            let ceiling = min(await provider.maxContextTokens() ?? 4_000, opts.ceilingCap ?? Int.max)
-            // Before sending: clear old tool output, then drop whole old turns if still over 90% of the ceiling.
+            let ceiling = await liveCeiling()
             var event = "-"
-            let plan = CompactionPlanner().plan(items: convo.map { CompactionPlanner.Item(role: $0.role, tokens: tokens([$0]), isUntrusted: $0.role == .tool) },
-                                                maxPromptTokens: ceiling)
+            let plan = CompactionPlanner().plan(items: items(), maxPromptTokens: ceiling)
             for i in plan.elide {
                 convo[i] = Message(role: .tool, content: "[tool output cleared to save context: about \(tokens([convo[i]])) tokens]", toolCallID: convo[i].toolCallID)
             }
-            if !plan.elide.isEmpty { event = "cleared \(plan.elide.count)" }
+            if !plan.elide.isEmpty { event = "cleared \(plan.elide.count) (send path)" }
             while tokens(convo) > Int(Double(ceiling) * 0.9),
                   let second = convo.indices.dropFirst().first(where: { convo[$0].role == .user && $0 > 1 }) {
                 convo.removeSubrange(1..<second)
@@ -490,48 +494,64 @@ func run() async throws {
             }
             convo.append(Message(role: .user, content: question))
             if let file { convo.append(Message(role: .tool, content: "read_file \(file)\n\(head(file))", toolCallID: "t\(turn)")) }
+            let sentChars = convo.reduce(0) { $0 + $1.content.count }
             let m = await measure(provider, convo, gen: gen, timeout: opts.timeout)
             guard let st = m.stats else {
                 print("  \(turn) refused or timed out (ceiling \(ceiling)); est \(tokens(convo))")
                 convo.removeLast(file == nil ? 1 : 2)
                 return ""
             }
+            calibration.observe(chars: sentChars, promptTokens: st.promptTokens)
             convo.append(Message(role: .assistant, content: m.text.trimmingCharacters(in: .whitespacesAndNewlines)))
-            let note = prevPrompt == 0 ? "first" : (st.cachedTokens >= prevPrompt - 40 ? "HIT (\(st.cachedTokens) of previous \(prevPrompt))" : "MISS (\(st.cachedTokens) of previous \(prevPrompt))")
-            print("  \(turn) | \(tokens(convo)) | \(event) | \(st.promptTokens) | \(st.cachedTokens) | \(st.prefilledTokens) | \(fmt(m.ttft, 1)) | \(note)")
+            let hit = prevPrompt != 0 && st.cachedTokens >= prevPrompt - 40
+            let note = prevPrompt == 0 ? "first" : (hit ? "HIT (\(st.cachedTokens) of previous \(prevPrompt))" : "MISS (\(st.cachedTokens) of previous \(prevPrompt))")
+            if prevPrompt != 0 && !hit { stallSeconds += m.ttft }
+            print("  \(turn) | \(tokens(convo)) | \(event) | \(st.promptTokens) | \(st.cachedTokens) | \(st.prefilledTokens) | \(fmt(m.ttft, 1)) | \(note)   [chars/token \(String(format: "%.2f", calibration.charsPerToken))]")
             prevPrompt = st.promptTokens
-            lastEvent = event
             return m.text
         }
         var summaries = 0
         for (i, f) in files.enumerated() {
             _ = await send(i + 1, file: f, question: "I just read \(f). What is the main type in it and what does it do? Two sentences.")
-            // After the turn: the app summarizes the oldest turns in the background if elision isn't enough.
-            let ceiling = min(await provider.maxContextTokens() ?? 4_000, opts.ceilingCap ?? Int.max)
+            // Idle step, as in the app.
             let planner = CompactionPlanner(allowSummarize: true)
-            let items = convo.map { CompactionPlanner.Item(role: $0.role, tokens: tokens([$0]), isUntrusted: $0.role == .tool) }
-            if let run = planner.plan(items: items, maxPromptTokens: ceiling).summarize {
-                let source = Array(convo[run])
+            let plan = planner.plan(items: items(), maxPromptTokens: await liveCeiling())
+            guard plan.outcome != .none, !plan.elide.isEmpty || plan.summarize != nil else { continue }
+            events += 1
+            var idle = 0.0
+            var summaryText: String?
+            var source: [Message] = []
+            if let run = plan.summarize {
+                source = Array(convo[run])
                 let keep = CompactionSummarizer.mustKeep(in: source)
                 let t0 = Date()
-                let sm = await measure(provider, CompactionSummarizer.requestMessages(for: source), gen: 350, timeout: opts.timeout)
-                let secs = Date().timeIntervalSince(t0)
-                if let text = CompactionSummarizer.finalize(summary: sm.text, mustKeep: keep, maxTokens: planner.summaryTokens) {
-                    let before = tokens(source)
-                    convo.replaceSubrange(run, with: [Message(role: .assistant, content: text)])
-                    summaries += 1
-                    print("  ── summary #\(summaries) of \(source.count) messages (~\(before) → ~\(tokens([convo[run.lowerBound]])) tok) in \(fmt(secs, 1)) s; \(keep.count) items kept verbatim")
-                    print("     narrative: \(sm.text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: "⏎"))")
-                } else {
-                    print("  ── summary rejected (\(sm.text.count) chars) after \(fmt(secs, 1)) s")
-                }
+                let sm = await measure(provider, CompactionSummarizer.requestMessages(for: source), gen: 350, timeout: opts.timeout, cacheSnapshots: false)
+                idle += Date().timeIntervalSince(t0)
+                summaryText = CompactionSummarizer.finalize(summary: sm.text, mustKeep: keep, maxTokens: planner.summaryTokens,
+                                                            part: CompactionSummarizer.partCount(in: convo) + 1)
+                if let t = summaryText { print("     narrative: \(sm.text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: "⏎").prefix(500))"); _ = t }
             }
+            let before = tokens(convo)
+            for i in plan.elide {
+                convo[i] = Message(role: .tool, content: "[tool output cleared to save context: about \(tokens([convo[i]])) tokens]", toolCallID: convo[i].toolCallID)
+            }
+            if let run = plan.summarize, let text = summaryText {
+                convo.replaceSubrange(run, with: [Message(role: .assistant, content: text)])
+                summaries += 1
+            }
+            let t1 = Date()
+            let warm = await measure(provider, convo, gen: 1, timeout: opts.timeout)
+            let rewarm = Date().timeIntervalSince(t1)
+            idle += rewarm
+            idleSeconds += idle
+            if let st = warm.stats { prevPrompt = st.promptTokens }
+            print("  ── idle compaction #\(events): cleared \(plan.elide.count), summarized \(source.count) msgs; ~\(before) → ~\(tokens(convo)) tok; idle work \(fmt(idle, 1)) s (re-read \(fmt(rewarm, 1)) s)")
         }
-        print("  summaries applied: \(summaries)")
+        print("  compaction events: \(events) (\(summaries) with a summary) | idle GPU work \(fmt(idleSeconds, 0)) s | reply stalls from cache misses \(fmt(stallSeconds, 0)) s")
         // Probes: can the model still answer about early turns?
         print("  [probes] ground truth: ContextBudget (turn 1), PromptSnapshotStore (turn 2), ChatPromptRenderer (turn 3)")
-        for q in ["In the first file I asked you about, what was the main type called?", "What was the main type in PromptSnapshotStore.swift?", "Which files have we looked at so far? List their names."] {
-            let a = await send(99, file: nil, question: q, gen: 90)
+        for q in ["In the first file I asked you about, what was the main type called?", "What was the main type in PromptSnapshotStore.swift?", "Which files have we looked at so far, in order? Names only."] {
+            let a = await send(99, file: nil, question: q, gen: 120)
             print("  Q: \(q)\n  A: \(a.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ⏎ "))")
         }
         print("")

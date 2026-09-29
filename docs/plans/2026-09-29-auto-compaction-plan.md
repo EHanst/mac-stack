@@ -102,3 +102,20 @@ Inputs [F: `model-facts.md`]: cold prefill 82–86 tok/s on M3 Pro 18 GB, flat i
 - **Floor:** the system prompt plus the last 4 turns must fit under the target, or the planner reports `insufficient`. Lower targets hit that floor sooner.
 
 35% is the pick: about 20% less stall and 25% less amortized overhead than 40%, without going low enough to hit the floor on ordinary chats. Re-measure with `VibeBench` if the model, chunk size or hardware changes. The existing `trim` still handles anything elision cannot reach, at the same re-prefill cost.
+
+## 11. Refinements after the real-chat run
+
+Measured with `VibeBench --long-chat-test --ceiling 6000` (15 sends about this repo's own files, M3 Pro 18 GB):
+
+| | first version | with refinements |
+|---|---|---|
+| Compaction events | 4 (turns 7, 9, 11, probe) | **1** |
+| Replies stalled by a cache miss | 4 × 32–38 s (~140 s) | **0** |
+| Ordinary turn | ~7 s, cache hit | ~7 s, cache hit |
+| Reply right after compaction | 34–38 s (full re-read) | **6.1 s** (1,544 of 1,551 tokens cached) |
+| GPU work done while idle | 2 summaries, ~50 s | 1 summary + re-read, 95 s (75 s summary, 19.5 s re-read) |
+| Recall probes (name, "the first file", ordered list) | 1 of 3 wrong | **3 of 3 right** |
+
+What changed: token counts are calibrated from the model's own numbers (3.97 chars/token measured vs 2.5 assumed); the protected recent window shrinks when it can't reach the target; clearing and summarizing happen in one step after the turn; the new prompt is read in the background right afterwards; summaries are numbered ("Part 1 is the oldest") and ordered; summary requests don't touch the prefix cache.
+
+Not measured: sending a message *during* the idle work (cancellation path), battery/thermal cost of the idle work, and behavior on a machine with a much larger or smaller ceiling.
