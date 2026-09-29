@@ -389,6 +389,16 @@ public final class AppServices {
         if let limit = await inference.localContextLimit() {
             charBudget = min(charBudget, Int(Double(limit) * 2.5 * 0.9))
         }
+        // Before dropping whole turns, clear old bulky tool output in one batch (cheaper, reversible,
+        // and keeps the conversation). Only when this Mac's memory ceiling is what limits us.
+        if let limit = await inference.localContextLimit() {
+            let plan = CompactionPlanner().plan(items: ledger.compactionItems(),
+                                                maxPromptTokens: min(limit, Self.contextTokenBudget))
+            if !plan.elide.isEmpty {
+                let freed = ledger.elide(plan.elide)
+                coordinator.send(.noticeShown("Cleared \(plan.elide.count) old tool result\(plan.elide.count == 1 ? "" : "s") from the model's view to make room (about \(freed) tokens). They stay visible here.", symbol: "scissors"))
+            }
+        }
         ledger.trim(toCharacterBudget: charBudget)
 
         do {

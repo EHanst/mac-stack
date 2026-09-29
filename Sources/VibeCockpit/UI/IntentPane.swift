@@ -487,7 +487,7 @@ private struct IntentEventBubble: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
         case .notice:
-            Label(event.content, systemImage: "cloud")
+            Label(event.content, systemImage: event.symbol ?? "cloud")
                 .font(.mtBodySmall)
                 .foregroundStyle(Color.mtOnSurfaceVariant)
                 .padding(.horizontal, 10)
@@ -513,7 +513,7 @@ private struct IntentEventBubble: View {
         case .toolCall:       "wrench.and.screwdriver.fill"
         case .toolResult:     "checkmark"
         case .error:          "exclamationmark.triangle.fill"
-        case .notice:         "cloud"
+        case .notice:         event.symbol ?? "cloud"
         }
     }
 

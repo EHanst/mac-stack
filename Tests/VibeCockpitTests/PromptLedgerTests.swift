@@ -124,3 +124,38 @@ struct AugmentUserTurnTests {
         #expect(s.hasSuffix("[Task: explain]\nexplain this"))
     }
 }
+
+@Suite("PromptLedger compaction")
+struct PromptLedgerCompactionTests {
+
+    private func ledger() -> PromptLedger {
+        var l = PromptLedger()
+        l.begin(system: "SYS")
+        for n in 0..<3 {
+            l.appendUserTurn("q\(n)")
+            l.appendToolResult(id: "t\(n)", content: String(repeating: "x", count: 4_000))
+            l.appendAssistant("a\(n)")
+        }
+        return l
+    }
+
+    @Test("eliding stubs only tool messages, keeps their ids, and frees tokens")
+    func elides() {
+        var l = ledger()
+        let before = l.messages
+        let freed = l.elide([2, 5, 1])                    // index 1 is a user turn: ignored
+        #expect(freed > 2_000)
+        #expect(l.messages[1].content == before[1].content)
+        #expect(l.messages[2].role == .tool && l.messages[2].toolCallID == "t0")
+        #expect(l.messages[2].content.contains("cleared"))
+        #expect(l.messages[8].content == before[8].content)   // untouched tool output
+        #expect(l.messages.count == before.count)
+    }
+
+    @Test("planner items mark tool output untrusted")
+    func items() {
+        let items = ledger().compactionItems()
+        #expect(items.count == 10)
+        #expect(items[2].isUntrusted && !items[1].isUntrusted)
+    }
+}

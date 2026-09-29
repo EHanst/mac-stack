@@ -64,4 +64,32 @@ public struct PromptLedger: Sendable {
         }
         return trimmed
     }
+
+    // MARK: Compaction
+
+    /// The ledger as the compaction planner sees it. Tool output is always untrusted (web pages,
+    /// MCP results, file reads), so a stub or summary of it stays untrusted too.
+    public func compactionItems() -> [CompactionPlanner.Item] {
+        messages.map {
+            CompactionPlanner.Item(role: $0.role, tokens: InferenceService.estimateTokens([$0]),
+                                   isUntrusted: $0.role == .tool)
+        }
+    }
+
+    /// Replace the tool messages at `indices` with short stubs, once. Returns the tokens freed.
+    /// This is a deliberate one-time rewrite of earlier text: the cached prefix is lost from the
+    /// first stub onward, so callers batch it (see `CompactionPlanner`) instead of doing it per turn.
+    @discardableResult
+    public mutating func elide(_ indices: [Int]) -> Int {
+        var freed = 0
+        for i in indices where messages.indices.contains(i) && messages[i].role == .tool {
+            let old = messages[i]
+            let stub = Message(role: .tool,
+                               content: "[tool output cleared to save context: about \(InferenceService.estimateTokens([old])) tokens]",
+                               toolCallID: old.toolCallID)
+            freed += InferenceService.estimateTokens([old]) - InferenceService.estimateTokens([stub])
+            messages[i] = stub
+        }
+        return freed
+    }
 }

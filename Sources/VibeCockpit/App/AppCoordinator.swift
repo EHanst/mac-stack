@@ -70,15 +70,18 @@ public struct IntentEvent: Sendable, Identifiable {
     public let kind: Kind
     public let content: String
     public let toolCallID: String?
+    /// SF Symbol for a notice; nil means the default (cloud).
+    public let symbol: String?
     public let timestamp: Date = Date()
 
     /// `id` is kept when a streamed reply grows, so the view showing it keeps its identity
     /// (and its reveal animation) instead of restarting on every token.
-    public init(id: UUID = UUID(), kind: Kind, content: String, toolCallID: String? = nil) {
+    public init(id: UUID = UUID(), kind: Kind, content: String, toolCallID: String? = nil, symbol: String? = nil) {
         self.id = id
         self.kind = kind
         self.content = content
         self.toolCallID = toolCallID
+        self.symbol = symbol
     }
 }
 
@@ -103,7 +106,7 @@ public final class AppCoordinator {
         case generationStarted
         case generationFinished
         case generationFailed(String)
-        case noticeShown(String)                    // e.g. "answered from the cloud because …"
+        case noticeShown(String, symbol: String? = nil)                    // e.g. "answered from the cloud because …"
         case onboardingRequired
         case onboardingCompleted
         // Model management
@@ -189,8 +192,8 @@ public final class AppCoordinator {
         case .generationFailed(let reason):
             next.intentHistory.append(IntentEvent(kind: .error, content: reason))
 
-        case .noticeShown(let text):
-            next.intentHistory.append(IntentEvent(kind: .notice, content: text))
+        case .noticeShown(let text, let symbol):
+            next.intentHistory.append(IntentEvent(kind: .notice, content: text, symbol: symbol))
 
         case .onboardingRequired:
             next.onboardingNeeded = true
