@@ -217,6 +217,7 @@ public actor RemoteAPIProvider: ModelProvider {
             Self.tokenLimitKey(for: config.baseURL): options.maxTokens,
             "temperature": options.temperature,
             "stream": true,
+            "stream_options": ["include_usage": true],   // otherwise the final usage chunk is never sent
         ]
         if !tools.isEmpty {
             body["tools"] = tools.map { ["type": "function",
@@ -231,6 +232,7 @@ public actor RemoteAPIProvider: ModelProvider {
         for try await line in stream.lines {
             guard line.hasPrefix("data: "), !line.hasSuffix("[DONE]") else { continue }
             let json = String(line.dropFirst(6))
+            if let usage = Self.openAIUsage(json) { continuation.yield(.usage(usage)) }
             if let event = try? parseSSEToken(json) { continuation.yield(event) }
         }
         continuation.yield(.finished(.stop))
@@ -260,9 +262,14 @@ public actor RemoteAPIProvider: ModelProvider {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (stream, response) = try await gatedBytes(request)
         try validate(response: response)
+        var promptTokens = 0, completionTokens = 0
         for try await line in stream.lines {
             guard line.hasPrefix("data: ") else { continue }
             let json = String(line.dropFirst(6))
+            if let u = Self.anthropicUsage(json) {
+                promptTokens = u.prompt ?? promptTokens
+                completionTokens = u.completion ?? completionTokens
+            }
             if let data = json.data(using: .utf8),
                let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let type_ = obj["type"] as? String {
@@ -271,6 +278,9 @@ public actor RemoteAPIProvider: ModelProvider {
                    let text = delta["text"] as? String {
                     continuation.yield(.token(text))
                 } else if type_ == "message_stop" {
+                    if promptTokens + completionTokens > 0 {
+                        continuation.yield(.usage(GenerationUsage(promptTokens: promptTokens, completionTokens: completionTokens)))
+                    }
                     continuation.yield(.finished(.stop))
                 }
             }
@@ -300,9 +310,37 @@ public actor RemoteAPIProvider: ModelProvider {
                    let content = message["content"] as? String {
                     continuation.yield(.token(content))
                 }
-                if (obj["done"] as? Bool) == true { continuation.yield(.finished(.stop)) }
+                if (obj["done"] as? Bool) == true {
+                    if let p = obj["prompt_eval_count"] as? Int, let c = obj["eval_count"] as? Int {
+                        continuation.yield(.usage(GenerationUsage(promptTokens: p, completionTokens: c)))
+                    }
+                    continuation.yield(.finished(.stop))
+                }
             }
         }
+    }
+
+    /// Token counts a provider reports itself, so the monthly limit counts what was really billed.
+    static func openAIUsage(_ json: String) -> GenerationUsage? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let u = obj["usage"] as? [String: Any],
+              let p = u["prompt_tokens"] as? Int, let c = u["completion_tokens"] as? Int else { return nil }
+        return GenerationUsage(promptTokens: p, completionTokens: c)
+    }
+
+    /// Anthropic reports input tokens in `message_start` and output tokens in `message_delta`.
+    static func anthropicUsage(_ json: String) -> (prompt: Int?, completion: Int?)? {
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = obj["type"] as? String else { return nil }
+        if type == "message_start", let m = obj["message"] as? [String: Any], let u = m["usage"] as? [String: Any] {
+            return (u["input_tokens"] as? Int, u["output_tokens"] as? Int)
+        }
+        if type == "message_delta", let u = obj["usage"] as? [String: Any] {
+            return (u["input_tokens"] as? Int, u["output_tokens"] as? Int)
+        }
+        return nil
     }
 
     private func validate(response: URLResponse) throws {

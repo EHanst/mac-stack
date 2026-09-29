@@ -44,13 +44,28 @@ public actor ModelRegistry {
         }
     }
 
-    /// Load remote provider configs from user config file.
-    public static func loadRemoteConfigs() throws -> [RemoteAPIProvider.Config] {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+    /// Where remote provider settings live. Holds no keys (those are in the Keychain).
+    public static var remoteConfigURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/vibecockpit/providers.json")
+    }
+
+    /// Load remote provider configs from user config file.
+    public static func loadRemoteConfigs(from url: URL = remoteConfigURL) throws -> [RemoteAPIProvider.Config] {
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         let data = try Data(contentsOf: url)
         return try JSONDecoder().decode([RemoteAPIProvider.Config].self, from: data)
+    }
+
+    /// Add or replace one provider in the config file, so it is still there after a relaunch.
+    public static func saveRemoteConfig(_ config: RemoteAPIProvider.Config, to url: URL = remoteConfigURL) throws {
+        var all = (try? loadRemoteConfigs(from: url)) ?? []
+        all.removeAll { $0.id == config.id }
+        all.append(config)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(all).write(to: url, options: .atomic)
     }
 
     public func register(_ provider: some ModelProvider) {

@@ -27,3 +27,34 @@ final class CloudPresetTests: XCTestCase {
         XCTAssertEqual(c.modelIdentifier, "claude-sonnet-5-5")
     }
 }
+
+final class RemoteConfigPersistenceTests: XCTestCase {
+    func testSavedProviderSurvivesReloadAndReplacesSameId() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString).appendingPathComponent("providers.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try ModelRegistry.saveRemoteConfig(CloudPreset.preset(id: "anthropic")!.config(model: "a"), to: url)
+        try ModelRegistry.saveRemoteConfig(CloudPreset.preset(id: "openai")!.config(model: "b"), to: url)
+        try ModelRegistry.saveRemoteConfig(CloudPreset.preset(id: "anthropic")!.config(model: "c"), to: url)
+        let loaded = try ModelRegistry.loadRemoteConfigs(from: url)
+        XCTAssertEqual(loaded.map(\.id).sorted(), ["anthropic", "openai"])
+        XCTAssertEqual(loaded.first { $0.id == "anthropic" }?.modelIdentifier, "c")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(text.contains("Bearer"))
+    }
+}
+
+final class ProviderUsageParsingTests: XCTestCase {
+    func testOpenAIFinalChunk() {
+        XCTAssertEqual(RemoteAPIProvider.openAIUsage(#"{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7}}"#),
+                       GenerationUsage(promptTokens: 12, completionTokens: 7))
+        XCTAssertNil(RemoteAPIProvider.openAIUsage(#"{"choices":[{"delta":{"content":"x"}}]}"#))
+    }
+    func testAnthropicStartAndDelta() {
+        let a = RemoteAPIProvider.anthropicUsage(#"{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1}}}"#)
+        XCTAssertEqual(a?.prompt, 25)
+        let b = RemoteAPIProvider.anthropicUsage(#"{"type":"message_delta","usage":{"output_tokens":42}}"#)
+        XCTAssertEqual(b?.completion, 42); XCTAssertNil(b?.prompt)
+        XCTAssertNil(RemoteAPIProvider.anthropicUsage(#"{"type":"content_block_delta"}"#))
+    }
+}

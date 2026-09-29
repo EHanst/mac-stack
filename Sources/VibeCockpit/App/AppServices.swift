@@ -460,6 +460,7 @@ public final class AppServices {
             apiStyle: baseURL.host == "api.anthropic.com" ? .anthropicMessages : .openAIChat,
             envVarKey: envKey
         )
+        try ModelRegistry.saveRemoteConfig(config)
         try? await registry.discover(localDirectory: nil, remoteConfigs: [config], credentials: credentials, gate: egress)
         coordinator.send(.onboardingCompleted)
     }
