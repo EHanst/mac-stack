@@ -6,6 +6,7 @@ import StackCore
 import MLXNN
 
 // vibe-bench — performance harness for the local model.
+//   swift run -c release VibeBench --compaction-test [--timeout 900]   (next-turn TTFT: warm vs compacted vs trimmed)
 //   swift run -c release VibeBench [--model DIR] [--contexts 512,4096] [--gen 128] [--runs 3]
 //                                  [--warm-prefix 4096] [--no-matmul] [--timeout 300] [--json out.json]
 //                                  [--sweep 1024,2048,4096,8192 --chunks 512,256]   (memory profile)
@@ -26,6 +27,7 @@ struct Options {
     var apiTest = false
     var textTest = false
     var studioTest = false
+    var compactionTest = false
     var modelCheck = false
     var samplerCheck = false
     var noGuard = false
@@ -48,6 +50,7 @@ struct Options {
             case "--api-test": apiTest = true
             case "--text-test": textTest = true
             case "--studio-test": studioTest = true
+            case "--compaction-test": compactionTest = true
             case "--model-check": modelCheck = true
             case "--sampler-check": samplerCheck = true
             case "--no-guard": noGuard = true
@@ -378,6 +381,71 @@ func run() async throws {
         await run("no Improve call (baseline)", sharing: nil)
         await run("Improve as a separate prompt", sharing: false)
         await run("Improve continuing the conversation", sharing: true)
+        print("")
+    }
+
+    if opts.compactionTest {
+        // An 8-turn chat with ~1,000-token tool results. How long does the NEXT reply take when the
+        // cache is warm, after old tool output is cleared (this change), and after dropping whole
+        // old turns (what `trim` did before)?
+        // Sized to ~55% of the live memory ceiling (other apps' memory changes it), so the prime isn't refused.
+        let turns = 6
+        _ = await measure(provider, [Message(role: .user, content: "Say hi.")], gen: 4, timeout: opts.timeout)
+        let liveCeiling = await provider.maxContextTokens() ?? 3_000
+        let toolTokens = max(120, Int(Double(liveCeiling) * 0.55 / Double(turns)) - 60)
+        print("[compaction test] \(turns) turns, ~\(toolTokens)-token tool results")
+        let system = Message(role: .system, content: "You are a coding assistant inside VibeCockpit.")
+        var history = [system]
+        var tokensPerTurn: [Int] = []
+        for n in 0..<turns {
+            history.append(Message(role: .user, content: "Question \(n): what does note \(n) say?"))
+            history.append(Message(role: .tool, content: makePrompt(tokens: toolTokens, nonce: 9_000 + n), toolCallID: "t\(n)"))
+            history.append(Message(role: .assistant, content: "Note \(n) is about item \(n)."))
+            tokensPerTurn.append(InferenceService.estimateTokens(Array(history.suffix(3))))
+        }
+        let next = Message(role: .user, content: "Now list the first two notes.")
+        let total = InferenceService.estimateTokens(history)
+        print("  conversation: ~\(total) estimated tokens (chars/2.5)")
+
+        await provider.clearPromptCache()
+        let primed = await measure(provider, history + [next], gen: 8, timeout: opts.timeout)
+        guard let ps = primed.stats else {
+            print("  prime was refused or timed out (ceiling \(await provider.maxContextTokens() ?? 0) tokens); lower the sizes and rerun\n")
+            exit(1)
+        }
+        print("  prime (cold)                  : TTFT \(fmt(primed.ttft, 2)) s | prompt \(ps.promptTokens), prefilled \(ps.prefilledTokens)")
+
+        let warm = await measure(provider, history + [Message(role: .assistant, content: primed.text), Message(role: .user, content: "And the third?")], gen: 8, timeout: opts.timeout)
+        if let s = warm.stats { print("  A. warm cache, no compaction : TTFT \(fmt(warm.ttft, 2)) s | prompt \(s.promptTokens), cached \(s.cachedTokens), prefilled \(s.prefilledTokens)") }
+
+        let items = history.map { CompactionPlanner.Item(role: $0.role, tokens: InferenceService.estimateTokens([$0]), isUntrusted: $0.role == .tool) }
+        let ceiling = Int(Double(total) / 0.85)
+        let plan = CompactionPlanner().plan(items: items, maxPromptTokens: ceiling)
+        var compacted = history
+        for i in plan.elide {
+            compacted[i] = Message(role: .tool, content: "[tool output cleared to save context: about \(items[i].tokens) tokens]", toolCallID: history[i].toolCallID)
+        }
+        print("  planner: \(plan.outcome), cleared \(plan.elide.count) results, ~\(plan.tokensBefore) → ~\(plan.tokensAfter) tokens (ceiling \(ceiling))")
+        let b = await measure(provider, compacted + [next], gen: 8, timeout: opts.timeout)
+        if let s = b.stats { print("  B. after compaction (new)     : TTFT \(fmt(b.ttft, 2)) s | prompt \(s.promptTokens), cached \(s.cachedTokens), prefilled \(s.prefilledTokens)") }
+
+        // Old behaviour: drop whole oldest turns until the same token count is reached.
+        var trimmed = history
+        while InferenceService.estimateTokens(trimmed) > plan.tokensAfter, trimmed.filter({ $0.role == .user }).count > 1,
+              let second = trimmed.indices.dropFirst().first(where: { trimmed[$0].role == .user && $0 > 1 }) {
+            trimmed.removeSubrange(1..<second)
+        }
+        await provider.clearPromptCache()
+        let c = await measure(provider, trimmed + [next], gen: 8, timeout: opts.timeout)
+        if let s = c.stats { print("  C. trim, same size (before)   : TTFT \(fmt(c.ttft, 2)) s | prompt \(s.promptTokens), prefilled \(s.prefilledTokens) | kept \(trimmed.filter { $0.role == .user }.count) of \(turns) turns") }
+
+        let summarizeRun = Array(history[1..<7])
+        let req = CompactionSummarizer.requestMessages(for: summarizeRun)
+        let sm = await measure(provider, req, gen: 350, timeout: opts.timeout)
+        if let s = sm.stats {
+            print("  D. summary of 2 turns         : \(fmt(sm.ttft, 2)) s to first token, \(s.generatedTokens) tok generated, total \(fmt(sm.ttft + Double(s.generatedTokens) / max(0.1, s.decodeTokensPerSecond), 1)) s")
+            print("     kept verbatim: \(CompactionSummarizer.mustKeep(in: summarizeRun).count) items | summary: \(sm.text.replacingOccurrences(of: "\n", with: "⏎").prefix(240))")
+        }
         print("")
     }
 
