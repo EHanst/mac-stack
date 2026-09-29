@@ -21,9 +21,9 @@ public struct ToolCallGuard: Sendable {
         let scope = handler.requiredScope
         guard ApprovalPolicy.needsApproval(scope) else { return nil }
         // The user's own chat runs its tools freely — until outside content is in the conversation.
-        if !alwaysAsk, !context.isTainted { return nil }
+        if !alwaysAsk, !handler.alwaysRequiresApproval, !context.isTainted { return nil }
         let request = ApprovalRequest(
-            client: client, toolName: handler.toolDefinition.name, scope: scope,
+            client: handler.approvalIdentity ?? client, toolName: handler.toolDefinition.name, scope: scope,
             summary: handler.approvalSummary(arguments: arguments), untrustedSources: context.sources)
         guard let gate, await gate.allows(request) else {
             return "The user didn't allow this action (\(request.summary))."

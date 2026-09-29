@@ -32,6 +32,7 @@ public actor MCPToolHost {
     private let gate: ToolGate?
     private var workspaceTools: [any AgentToolHandler] = []
     private var runtime: ToolRuntime?
+    private var externalTools: (@Sendable () async -> [any AgentToolHandler])?
     private let log = Logger(subsystem: "com.vibecockpit", category: "MCPToolHost")
 
     /// `gate` decides whether an app may change files or run commands; without one those are refused.
@@ -59,17 +60,21 @@ public actor MCPToolHost {
     /// Adds one more tool (applies to connections made afterwards).
     public func register(_ tool: any AgentToolHandler) { workspaceTools.append(tool) }
 
-    public func allTools() -> [any AgentToolHandler] {
+    /// Tools from external MCP servers the user added; asked for on every list and call, so servers
+    /// that start later show up without reconnecting.
+    public func setExternalTools(_ provider: (@Sendable () async -> [any AgentToolHandler])?) { externalTools = provider }
+
+    public func allTools() async -> [any AgentToolHandler] {
         var tools: [any AgentToolHandler] = []
         if let inference {
             tools += [ListModelsTool(inference: inference), ChatTool(inference: inference), EmbedTool(inference: inference)]
         }
-        return tools + workspaceTools
+        return tools + workspaceTools + (await externalTools?() ?? [])
     }
 
     /// A server for one client. `scopes` is consulted on every list and call.
     public func makeServer(scopes: ScopeBox) async -> Server {
-        let tools = allTools()
+        let host = self
         let runtime = self.runtime
         let toolGuard = ToolCallGuard(gate: self.gate)
         let untrusted = UntrustedContext()   // per connection: what this client has been handed from outside
@@ -83,11 +88,13 @@ public actor MCPToolHost {
         )
 
         await server.withMethodHandler(ListTools.self) { _ in
+            let tools = await host.allTools()
             let allowed = scopes.scopes
             return ListTools.Result(tools: tools.filter { allowed.contains($0.requiredScope) }.map { $0.toolDefinition })
         }
 
         await server.withMethodHandler(CallTool.self) { params in
+            let tools = await host.allTools()
             guard let handler = tools.first(where: { $0.toolDefinition.name == params.name }) else {
                 throw MCPError.methodNotFound("Unknown tool: \(params.name)")
             }

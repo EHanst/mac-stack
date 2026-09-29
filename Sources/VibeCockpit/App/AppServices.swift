@@ -47,6 +47,9 @@ public final class AppServices {
     /// Outside content (web pages, search results) seen in this conversation; see `ToolCallGuard`.
     private let untrusted = UntrustedContext()
     private let toolGuard: ToolCallGuard
+    /// External MCP servers the user added; their tools join the model's and our own `tools/list`.
+    public let externalServers = MCPClientManager()
+    public let externalServersModel: ExternalServersModel
     private static let chatIdentity = ClientIdentity(key: "app:chat", name: "VibeCockpit")
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
@@ -72,6 +75,9 @@ public final class AppServices {
         self.toolGuard = ToolCallGuard(gate: toolGate)
         let host = MCPToolHost(inference: inference, gate: toolGate)
         self.mcpHost = host
+        let externals = externalServers
+        self.externalServersModel = ExternalServersModel(manager: externals)
+        Task { await host.setExternalTools { await externals.tools() } }
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
 
@@ -138,6 +144,7 @@ public final class AppServices {
 
         // Other apps may ask for models as soon as the server is up, so start it once they're registered.
         await sharing.startIfEnabled()
+        await externalServers.startAll()
         await startGovernor()
 
         let providers = await registry.allProviders(with: .textGeneration)
@@ -269,7 +276,8 @@ public final class AppServices {
         let ragContext = await retrieveContext(for: text)
         let intent = PromptEngineer.classify(text)
 
-        let agentTools: [AgentToolHandler] = [
+        let externalTools = await externalServers.tools()
+        let agentTools: [AgentToolHandler] = externalTools + [
             FileReaderTool(),
             FileWriterTool(),
             WebFetchTool(gate: egress),
