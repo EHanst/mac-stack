@@ -86,7 +86,6 @@ struct MCPToolsView: View {
             }
             .background(Color.mtSurface)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .mtElevation(1)
             .padding(16)
         }
     }

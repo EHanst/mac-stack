@@ -58,7 +58,7 @@ extension Color {
     static let mtUnavailable = Palette.danger
 }
 
-// MARK: - Material 3 Typography Scale
+// MARK: - Typography scale
 
 extension Font {
     static let mtDisplayLarge   = Font.system(size: 57, weight: .regular, design: .rounded)
@@ -78,42 +78,24 @@ extension Font {
     static let mtLabelSmall     = Font.system(size: 11, weight: .medium)
 }
 
-// MARK: - Elevation shadows (Material dp levels)
+// MARK: - Shape & motion
 
-struct MaterialElevation: ViewModifier {
-    let level: Int
+/// Flat 2.0: two radii, no shadows. Depth is a tonal surface step plus a hairline.
+enum Radius {
+    static let control: CGFloat = 8
+    static let card: CGFloat = 12
+}
 
-    private var shadowOpacity: Double {
-        switch level {
-        case 1: 0.10; case 2: 0.14; case 3: 0.18; case 4: 0.22; case 5: 0.28
-        default: 0
-        }
-    }
-    private var radius: CGFloat {
-        switch level {
-        case 1: 2; case 2: 4; case 3: 8; case 4: 12; case 5: 20
-        default: 0
-        }
-    }
-    private var yOffset: CGFloat {
-        switch level {
-        case 1: 1; case 2: 2; case 3: 4; case 4: 6; case 5: 10
-        default: 0
-        }
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .shadow(
-                color: Color.black.opacity(shadowOpacity),
-                radius: radius, x: 0, y: yOffset
-            )
-    }
+enum Motion {
+    /// Short ease for hover/press tone shifts.
+    static let quick = Animation.easeOut(duration: 0.13)
 }
 
 extension View {
-    func mtElevation(_ level: Int) -> some View {
-        modifier(MaterialElevation(level: level))
+    /// Tone shift on hover. Pair with a button style's own pressed state.
+    func flatHover(_ isHovering: Binding<Bool>) -> some View {
+        onHover { isHovering.wrappedValue = $0 }
+            .animation(Motion.quick, value: isHovering.wrappedValue)
     }
 }
 
@@ -134,46 +116,62 @@ struct MTCard<Content: View>: View {
         content()
             .padding(padding)
             .background(Color.mtSurface)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .mtElevation(elevation)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+            .overlay(RoundedRectangle(cornerRadius: Radius.card).stroke(Color.mtOutline, lineWidth: 1))
     }
 }
 
 // MARK: - Button styles
 
+/// Shared body so every variant gets the same padding, radius, hover tone and press feedback.
+private struct FlatButtonBody: View {
+    let label: ButtonStyleConfiguration.Label
+    let isPressed: Bool
+    let fill: Color
+    let foreground: Color
+    var stroke: Color? = nil
+    var horizontal: CGFloat = 16
+    var vertical: CGFloat = 8
+    @State private var hovering = false
+
+    var body: some View {
+        label
+            .font(.mtLabelLarge)
+            .padding(.horizontal, horizontal)
+            .padding(.vertical, vertical)
+            .background(fill)
+            .overlay {
+                if let stroke {
+                    RoundedRectangle(cornerRadius: Radius.control).stroke(stroke, lineWidth: 1)
+                }
+            }
+            .overlay(Color.mtOnSurface.opacity(isPressed ? 0.10 : hovering ? 0.05 : 0)
+                .allowsHitTesting(false))
+            .foregroundStyle(foreground)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.control))
+            .flatHover($hovering)
+    }
+}
+
 struct MTFilledButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.mtLabelLarge)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 10)
-            .background(
-                isEnabled
-                    ? configuration.isPressed ? Color.mtPrimary.opacity(0.85) : Color.mtPrimary
-                    : Color.mtOnSurface.opacity(0.12)
-            )
-            .foregroundStyle(
-                isEnabled ? Color.mtOnPrimary : Color.mtOnSurface.opacity(0.38)
-            )
-            .clipShape(Capsule())
+        FlatButtonBody(
+            label: configuration.label,
+            isPressed: configuration.isPressed,
+            fill: isEnabled ? Color.mtPrimary : Color.mtOnSurface.opacity(0.10),
+            foreground: isEnabled ? Color.mtOnPrimary : Color.mtOnSurface.opacity(0.38))
     }
 }
 
 struct MTTonalButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.mtLabelLarge)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 10)
-            .background(
-                configuration.isPressed
-                    ? Color.mtSecondaryContainer.opacity(0.82)
-                    : Color.mtSecondaryContainer
-            )
-            .foregroundStyle(Color.mtOnSecondaryContainer)
-            .clipShape(Capsule())
+        FlatButtonBody(
+            label: configuration.label,
+            isPressed: configuration.isPressed,
+            fill: Color.mtSecondaryContainer,
+            foreground: Color.mtOnSecondaryContainer)
     }
 }
 
@@ -181,13 +179,12 @@ struct MTOutlinedButtonStyle: ButtonStyle {
     var tint: Color = .mtPrimary
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.mtLabelLarge)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 10)
-            .overlay(Capsule().stroke(Color.mtOutline, lineWidth: 1))
-            .foregroundStyle(tint)
-            .opacity(configuration.isPressed ? 0.74 : 1)
+        FlatButtonBody(
+            label: configuration.label,
+            isPressed: configuration.isPressed,
+            fill: Color.clear,
+            foreground: tint,
+            stroke: Color.mtOutline)
     }
 }
 
@@ -195,16 +192,16 @@ struct MTTextButtonStyle: ButtonStyle {
     var tint: Color = .mtPrimary
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.mtLabelLarge)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .foregroundStyle(tint)
-            .opacity(configuration.isPressed ? 0.70 : 1)
+        FlatButtonBody(
+            label: configuration.label,
+            isPressed: configuration.isPressed,
+            fill: Color.clear,
+            foreground: tint,
+            horizontal: 10, vertical: 6)
     }
 }
 
-// MARK: - Icon-button (FAB-mini style)
+// MARK: - Icon-button
 
 struct MTIconButtonStyle: ButtonStyle {
     var variant: Variant = .standard
@@ -217,7 +214,7 @@ struct MTIconButtonStyle: ButtonStyle {
             .frame(width: 40, height: 40)
             .background(background(configuration.isPressed))
             .foregroundStyle(foreground)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: Radius.control))
     }
 
     private func background(_ pressed: Bool) -> Color {
@@ -321,10 +318,9 @@ struct MTStatusBadge: View {
             .font(.mtLabelSmall)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(color.opacity(0.15))
+            .background(color.opacity(0.14))
             .foregroundStyle(color)
             .clipShape(Capsule())
-            .overlay(Capsule().stroke(color.opacity(0.35), lineWidth: 1))
     }
 }
 
@@ -348,19 +344,10 @@ struct MTNavItem: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                ZStack {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(Color.mtSecondaryContainer)
-                            .frame(width: 56, height: 32)
-                    }
-                    Image(systemName: icon)
-                        .font(.system(size: 18, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(
-                            isSelected ? Color.mtOnSecondaryContainer : Color.mtOnSurfaceVariant
-                        )
-                        .frame(width: 24)
-                }
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.mtPrimary : Color.mtOnSurfaceVariant)
+                    .frame(width: 24)
                 Text(label)
                     .font(.mtLabelLarge)
                     .foregroundStyle(
@@ -378,7 +365,15 @@ struct MTNavItem: View {
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.mtSecondaryContainer : Color.clear)
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Capsule().fill(Color.mtPrimary).frame(width: 3, height: 18)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Radius.control))
+            .animation(Motion.quick, value: isSelected)
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())

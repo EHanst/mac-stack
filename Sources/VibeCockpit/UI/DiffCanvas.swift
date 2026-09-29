@@ -149,7 +149,6 @@ private struct MaterialHunkCard: View {
         }
         .background(Color.mtSurface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .mtElevation(1)
     }
 
     private var fileHeader: some View {
