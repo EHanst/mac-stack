@@ -279,6 +279,7 @@ struct SettingsView: View {
                 pageHeader
                 generationSection
                 startupSection
+                CloudUsageCard()
                 SharingCard()
                 ConnectCard()
                 indexingSection

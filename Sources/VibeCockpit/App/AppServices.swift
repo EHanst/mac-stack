@@ -27,7 +27,10 @@ public final class AppServices {
     private let inference: InferenceService
     /// One GPU, one queue: chat generation and local embeddings both go through this.
     private let gpuScheduler = InferenceScheduler()
-    private let installer = ModelInstaller()
+    /// Every outbound request passes this: privacy switch, monthly cloud limit, "what left" record.
+    public let egress: EgressGate
+    public let cloudUsage: CloudUsageModel
+    private let installer: ModelInstaller
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
     /// The tools offered to MCP clients; one instance for the Unix socket and the HTTP endpoint.
@@ -50,7 +53,11 @@ public final class AppServices {
         self.defaults = defaults
         let policy = defaults.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
         self.routingPolicy = policy
-        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
+        let gate = EgressGate(policy: policy)
+        self.egress = gate
+        self.cloudUsage = CloudUsageModel(gate: gate)
+        self.installer = ModelInstaller(gate: gate)
+        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate)
         self.inference = inference
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
@@ -67,6 +74,7 @@ public final class AppServices {
     public func setRoutingPolicy(_ policy: RoutingPolicy) async {
         routingPolicy = policy
         defaults.set(policy.rawValue, forKey: Self.policyKey)
+        await egress.setPolicy(policy)
         await inference.setPolicy(policy)
     }
 
@@ -113,7 +121,8 @@ public final class AppServices {
         try? await registry.discover(
             localDirectory: modelsDir,
             remoteConfigs: remoteConfigs,
-            credentials: credentials
+            credentials: credentials,
+            gate: egress
         )
 
         await registerEmbedderIfInstalled()
@@ -236,8 +245,8 @@ public final class AppServices {
         let agentTools: [AgentToolHandler] = [
             FileReaderTool(),
             FileWriterTool(),
-            WebFetchTool(),
-            WebSearchTool(credentials: credentials),
+            WebFetchTool(gate: egress),
+            WebSearchTool(credentials: credentials, gate: egress),
         ]
         let toolDefs = agentTools.map { ToolDefinition($0.toolDefinition) }
 
@@ -341,7 +350,7 @@ public final class AppServices {
     // MARK: - Onboarding helpers
 
     public func registerLocalModel(at url: URL, coordinator: AppCoordinator) async {
-        try? await registry.discover(localDirectory: url, remoteConfigs: [], credentials: credentials)
+        try? await registry.discover(localDirectory: url, remoteConfigs: [], credentials: credentials, gate: egress)
         if await !registry.allProviders(with: .textGeneration).isEmpty {
             coordinator.send(.onboardingCompleted)
         }
@@ -380,7 +389,7 @@ public final class AppServices {
     private func finishLocalInstall(coordinator: AppCoordinator) async {
         let modelsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("VibeCockpit/Models")
-        try? await registry.discover(localDirectory: modelsDir, remoteConfigs: [], credentials: credentials)
+        try? await registry.discover(localDirectory: modelsDir, remoteConfigs: [], credentials: credentials, gate: egress)
         await registerEmbedderIfInstalled()
         await refreshModels(coordinator: coordinator)
         if await !registry.allProviders(with: .textGeneration).isEmpty {
@@ -413,7 +422,7 @@ public final class AppServices {
             apiStyle: baseURL.host == "api.anthropic.com" ? .anthropicMessages : .openAIChat,
             envVarKey: envKey
         )
-        try? await registry.discover(localDirectory: nil, remoteConfigs: [config], credentials: credentials)
+        try? await registry.discover(localDirectory: nil, remoteConfigs: [config], credentials: credentials, gate: egress)
         coordinator.send(.onboardingCompleted)
     }
 
