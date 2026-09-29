@@ -1,5 +1,7 @@
 # M0 status (source of truth — updated after every step)
 
+> ⚠️ **2026-09-28 (during M1): every performance/memory figure below was measured on a model implementation that produces garbage text** (Gated DeltaNet layers were wrong; see `m1-status.md` and `model-facts.md`). The *relative* findings about caching (25× faster follow-ups), scheduler behaviour, routing and retrieval quality remain valid; **absolute tok/s, peak GPU, the ContextBudget constants and the 16 GB context table must be re-measured after the fix.**
+
 Branch: `m0-foundations` · Last updated: 2026-09-28
 
 ## Rules I'm following
