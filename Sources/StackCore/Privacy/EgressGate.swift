@@ -6,6 +6,7 @@ public enum EgressPurpose: String, Codable, Sendable {
     case webFetch         // the agent reads a web page
     case webSearch        // the agent runs a web search
     case modelDownload    // the user installed a model (weights come down, nothing goes up)
+    case updateCheck      // the user asked whether a newer version exists (nothing goes up)
 }
 
 /// One line of the "what left this Mac" record. Never contains prompt text or answers.
@@ -96,7 +97,7 @@ public actor EgressGate {
     /// Call before every request. Throws (and records the refusal) when the request isn't allowed.
     public func authorize(_ purpose: EgressPurpose, url: URL, provider: String? = nil) throws {
         let host = url.host ?? url.absoluteString
-        if policy == .localOnly, purpose != .modelDownload {
+        if policy == .localOnly, purpose != .modelDownload, purpose != .updateCheck {
             log(purpose, host, provider, blocked: true, reason: "Only on this Mac")
             throw EgressError.blockedByPrivacy(host: host)
         }

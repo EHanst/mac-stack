@@ -1,6 +1,10 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
+// Header search path for the vendored libgit2 (see scripts/build-libgit2.sh). Every target that
+// can see StackCore's CLibGit2 import needs it, because clang builds the module per importer.
+let git2Include = "-I" + Context.packageDirectory + "/Vendor/libgit2/include"
+
 let package = Package(
     name: "VibeCockpit",
     platforms: [.macOS("26.0")],
@@ -36,12 +40,10 @@ let package = Package(
             ]
         ),
 
-        // C system library: libgit2 (Homebrew-installed)
+        // libgit2, built statically into Vendor/libgit2 by scripts/build-libgit2.sh (no Homebrew needed).
         .systemLibrary(
             name: "CLibGit2",
-            path: "Modules/CLibGit2",
-            pkgConfig: "libgit2",
-            providers: [.brew(["libgit2"])]
+            path: "Modules/CLibGit2"
         ),
 
         // Engine: inference, routing, scheduling, storage, indexing, git, execution. No MCP, no UI.
@@ -62,7 +64,10 @@ let package = Package(
             ],
             path: "Sources/StackCore",
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
+            ],
+            linkerSettings: [
+                .unsafeFlags(["-L", Context.packageDirectory + "/Vendor/libgit2/lib"]),
             ]
         ),
 
@@ -75,7 +80,7 @@ let package = Package(
             ],
             path: "Sources/StackMCP",
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
@@ -90,7 +95,7 @@ let package = Package(
             ],
             path: "Sources/StackHTTP",
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
@@ -106,7 +111,7 @@ let package = Package(
                 "Info.plist",
             ],
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
@@ -119,7 +124,7 @@ let package = Package(
                 "UI/",
             ],
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
@@ -134,7 +139,7 @@ let package = Package(
             ],
             path: "Sources/VibeBench",
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
@@ -156,7 +161,7 @@ let package = Package(
             ],
             path: "Sources/VibeEmbedBench",
             swiftSettings: [
-                .unsafeFlags(["-strict-concurrency=complete"]),
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
@@ -166,7 +171,8 @@ let package = Package(
                 "VibeCockpitCore", "StackCore", "StackMCP", "StackHTTP",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
             ],
-            path: "Tests/VibeCockpitTests"
+            path: "Tests/VibeCockpitTests",
+            swiftSettings: [.unsafeFlags(["-Xcc", git2Include])]
         ),
     ]
 )

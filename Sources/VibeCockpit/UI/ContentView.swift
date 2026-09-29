@@ -271,6 +271,7 @@ struct SettingsView: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
     @Environment(LoginItemModel.self) private var loginItem
+    @Environment(UpdatesModel.self) private var updates
     @State private var workspacePath: String = ""
 
     var body: some View {
@@ -281,6 +282,9 @@ struct SettingsView: View {
                 startupSection
                 CloudUsageCard()
                 SharingCard()
+                DiagnosticsCard()
+                WorkspacesCard()
+                ExternalServersCard()
                 ConnectCard()
                 indexingSection
                 aboutSection
@@ -349,6 +353,26 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     if let message = loginItem.message {
                         Text(message).font(.mtBodySmall).foregroundStyle(Color.mtDegraded)
+                    }
+                }
+                MTDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Check for updates daily", isOn: Binding(
+                        get: { updates.automaticChecks },
+                        set: { updates.setAutomaticChecks($0) }))
+                    Text("Off by default. VibeCockpit only asks GitHub whether a newer version exists when you press \"Check now\" or turn this on (and never under \"Only on this Mac\"). Nothing about you or your work is sent, and it never installs anything by itself.")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Check now") { Task { await updates.checkNow() } }
+                            .disabled(updates.status == .checking)
+                        if case .available(let info) = updates.status {
+                            Button("Download \(info.version)…") { NSWorkspace.shared.open(info.url) }
+                        }
+                    }
+                    if let line = updates.statusLine {
+                        Text(line).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     }
                 }
             }

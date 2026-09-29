@@ -32,8 +32,8 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Install libgit2
-        run: brew install libgit2
+      - name: Build libgit2
+        run: brew install cmake && ./scripts/build-libgit2.sh
 
       # Cache the SPM build artefacts between runs.
       - name: Cache SPM build

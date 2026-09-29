@@ -303,3 +303,155 @@ struct InferenceServiceTests {
         #expect(r.provider == "cloud-embed")
     }
 }
+
+@Suite("Request log")
+struct RequestLogRecordingTests {
+    private let msgs = [Message(role: .user, content: "a secret prompt")]
+
+    private func run(_ providers: [StubProvider], priority: InferenceScheduler.Priority = .interactive) async throws -> [RequestRecord] {
+        let registry = ModelRegistry()
+        for p in providers { await registry.register(p) }
+        let log = RequestLog()
+        let svc = InferenceService(registry: registry, requestLog: log)
+        let stream = try await svc.generate(messages: msgs, tools: [], priority: priority)
+        do { for try await _ in stream {} } catch {}
+        try await Task.sleep(for: .milliseconds(30))
+        return await log.recent
+    }
+
+    @Test("a normal reply is logged with source, provider, timing and no text")
+    func normal() async throws {
+        let probe = Probe()
+        let recs = try await run([StubProvider(id: "local:bonsai", behavior: .tokens(["hello ", "there"]), probe: probe)], priority: .api)
+        let r = try #require(recs.first)
+        #expect(recs.count == 1 && r.source == "api" && r.provider == "local:bonsai" && r.isLocal)
+        #expect(r.outcome == .completed && r.timeToFirstToken != nil && r.totalTime >= r.timeToFirstToken!)
+        #expect(r.promptTokens > 0 && r.completionTokens > 0)
+        let json = String(decoding: try JSONEncoder().encode(recs), as: UTF8.self)
+        #expect(!json.contains("secret") && !json.contains("hello"))
+    }
+
+    @Test("a fallback logs the failed attempt and the answer that followed")
+    func fallback() async throws {
+        let probe = Probe()
+        let recs = try await run([
+            StubProvider(id: "local:bonsai", behavior: .failBeforeOutput, probe: probe),
+            StubProvider(id: "openai", behavior: .tokens(["ok"]), probe: probe),
+        ])
+        #expect(recs.map(\.outcome) == [.failed, .completed])
+        #expect(recs[0].error == "stub failure")
+        #expect(recs[1].fellBackFrom == "local:bonsai" && !recs[1].isLocal)
+    }
+}
+
+@Suite("Why was it slow")
+struct SlowReasonTests {
+    private func rec(_ t: Double, prompt: Int = 100, ttft: Double? = 0.5, total: Double = 3, completion: Int = 60,
+                     local: Bool = true, source: String = "app", memory: String = "normal", thermal: String = "nominal",
+                     low: Bool = false, outcome: RequestRecord.Outcome = .completed, from: String? = nil) -> RequestRecord {
+        RequestRecord(date: Date(timeIntervalSince1970: t), source: source, provider: local ? "local:bonsai" : "openai",
+                      isLocal: local, fellBackFrom: from, promptTokens: prompt, completionTokens: completion,
+                      timeToFirstToken: ttft, totalTime: total, outcome: outcome,
+                      memory: memory, thermal: thermal, lowPowerMode: low)
+    }
+
+    @Test("a long prompt is blamed for a slow first word")
+    func longPrompt() {
+        let text = SlowReason.explain(rec(100, prompt: 20000, ttft: 12), earlier: []).joined(separator: " ")
+        #expect(text.contains("conversation is long") && text.contains("12.0 s"))
+    }
+
+    @Test("a short prompt with a slow first word points at loading or another request")
+    func shortPrompt() {
+        #expect(SlowReason.explain(rec(100, prompt: 50, ttft: 8), earlier: []).joined().contains("short prompt"))
+    }
+
+    @Test("another request still running is named")
+    func overlap() {
+        let earlier = [rec(90, total: 30, source: "api")]   // ran 90…120
+        let text = SlowReason.explain(rec(100), earlier: earlier).joined()
+        #expect(text.contains("from api") && text.contains("one at a time"))
+        #expect(!SlowReason.explain(rec(200), earlier: earlier).joined().contains("one at a time"))
+    }
+
+    @Test("strained system, fallback, cloud and failure are each reported")
+    func others() {
+        #expect(SlowReason.explain(rec(1, memory: "critical", thermal: "serious", low: true), earlier: []).joined()
+            .contains("very short on memory and running hot and in Low Power Mode"))
+        #expect(SlowReason.explain(rec(1, local: false, from: "local:bonsai"), earlier: []).joined().contains("couldn't answer"))
+        #expect(SlowReason.explain(rec(1, local: false), earlier: []).joined().contains("in the cloud"))
+        #expect(SlowReason.explain(rec(1, outcome: .failed), earlier: []).joined().hasPrefix("It failed"))
+    }
+
+    @Test("slower than the usual speed needs enough history, then says so")
+    func slowerThanUsual() {
+        let fast = (0..<4).map { rec(Double($0) * 100, ttft: 0.5, total: 6.5, completion: 60) }   // 10 tok/s
+        let slow = rec(1000, ttft: 0.5, total: 20.5, completion: 60)                                // 3 tok/s
+        #expect(SlowReason.explain(slow, earlier: fast).joined().contains("slower than your usual"))
+        #expect(!SlowReason.explain(slow, earlier: Array(fast.prefix(2))).joined().contains("slower than your usual"))
+    }
+
+    @Test("nothing wrong still gives a line with the numbers")
+    func fine() {
+        let text = SlowReason.explain(rec(1, ttft: 0.5, total: 6.5, completion: 60), earlier: []).joined()
+        #expect(text.hasPrefix("Nothing unusual found") && text.contains("10.0 words per second"))
+    }
+
+    @Test("the log keeps the newest records and survives a restart")
+    func logPersistence() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rl-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let log = RequestLog(capacity: 3, fileURL: url)
+        for i in 0..<5 { await log.record(rec(Double(i))) }
+        #expect(await log.recent.map(\.date.timeIntervalSince1970) == [2, 3, 4])
+        #expect(await RequestLog(capacity: 3, fileURL: url).recent.count == 3)
+    }
+}
+
+@Suite("Support bundle")
+struct SupportBundleTests {
+    private func input(crash: [SupportBundleInput.CrashReport] = []) -> SupportBundleInput {
+        let rec = RequestRecord(date: Date(), source: "app", provider: "local:bonsai", isLocal: true,
+                                promptTokens: 10, completionTokens: 5, timeToFirstToken: 0.4, totalTime: 2, outcome: .completed)
+        let egress = EgressEntry(id: UUID(), date: Date(), purpose: .cloudInference, host: "api.openai.com",
+                                 provider: "openai", blocked: false, reason: nil, count: 2)
+        return SupportBundleInput(
+            appVersion: "1.0", build: "7", osVersion: "26.0", chip: "Apple M3 Pro", memoryGB: 18,
+            routingPolicy: "localFirst", systemLoad: SystemLoad(memory: .warning, thermal: .fair, lowPowerMode: true),
+            installedModels: ["local:bonsai"], providers: [.init(id: "openai", isLocal: false)],
+            requests: [rec], egress: [egress], tokensThisMonth: 1234, monthlyTokenCap: 5000,
+            externalServers: [.init(name: "GitHub", status: "Running")], projectCount: 2, crashReports: crash)
+    }
+
+    @Test("contains the facts support needs")
+    func content() throws {
+        let obj = try #require(JSONSerialization.jsonObject(with: try SupportBundle.make(input())) as? [String: Any])
+        #expect((obj["system"] as? [String: String])?["chip"] == "Apple M3 Pro")
+        #expect((obj["load"] as? [String: String])?["memory"] == "warning")
+        #expect((obj["requests"] as? [[String: Any]])?.count == 1)
+        let egress = try #require((obj["egress"] as? [[String: Any]])?.first)
+        #expect(egress["host"] as? String == "api.openai.com" && egress["purpose"] as? String == "cloudInference")
+        #expect(obj["projectCount"] as? Int == 2)
+    }
+
+    @Test("only whitelisted fields exist, so no text, keys or paths can appear")
+    func noSensitiveFields() throws {
+        let obj = try #require(JSONSerialization.jsonObject(with: try SupportBundle.make(input())) as? [String: Any])
+        #expect(Set(obj.keys) == ["generatedAt", "note", "app", "system", "load", "routingPolicy", "installedModels",
+                                  "providers", "cloudUse", "requests", "egress", "externalServers", "projectCount", "crashReports"])
+        let req = try #require((obj["requests"] as? [[String: Any]])?.first)
+        #expect(Set(req.keys).isDisjoint(with: ["content", "prompt", "text", "messages", "answer", "response"]))
+        let e = try #require((obj["egress"] as? [[String: Any]])?.first)
+        #expect(Set(e.keys) == ["date", "purpose", "host", "provider", "blocked", "count"])
+    }
+
+    @Test("crash reports are capped in number and size")
+    func crashCaps() throws {
+        let many = (0..<9).map { SupportBundleInput.CrashReport(file: "r\($0).json", json: String(repeating: "x", count: 300_000)) }
+        let obj = try #require(JSONSerialization.jsonObject(with: try SupportBundle.make(input(crash: many))) as? [String: Any])
+        let reports = try #require(obj["crashReports"] as? [[String: String]])
+        #expect(reports.count == SupportBundle.maxCrashReports)
+        #expect(reports[0]["json"]?.count == SupportBundle.maxCrashReportCharacters)
+        #expect(reports.last?["file"] == "r8.json")
+    }
+}

@@ -39,11 +39,22 @@ public final class AppServices {
     /// The tools offered to MCP clients; one instance for the Unix socket and the HTTP endpoint.
     private let mcpHost: MCPToolHost
     private var mcpService: MCPService?
-    private var buildRunner: XPCBuildRunner?
     private var startupComplete = false
     /// Exactly what has been sent to the model this session; append-only so the local model's
     /// prefix cache stays valid across tool-loop turns and follow-up messages.
     private var ledger = PromptLedger()
+    /// Outside content (web pages, search results) seen in this conversation; see `ToolCallGuard`.
+    private let untrusted = UntrustedContext()
+    private let toolGuard: ToolCallGuard
+    /// External MCP servers the user added; their tools join the model's and our own `tools/list`.
+    public let externalServers = MCPClientManager()
+    /// Project folders the user added; each has its own index, git and boundary.
+    public let workspaces: WorkspaceManager
+    public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
+    public let diagnostics: DiagnosticsModel
+    public let workspacesModel: WorkspacesModel
+    public let externalServersModel: ExternalServersModel
+    private static let chatIdentity = ClientIdentity(key: "app:chat", name: "VibeCockpit")
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
     /// Local only / Local first / Cloud allowed. Observable so the menu bar and Settings agree.
@@ -60,12 +71,31 @@ public final class AppServices {
         self.egress = gate
         self.cloudUsage = CloudUsageModel(gate: gate)
         self.installer = ModelInstaller(gate: gate)
-        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate, governor: governor)
+        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate, governor: governor, requestLog: requestLog)
         self.inference = inference
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
-        let host = MCPToolHost(inference: inference, gate: ToolGate(memory: memory, approver: approvals))
+        let runnerBox = SharedBuildRunner()
+        let workspaces = WorkspaceManager { record in
+            try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get())
+        }
+        self.workspaces = workspaces
+        let externals = externalServers, requestLog = self.requestLog, governor = self.governor
+        self.diagnostics = DiagnosticsModel(log: requestLog) {
+            try await AppServices.makeSupportBundle(
+                registry: registry, egress: gate, governor: governor, inference: inference,
+                externals: externals, workspaces: workspaces, requestLog: requestLog)
+        }
+        self.workspacesModel = WorkspacesModel(manager: workspaces)
+        let toolGate = ToolGate(memory: memory, approver: approvals)
+        self.toolGuard = ToolCallGuard(gate: toolGate)
+        let host = MCPToolHost(inference: inference, gate: toolGate)
         self.mcpHost = host
+        self.externalServersModel = ExternalServersModel(manager: externals)
+        Task {
+            await host.setExternalTools { await externals.tools() }
+            await host.setProjectTools { await workspaces.tools() }
+        }
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
 
@@ -90,6 +120,7 @@ public final class AppServices {
     public func startup(coordinator: AppCoordinator, workspaceURL: URL? = nil) async {
         guard !startupComplete else { return }
         startupComplete = true
+        DiagnosticsCollector.shared.start()
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
             let mgr = GitSnapshotManager(workspaceURL: url)
@@ -132,6 +163,7 @@ public final class AppServices {
 
         // Other apps may ask for models as soon as the server is up, so start it once they're registered.
         await sharing.startIfEnabled()
+        await externalServers.startAll()
         await startGovernor()
 
         let providers = await registry.allProviders(with: .textGeneration)
@@ -158,23 +190,10 @@ public final class AppServices {
             }
         }
 
-        // MCP: model tools are always offered; workspace tools join when a project is open.
-        if let workspaceURL = workspaceURL ?? detectWorkspaceURL(),
-           let pipeline = indexingPipeline,
-           let gitMgr = snapshotManager {
-            let runner = XPCBuildRunner()
-            await runner.connect()
-            buildRunner = runner
-            let ctx = WorkspaceContext(
-                root: workspaceURL,
-                workspaceID: WorkspaceID(rawValue: workspaceURL.lastPathComponent),
-                policy: .default
-            )
-            let boundary = WorkspaceBoundary(context: ctx)
-            let runtime = ToolRuntime(boundary: boundary, buildRunner: runner,
-                                      gitManager: gitMgr, pipeline: pipeline)
-            await mcpHost.attachWorkspace(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
-        }
+        // MCP: model tools are always offered; project tools join for every project the user opened
+        // (plus the folder the app was started in, when that is a git checkout).
+        if let url = workspaceURL ?? detectWorkspaceURL() { _ = try? await workspaces.add(url) }
+        await workspaces.openAll()
         let socketPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".vibecockpit/mcp.sock").path
         let service = MCPService(host: mcpHost)
@@ -250,6 +269,58 @@ public final class AppServices {
         await refreshModels(coordinator: coordinator)
     }
 
+    /// The support bundle: facts and timings only (see `SupportBundleInput`).
+    nonisolated static func makeSupportBundle(
+        registry: ModelRegistry, egress: EgressGate, governor: SystemGovernor, inference: InferenceService,
+        externals: MCPClientManager, workspaces: WorkspaceManager, requestLog: RequestLog
+    ) async throws -> Data {
+        let info = Bundle.main.infoDictionary ?? [:]
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        var brand = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("machdep.cpu.brand_string", &brand, &size, nil, 0)
+        let providers = await registry.allProviders
+        let reports = DiagnosticsCollector.savedReports().map { SupportBundleInput.CrashReport(file: $0.file, json: $0.json) }
+        let input = SupportBundleInput(
+            appVersion: info["CFBundleShortVersionString"] as? String ?? "dev",
+            build: info["CFBundleVersion"] as? String ?? "0",
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            chip: String(cString: brand),
+            memoryGB: Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824),
+            routingPolicy: await inference.policy.rawValue,
+            systemLoad: await governor.current,
+            installedModels: providers.filter(\.isLocal).map(\.id).sorted(),
+            providers: providers.map { .init(id: $0.id, isLocal: $0.isLocal) }.sorted { $0.id < $1.id },
+            requests: await requestLog.recent,
+            egress: await egress.entries,
+            tokensThisMonth: await egress.tokensThisMonth,
+            monthlyTokenCap: await egress.monthlyTokenCap,
+            externalServers: await externals.list.map { .init(name: $0.server.name, status: ExternalServersModel.statusText($0.status)) },
+            projectCount: await workspaces.list.count,
+            crashReports: reports)
+        return try SupportBundle.make(input)
+    }
+
+    /// Builds one project's tools: its own git snapshots, its own search index, and a boundary
+    /// that keeps file access and commands inside its folder.
+    nonisolated static func openWorkspace(
+        _ record: WorkspaceRecord, registry: ModelRegistry, runner: XPCBuildRunner
+    ) async throws -> [any AgentToolHandler] {
+        let url = record.url
+        let git = GitSnapshotManager(workspaceURL: url)
+        try? await git.open()   // not a git checkout: snapshot tools will say so when used
+        let indexDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VibeCockpit/indexes", isDirectory: true)
+        try FileManager.default.createDirectory(at: indexDir, withIntermediateDirectories: true)
+        let pipeline = IndexingPipeline(store: VectorStore(dbURL: indexDir.appendingPathComponent("\(record.id).db")), registry: registry)
+        try await pipeline.open()
+        Task.detached(priority: .background) { try? await pipeline.reindexWorkspace(url) }
+        let context = WorkspaceContext(root: url, workspaceID: WorkspaceID(rawValue: record.id), policy: .default)
+        let runtime = ToolRuntime(boundary: WorkspaceBoundary(context: context), buildRunner: runner,
+                                  gitManager: git, pipeline: pipeline)
+        return MCPToolHost.workspaceTools(runtime: runtime, pipeline: pipeline, gitManager: git)
+    }
+
     /// Expose MCP tool names to the UI.
     public func refreshMCPTools(coordinator: AppCoordinator) async {
         coordinator.send(.mcpToolsUpdated([]))
@@ -263,7 +334,8 @@ public final class AppServices {
         let ragContext = await retrieveContext(for: text)
         let intent = PromptEngineer.classify(text)
 
-        let agentTools: [AgentToolHandler] = [
+        let externalTools = await externalServers.tools()
+        let agentTools: [AgentToolHandler] = externalTools + [
             FileReaderTool(),
             FileWriterTool(),
             WebFetchTool(gate: egress),
@@ -276,6 +348,7 @@ public final class AppServices {
         if ledger.userTurns + 1 != promptCount {
             // New or cleared session (or out of sync): start fresh, seeding from visible history.
             ledger.reset()
+            untrusted.reset()
             var prior = historyMessages(coordinator.state)
             if prior.last?.role == .user { prior.removeLast() }   // the prompt being sent now
             ledger.begin(system: buildSystemPrompt(), prior: prior)
@@ -338,6 +411,7 @@ public final class AppServices {
         }
 
         coordinator.send(.generationFinished)
+        await diagnostics.reload()
     }
 
     /// A line for the chat when the answer didn't come from the local model the way you'd expect.
@@ -358,7 +432,10 @@ public final class AppServices {
         }
         do {
             let args = parseToolArguments(call.arguments)
-            let contents = try await handler.execute(arguments: args)
+            if let refusal = await toolGuard.refusal(for: handler, arguments: args, client: Self.chatIdentity, context: untrusted) {
+                return refusal
+            }
+            let contents = toolGuard.filter(try await handler.execute(arguments: args), from: handler, context: untrusted)
             return contents.compactMap { item -> String? in
                 if case .text(let t, _, _) = item { return t } else { return nil }
             }.joined(separator: "\n")
@@ -557,6 +634,7 @@ public final class AppServices {
         if snapshotManager != nil {
             lines.append("Git snapshots are available. Prefer small, focused edits.")
         }
+        lines.append(UntrustedContent.systemPromptRule)
         return lines.joined(separator: "\n")
     }
 
@@ -577,5 +655,17 @@ public final class AppServices {
             url = parent
         }
         return nil
+    }
+}
+
+/// One build helper connection shared by every project, connected on first use.
+actor SharedBuildRunner {
+    private var runner: XPCBuildRunner?
+    func get() async -> XPCBuildRunner {
+        if let runner { return runner }
+        let r = XPCBuildRunner()
+        await r.connect()
+        runner = r
+        return r
     }
 }

@@ -14,10 +14,20 @@ public protocol AgentToolHandler: Sendable {
     var requiredScope: ClientScope { get }
     /// One plain-language line for the "Allow?" prompt.
     func approvalSummary(arguments: [String: Value]) -> String
+    /// True when the tool's output comes from outside (the web, another program).
+    var producesUntrustedContent: Bool { get }
+    /// True for tools that run someone else's code (external MCP servers): they ask every time,
+    /// even in a clean conversation.
+    var alwaysRequiresApproval: Bool { get }
+    /// Who the approval prompt names, when it isn't the caller (e.g. the external server).
+    var approvalIdentity: ClientIdentity? { get }
 }
 
 extension AgentToolHandler {
     public var requiredScope: ClientScope { .toolsRead }
+    public var producesUntrustedContent: Bool { false }
+    public var alwaysRequiresApproval: Bool { false }
+    public var approvalIdentity: ClientIdentity? { nil }
     public func approvalSummary(arguments: [String: Value]) -> String { "Use \(toolDefinition.name)" }
 }
 

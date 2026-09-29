@@ -32,6 +32,8 @@ public actor MCPToolHost {
     private let gate: ToolGate?
     private var workspaceTools: [any AgentToolHandler] = []
     private var runtime: ToolRuntime?
+    private var projectTools: (@Sendable () async -> [any AgentToolHandler])?
+    private var externalTools: (@Sendable () async -> [any AgentToolHandler])?
     private let log = Logger(subsystem: "com.vibecockpit", category: "MCPToolHost")
 
     /// `gate` decides whether an app may change files or run commands; without one those are refused.
@@ -45,7 +47,12 @@ public actor MCPToolHost {
     /// Adds the code-search, file, build and snapshot tools. Applies to connections made afterwards.
     public func attachWorkspace(runtime: ToolRuntime, pipeline: IndexingPipeline, gitManager: GitSnapshotManager) {
         self.runtime = runtime
-        workspaceTools = [
+        workspaceTools = Self.workspaceTools(runtime: runtime, pipeline: pipeline, gitManager: gitManager)
+    }
+
+    /// The code-search, file, build and snapshot tools for one project.
+    public static func workspaceTools(runtime: ToolRuntime, pipeline: IndexingPipeline, gitManager: GitSnapshotManager) -> [any AgentToolHandler] {
+        [
             SearchCodeTool(pipeline: pipeline),
             RuntimeIndexWorkspaceTool(runtime: runtime),
             RuntimeFileReaderTool(runtime: runtime),
@@ -59,19 +66,27 @@ public actor MCPToolHost {
     /// Adds one more tool (applies to connections made afterwards).
     public func register(_ tool: any AgentToolHandler) { workspaceTools.append(tool) }
 
-    public func allTools() -> [any AgentToolHandler] {
+    /// Tools from external MCP servers the user added; asked for on every list and call, so servers
+    /// that start later show up without reconnecting.
+    /// Tools for every project the user opened (see `WorkspaceManager`); asked for on every list and call.
+    public func setProjectTools(_ provider: (@Sendable () async -> [any AgentToolHandler])?) { projectTools = provider }
+
+    public func setExternalTools(_ provider: (@Sendable () async -> [any AgentToolHandler])?) { externalTools = provider }
+
+    public func allTools() async -> [any AgentToolHandler] {
         var tools: [any AgentToolHandler] = []
         if let inference {
             tools += [ListModelsTool(inference: inference), ChatTool(inference: inference), EmbedTool(inference: inference)]
         }
-        return tools + workspaceTools
+        return tools + workspaceTools + (await projectTools?() ?? []) + (await externalTools?() ?? [])
     }
 
     /// A server for one client. `scopes` is consulted on every list and call.
     public func makeServer(scopes: ScopeBox) async -> Server {
-        let tools = allTools()
+        let host = self
         let runtime = self.runtime
-        let gate = self.gate
+        let toolGuard = ToolCallGuard(gate: self.gate)
+        let untrusted = UntrustedContext()   // per connection: what this client has been handed from outside
         let log = self.log
         let server = Server(
             name: "vibecockpit",
@@ -82,11 +97,13 @@ public actor MCPToolHost {
         )
 
         await server.withMethodHandler(ListTools.self) { _ in
+            let tools = await host.allTools()
             let allowed = scopes.scopes
-            return ListTools.Result(tools: tools.filter { allowed.contains($0.requiredScope) }.map { $0.toolDefinition })
+            return ListTools.Result(tools: tools.filter { allowed.contains($0.requiredScope) }.map { $0.toolDefinition.withValidSchema })
         }
 
         await server.withMethodHandler(CallTool.self) { params in
+            let tools = await host.allTools()
             guard let handler = tools.first(where: { $0.toolDefinition.name == params.name }) else {
                 throw MCPError.methodNotFound("Unknown tool: \(params.name)")
             }
@@ -95,15 +112,11 @@ public actor MCPToolHost {
                     content: [.text(text: "This app isn't allowed to \(handler.requiredScope.title.lowercased()). Change its permissions in VibeCockpit.", annotations: nil, _meta: nil)],
                     isError: true)
             }
-            if ApprovalPolicy.needsApproval(handler.requiredScope) {
-                let request = ApprovalRequest(
-                    client: scopes.identity, toolName: params.name, scope: handler.requiredScope,
-                    summary: handler.approvalSummary(arguments: params.arguments ?? [:]))
-                guard let gate, await gate.allows(request) else {
-                    return CallTool.Result(
-                        content: [.text(text: "The user didn't allow this action (\(request.summary)).", annotations: nil, _meta: nil)],
-                        isError: true)
-                }
+            // Write and exec always ask an outside app; after web/other-program content, "Always allow" no longer counts.
+            if let refusal = await toolGuard.refusal(
+                for: handler, arguments: params.arguments ?? [:], client: scopes.identity,
+                context: untrusted, alwaysAsk: true) {
+                return CallTool.Result(content: [.text(text: refusal, annotations: nil, _meta: nil)], isError: true)
             }
             let opID = OperationID()
             let task = Task<[Tool.Content], Error> { try await handler.execute(arguments: params.arguments ?? [:]) }
@@ -112,7 +125,7 @@ public actor MCPToolHost {
             }
             func finish() async { if let runtime { await runtime.removeTask(opID) } }
             do {
-                let content = try await task.value
+                let content = toolGuard.filter(try await task.value, from: handler, context: untrusted)
                 await finish()
                 return CallTool.Result(content: content)
             } catch is CancellationError {

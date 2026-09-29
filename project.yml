@@ -65,9 +65,18 @@ targets:
       - target: CSQLiteVec
     info:
       path: Sources/VibeCockpit/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.app
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_HARDENED_RUNTIME: YES
+        # Apple silicon only: MLX needs it, and the vendored libgit2 is arm64.
+        ARCHS: arm64
+        ONLY_ACTIVE_ARCH: NO
         SWIFT_STRICT_CONCURRENCY: complete
         OTHER_SWIFT_FLAGS: -strict-concurrency=complete
         CODE_SIGN_IDENTITY: "-"
@@ -76,8 +85,8 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: ""
         CODE_SIGN_ENTITLEMENTS: ""
         SWIFT_INCLUDE_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include $(PROJECT_DIR)/Modules/CLibGit2"
-        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include /opt/homebrew/Cellar/libgit2/1.9.7/include"
-        OTHER_LDFLAGS: "-L/opt/homebrew/Cellar/libgit2/1.9.7/lib -lgit2"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include $(PROJECT_DIR)/Vendor/libgit2/include"
+        OTHER_LDFLAGS: "-L$(PROJECT_DIR)/Vendor/libgit2/lib -lgit2 -lz -liconv"
 
   CSQLiteVec:
     type: library.static
@@ -98,8 +107,8 @@ targets:
     sources: []
     settings:
       base:
-        OTHER_LDFLAGS: "-L/opt/homebrew/Cellar/libgit2/1.9.7/lib -lgit2"
-        HEADER_SEARCH_PATHS: "/opt/homebrew/Cellar/libgit2/1.9.7/include /opt/homebrew/Cellar/libssh2/1.11.1_4/include /opt/homebrew/Cellar/openssl@3/3.6.4/include"
+        OTHER_LDFLAGS: "-L$(PROJECT_DIR)/Vendor/libgit2/lib -lgit2 -lz -liconv"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/libgit2/include"
 
   VibeCockpitTests:
     type: bundle.unit-test

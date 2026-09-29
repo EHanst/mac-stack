@@ -22,6 +22,7 @@ extension JSONValue {
 
 extension ToolDefinition {
     public init(_ tool: Tool) {
+        let tool = tool.withValidSchema
         self.init(name: tool.name, description: tool.description ?? "", inputSchema: JSONValue(tool.inputSchema))
     }
 }

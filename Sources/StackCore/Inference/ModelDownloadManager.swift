@@ -43,9 +43,12 @@ public actor ModelDownloadManager {
     }
 
     private let storageDirectory: URL
+    private let gate: EgressGate
     private let logger = Logger(subsystem: "com.vibecockpit", category: "ModelDownloadManager")
 
-    public init(storageDirectory: URL? = nil) {
+    /// The gate is required: every download is checked against the privacy setting and recorded.
+    public init(gate: EgressGate, storageDirectory: URL? = nil) {
+        self.gate = gate
         let dir: URL
         if let storageDirectory {
             dir = storageDirectory
@@ -73,6 +76,7 @@ public actor ModelDownloadManager {
             "\(manifest.downloadURL.lastPathComponent).download"
         )
 
+        try await gate.authorize(.modelDownload, url: manifest.downloadURL)
         let config = URLSessionConfiguration.default
         let session = URLSession(configuration: config)
         let (downloadedURL, response) = try await session.download(from: manifest.downloadURL)

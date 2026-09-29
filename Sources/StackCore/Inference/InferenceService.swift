@@ -45,6 +45,7 @@ public actor InferenceService {
     private let scheduler: InferenceScheduler
     private let gate: EgressGate?
     private let governor: SystemGovernor?
+    private let requestLog: RequestLog?
     public private(set) var policy: RoutingPolicy
     private var noticeHandler: (@Sendable (RouteNotice) -> Void)?
     private let logger = Logger(subsystem: "com.vibecockpit", category: "InferenceService")
@@ -54,8 +55,10 @@ public actor InferenceService {
         scheduler: InferenceScheduler = InferenceScheduler(),
         policy: RoutingPolicy = .localFirst,
         gate: EgressGate? = nil,
-        governor: SystemGovernor? = nil
+        governor: SystemGovernor? = nil,
+        requestLog: RequestLog? = nil
     ) {
+        self.requestLog = requestLog
         self.gate = gate
         self.governor = governor
         self.registry = registry
@@ -196,6 +199,9 @@ public actor InferenceService {
         let global = noticeHandler
         let notify: @Sendable (RouteNotice) -> Void = { global?($0); onRoute?($0) }
         let logger = self.logger
+        let requestLog = self.requestLog
+        let governor = self.governor
+        let source = priority == .interactive ? "app" : (priority == .api ? "api" : "background")
 
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -210,6 +216,25 @@ public actor InferenceService {
                     }
 
                     var produced = false
+                    let started = Date()
+                    let load = await governor?.current
+                    var firstToken: Date?
+                    var completionChars = 0
+                    var reported: GenerationUsage?
+                    func record(_ outcome: RequestRecord.Outcome, _ error: Error?) async {
+                        guard let requestLog else { return }
+                        let promptTokens = reported?.promptTokens ?? Self.estimateTokens(messages)
+                        let completion = reported?.completionTokens ?? max(0, completionChars / 3)
+                        await requestLog.record(RequestRecord(
+                            date: started, source: source, provider: provider.id, isLocal: provider.isLocal,
+                            fellBackFrom: failed?.id, promptTokens: promptTokens, completionTokens: completion,
+                            timeToFirstToken: firstToken.map { $0.timeIntervalSince(started) },
+                            totalTime: Date().timeIntervalSince(started), outcome: outcome,
+                            error: error?.localizedDescription,
+                            memory: load.map { "\($0.memory)" } ?? "normal",
+                            thermal: load.map { "\($0.thermal)" } ?? "nominal",
+                            lowPowerMode: load?.lowPowerMode ?? false))
+                    }
                     do {
                         // A cloud provider is skipped (with the reason) when the monthly limit is used up.
                         if !provider.isLocal, let gate, let refusal = await gate.cloudAllowed() { throw refusal }
@@ -221,11 +246,9 @@ public actor InferenceService {
                         } else {
                             inner = await provider.generate(messages: messages, tools: tools, options: options)
                         }
-                        var completionChars = 0
-                        var reported: GenerationUsage?
                         for try await event in inner {
                             produced = true
-                            if case .token(let t) = event { completionChars += t.count }
+                            if case .token(let t) = event { completionChars += t.count; if firstToken == nil { firstToken = Date() } }
                             if case .usage(let u) = event { reported = u }
                             continuation.yield(event)
                         }
@@ -234,9 +257,12 @@ public actor InferenceService {
                                 ?? Self.estimateTokens(messages) + max(1, completionChars / 3)
                             await gate.recordCloudTokens(used)
                         }
+                        await record(.completed, nil)
                         continuation.finish()
                         return
                     } catch {
+                        let cancelled = error is CancellationError || Task.isCancelled
+                        await record(cancelled ? .cancelled : .failed, cancelled ? nil : error)
                         let isLast = index == providers.count - 1
                         if produced || isLast || error is CancellationError || Task.isCancelled {
                             continuation.finish(throwing: error)
