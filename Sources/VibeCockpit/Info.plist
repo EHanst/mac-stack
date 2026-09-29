@@ -18,13 +18,5 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>SUEnableAutomaticChecks</key>
-	<false/>
-	<key>SUFeedURL</key>
-	<string>https://github.com/EHanst/mac-stack/releases/latest/download/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>REPLACE_WITH_SPARKLE_PUBLIC_KEY</string>
-	<key>SUSendProfileInfo</key>
-	<false/>
 </dict>
 </plist>

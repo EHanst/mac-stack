@@ -28,9 +28,6 @@ packages:
   hummingbird:
     url: https://github.com/hummingbird-project/hummingbird.git
     from: 2.27.0
-  Sparkle:
-    url: https://github.com/sparkle-project/Sparkle
-    from: 2.9.0
 
 targets:
   VibeCockpit:
@@ -65,20 +62,12 @@ targets:
         product: MLXLMCommon
       - package: hummingbird
         product: Hummingbird
-      - package: Sparkle
-        product: Sparkle
       - target: CSQLiteVec
     info:
       path: Sources/VibeCockpit/Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        # Updates: manual by default (no unprompted network call). The key is a placeholder until
-        # you run Sparkle's generate_keys - see docs/RELEASING.md. Updater stays off until then.
-        SUFeedURL: https://github.com/EHanst/mac-stack/releases/latest/download/appcast.xml
-        SUPublicEDKey: REPLACE_WITH_SPARKLE_PUBLIC_KEY
-        SUEnableAutomaticChecks: false
-        SUSendProfileInfo: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.app

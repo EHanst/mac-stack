@@ -188,14 +188,98 @@ struct LaunchModeTests {
     }
 }
 
-@Suite("Update key")
-struct UpdateKeyTests {
-    @Test func placeholderIsNotAKey() {
-        #expect(!UpdateKey.isReal("REPLACE_WITH_SPARKLE_PUBLIC_KEY"))
-        #expect(!UpdateKey.isReal(""))
+private func release(_ tag: String, status: Int = 200, url: String = "https://github.com/EHanst/mac-stack/releases/tag/v9",
+                     draft: Bool = false, prerelease: Bool = false) -> UpdateChecker.Fetch {
+    { req in
+        let body = #"{"tag_name":"\#(tag)","html_url":"\#(url)","draft":\#(draft),"prerelease":\#(prerelease)}"#
+        return (Data(body.utf8), HTTPURLResponse(url: req.url!, statusCode: status, httpVersion: nil, headerFields: nil)!)
     }
-    @Test func thirtyTwoByteBase64IsAKey() {
-        #expect(UpdateKey.isReal(Data(repeating: 7, count: 32).base64EncodedString()))
-        #expect(!UpdateKey.isReal(Data(repeating: 7, count: 31).base64EncodedString()))
+}
+
+private final class UpdateMemStore: EgressStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var state = EgressState()
+    func load() -> EgressState { lock.withLock { state } }
+    func save(_ s: EgressState) { lock.withLock { state = s } }
+}
+
+@Suite("Update checker")
+struct UpdateCheckerTests {
+    @Test func versionOrdering() {
+        #expect(UpdateChecker.isNewer("1.10.0", than: "1.9.3"))
+        #expect(UpdateChecker.isNewer("2", than: "1.9"))
+        #expect(!UpdateChecker.isNewer("1.0.0", than: "1.0"))
+        #expect(!UpdateChecker.isNewer("1.0.0", than: "1.0.1"))
+        #expect(!UpdateChecker.isNewer("garbage", than: "1.0.0"))
+        #expect(!UpdateChecker.isNewer("1.2.0-beta", than: "1.0.0"))
+    }
+    @Test func newerReleaseIsOffered() async throws {
+        let r = try await UpdateChecker(fetch: release("v1.2.0")).check(currentVersion: "1.0.0")
+        #expect(r == .available(UpdateInfo(version: "1.2.0", url: URL(string: "https://github.com/EHanst/mac-stack/releases/tag/v9")!)))
+    }
+    @Test func sameVersionIsUpToDate() async throws {
+        #expect(try await UpdateChecker(fetch: release("v1.0.0")).check(currentVersion: "1.0.0") == .upToDate)
+    }
+    @Test func linkMustBeOnGitHub() async {
+        await #expect(throws: UpdateCheckError.badResponse) {
+            try await UpdateChecker(fetch: release("v2.0.0", url: "https://evil.example/x")).check(currentVersion: "1.0.0")
+        }
+    }
+    @Test func draftsAndPrereleasesAreIgnored() async {
+        await #expect(throws: UpdateCheckError.badResponse) {
+            try await UpdateChecker(fetch: release("v2.0.0", prerelease: true)).check(currentVersion: "1.0.0")
+        }
+    }
+    @Test func noReleaseYet() async {
+        await #expect(throws: UpdateCheckError.noReleases) {
+            try await UpdateChecker(fetch: release("v1", status: 404)).check(currentVersion: "1.0.0")
+        }
+    }
+    @Test func checkIsRecordedAndAllowedUnderOnlyOnThisMac() async throws {
+        let store = UpdateMemStore()
+        let gate = EgressGate(policy: .localOnly, store: store)
+        _ = try await UpdateChecker(gate: gate, fetch: release("v1.0.0")).check(currentVersion: "1.0.0")
+        let entries = await gate.entries
+        #expect(entries.count == 1 && entries[0].purpose == .updateCheck && !entries[0].blocked)
+    }
+}
+
+@MainActor
+@Suite("Updates model")
+struct UpdatesModelTests {
+    private func model(_ fetch: @escaping UpdateChecker.Fetch, daily: Bool, last: Date? = nil, now: Date = Date()) -> (UpdatesModel, UserDefaults) {
+        let d = UserDefaults(suiteName: "updates-\(UUID().uuidString)")!
+        d.set(daily, forKey: UpdatesModel.dailyKey)
+        if let last { d.set(last, forKey: UpdatesModel.lastCheckKey) }
+        return (UpdatesModel(defaults: d, currentVersion: "1.0.0", checker: { UpdateChecker(fetch: fetch) }, now: { now }), d)
+    }
+    @Test func offByDefaultMakesNoRequest() async {
+        let (m, _) = model({ _ in Issue.record("must not fetch"); throw CancellationError() }, daily: false)
+        await m.checkIfDue(policy: .localFirst)
+        #expect(m.status == .idle)
+    }
+    @Test func neverAutomaticUnderOnlyOnThisMac() async {
+        let (m, _) = model({ _ in Issue.record("must not fetch"); throw CancellationError() }, daily: true)
+        await m.checkIfDue(policy: .localOnly)
+        #expect(m.status == .idle)
+    }
+    @Test func dailyCheckWaitsADay() async {
+        let now = Date()
+        let (recent, _) = model({ _ in Issue.record("must not fetch"); throw CancellationError() }, daily: true, last: now.addingTimeInterval(-3600), now: now)
+        await recent.checkIfDue(policy: .localFirst)
+        #expect(recent.status == .idle)
+        let (due, _) = model(release("v1.1.0"), daily: true, last: now.addingTimeInterval(-90_000), now: now)
+        await due.checkIfDue(policy: .localFirst)
+        if case .available = due.status {} else { Issue.record("expected an update, got \(due.status)") }
+    }
+    @Test func manualCheckWorksEvenUnderOnlyOnThisMac() async {
+        let (m, _) = model(release("v1.0.0"), daily: false)
+        await m.checkNow()
+        #expect(m.status == .upToDate)
+    }
+    @Test func failureIsReportedNotThrown() async {
+        let (m, _) = model({ _ in throw URLError(.notConnectedToInternet) }, daily: false)
+        await m.checkNow()
+        if case .failed = m.status {} else { Issue.record("expected failure") }
     }
 }

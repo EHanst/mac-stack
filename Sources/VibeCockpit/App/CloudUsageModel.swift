@@ -39,6 +39,7 @@ public final class CloudUsageModel {
         case .webFetch: what = "Web page read"
         case .webSearch: what = "Web search"
         case .modelDownload: what = "Model download"
+        case .updateCheck: what = "Update check"
         }
         let times = e.count > 1 ? " ×\(e.count)" : ""
         return e.blocked ? "Blocked: \(what) to \(e.host)\(times)" : "\(what) → \(e.host)\(times)"

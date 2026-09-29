@@ -40,6 +40,7 @@ extension AppLaunch {
 struct MenuBarLabel: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
+    @Environment(UpdatesModel.self) private var updates
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -52,6 +53,11 @@ struct MenuBarLabel: View {
                 }
                 if AppLaunch.startsHidden { await AppLaunch.closeMainWindowWhenItAppears() }
                 await services.startup(coordinator: coordinator)
+                // Opt-in daily update check; does nothing unless the user turned it on.
+                while !Task.isCancelled {
+                    await updates.checkIfDue(policy: services.routingPolicy)
+                    try? await Task.sleep(for: .seconds(3600))
+                }
             }
     }
 }
@@ -62,7 +68,7 @@ struct VibeCockpitApp: App {
     @State private var coordinator = AppCoordinator()
     @State private var services = AppServices()
     @State private var loginItem = LoginItemModel()
-    @State private var updater = UpdaterModel()
+    @State private var updates = UpdatesModel()
 
     var body: some Scene {
         Window("VibeCockpit", id: "main") {
@@ -70,7 +76,7 @@ struct VibeCockpitApp: App {
                 .environment(coordinator)
                 .environment(services)
                 .environment(loginItem)
-                .environment(updater)
+                .environment(updates)
                 .task { await services.startup(coordinator: coordinator) }
         }
         .commands {
@@ -82,11 +88,12 @@ struct VibeCockpitApp: App {
                 .environment(coordinator)
                 .environment(services)
                 .environment(loginItem)
-                .environment(updater)
+                .environment(updates)
         } label: {
             MenuBarLabel()
                 .environment(coordinator)
                 .environment(services)
+                .environment(updates)
         }
         .menuBarExtraStyle(.menu)
     }
