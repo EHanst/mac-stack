@@ -29,46 +29,15 @@ struct MCPServiceTests {
 
     @Test("isRunning is false before start")
     func notRunningBeforeStart() async {
-        let service = MCPService(
-            runtime: makeStubRuntime(),
-            pipeline: makeStubPipeline(),
-            gitManager: GitSnapshotManager(workspaceURL: URL(fileURLWithPath: "/tmp"))
-        )
+        let service = MCPService(host: MCPToolHost())
         await #expect(service.isRunning == false)
     }
 
     @Test("isRunning becomes true after startWithTransport")
     func runningAfterStart() async throws {
-        let transport = MockTransportForTests()
-        let service = MCPService(
-            runtime: makeStubRuntime(),
-            pipeline: makeStubPipeline(),
-            gitManager: GitSnapshotManager(workspaceURL: URL(fileURLWithPath: "/tmp"))
-        )
-        try await service.startWithTransport(transport)
+        let service = MCPService(host: MCPToolHost())
+        try await service.startWithTransport(MockTransportForTests())
         await #expect(service.isRunning == true)
         await service.stop()
     }
-}
-
-private func makeStubPipeline() -> IndexingPipeline {
-    IndexingPipeline(
-        store: VectorStore(dbURL: URL(fileURLWithPath: "/tmp/test-pipeline.db")),
-        registry: ModelRegistry()
-    )
-}
-
-private func makeStubRuntime() -> ToolRuntime {
-    let ctx = WorkspaceContext(
-        root: URL(fileURLWithPath: "/tmp"),
-        workspaceID: WorkspaceID(rawValue: "test"),
-        policy: .default
-    )
-    let boundary = WorkspaceBoundary(context: ctx)
-    return ToolRuntime(
-        boundary: boundary,
-        buildRunner: XPCBuildRunner(),
-        gitManager: GitSnapshotManager(workspaceURL: URL(fileURLWithPath: "/tmp")),
-        pipeline: makeStubPipeline()
-    )
 }

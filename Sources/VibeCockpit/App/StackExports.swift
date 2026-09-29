@@ -3,4 +3,5 @@
 #if SWIFT_PACKAGE
 @_exported import StackCore
 @_exported import StackMCP
+@_exported import StackHTTP
 #endif

@@ -23,6 +23,7 @@ struct Options {
     var sweep: [Int] = []
     var guardTest = false
     var serviceTest = false
+    var apiTest = false
     var textTest = false
     var modelCheck = false
     var samplerCheck = false
@@ -43,6 +44,7 @@ struct Options {
             case "--no-matmul": matmul = false
             case "--guard-test": guardTest = true
             case "--service-test": serviceTest = true
+            case "--api-test": apiTest = true
             case "--text-test": textTest = true
             case "--model-check": modelCheck = true
             case "--sampler-check": samplerCheck = true
@@ -407,6 +409,8 @@ func run() async throws {
         print("  next request first token \(fmt(firstTokenAfterCancel ?? -1, 2)) s after cancelling a 600-token generation (≈55 s if the GPU had not been freed)")
         print("")
     }
+
+    if opts.apiTest { try await runAPITest(provider: provider) }
 
     // ── Cold contexts ──────────────────────────────────────────────────────────────
     var results: [ContextResult] = []

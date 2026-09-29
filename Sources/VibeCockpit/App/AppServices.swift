@@ -16,6 +16,11 @@ import StackMCP
 public final class AppServices {
 
     public let credentials = CredentialStore()
+    /// The local OpenAI-compatible API and the apps allowed to use it (off by default).
+    public let sharing: APISharingModel
+    /// Questions from outside apps that want to change files or run commands.
+    public let approvals = ApprovalCenter()
+    public let savedApprovals: SavedApprovalsModel
     public private(set) var workspaceName: String?
     private let registry: ModelRegistry
     /// All text generation goes through here: routing policy, GPU scheduling, fallback.
@@ -25,6 +30,8 @@ public final class AppServices {
     private let installer = ModelInstaller()
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
+    /// The tools offered to MCP clients; one instance for the Unix socket and the HTTP endpoint.
+    private let mcpHost: MCPToolHost
     private var mcpService: MCPService?
     private var buildRunner: XPCBuildRunner?
     private var startupComplete = false
@@ -43,7 +50,13 @@ public final class AppServices {
         self.defaults = defaults
         let policy = defaults.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
         self.routingPolicy = policy
-        self.inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
+        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
+        self.inference = inference
+        let memory = ApprovalMemory()
+        self.savedApprovals = SavedApprovalsModel(memory: memory)
+        let host = MCPToolHost(inference: inference, gate: ToolGate(memory: memory, approver: approvals))
+        self.mcpHost = host
+        self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
 
     private static let policyKey = "routingPolicy"
@@ -105,6 +118,9 @@ public final class AppServices {
 
         await registerEmbedderIfInstalled()
 
+        // Other apps may ask for models as soon as the server is up, so start it once they're registered.
+        await sharing.startIfEnabled()
+
         let providers = await registry.allProviders(with: .textGeneration)
         for provider in providers {
             let health = await provider.healthCheck()
@@ -129,7 +145,7 @@ public final class AppServices {
             }
         }
 
-        // Start embedded MCP server if we have a workspace
+        // MCP: model tools are always offered; workspace tools join when a project is open.
         if let workspaceURL = workspaceURL ?? detectWorkspaceURL(),
            let pipeline = indexingPipeline,
            let gitMgr = snapshotManager {
@@ -144,17 +160,17 @@ public final class AppServices {
             let boundary = WorkspaceBoundary(context: ctx)
             let runtime = ToolRuntime(boundary: boundary, buildRunner: runner,
                                       gitManager: gitMgr, pipeline: pipeline)
-            let socketDir = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".vibecockpit")
-            let socketPath = socketDir.appendingPathComponent("mcp.sock").path
-            let service = MCPService(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
-            do {
-                try await service.start(socketPath: socketPath)
-                mcpService = service
-                await refreshMCPTools(coordinator: coordinator)
-            } catch {
-                logger.error("MCPService failed to start: \(error.localizedDescription, privacy: .public)")
-            }
+            await mcpHost.attachWorkspace(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
+        }
+        let socketPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".vibecockpit/mcp.sock").path
+        let service = MCPService(host: mcpHost)
+        do {
+            try await service.start(socketPath: socketPath)
+            mcpService = service
+            await refreshMCPTools(coordinator: coordinator)
+        } catch {
+            logger.error("MCPService failed to start: \(error.localizedDescription, privacy: .public)")
         }
 
         // Populate model info list for the model manager UI.
@@ -263,7 +279,7 @@ public final class AppServices {
                         case .toolCall(let call):
                             coordinator.send(.toolCallMade(call.name, call.arguments, call.id))
                             pendingToolCalls.append(call)
-                        case .finished:
+                        case .usage, .finished:
                             break
                         }
                     }

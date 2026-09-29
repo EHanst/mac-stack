@@ -5,102 +5,77 @@ import os
 import StackCore
 #endif
 
+/// The MCP endpoint for local clients: a Unix socket that any number of tools (Claude Desktop,
+/// Cursor, scripts via `vibe-mcp`) can connect to at once, each with its own server.
+/// The socket is owner-only, so a connection is the signed-in user and gets every permission.
 public actor MCPService {
 
-    private let runtime: ToolRuntime
-    private let pipeline: IndexingPipeline
-    private let gitManager: GitSnapshotManager
-    private var serverTask: Task<Void, Never>?
+    private let host: MCPToolHost
+    private var listener: UnixSocketListener?
+    private var connections: [UUID: Task<Void, Never>] = [:]
+    private var singleServerTask: Task<Void, Never>?
     private let log = Logger(subsystem: "com.vibecockpit", category: "MCPService")
 
     public private(set) var isRunning: Bool = false
+    public private(set) var connectedClients: Int = 0
 
-    public init(runtime: ToolRuntime, pipeline: IndexingPipeline, gitManager: GitSnapshotManager) {
-        self.runtime = runtime
-        self.pipeline = pipeline
-        self.gitManager = gitManager
-    }
+    public init(host: MCPToolHost) { self.host = host }
 
     public func start(socketPath: String) async throws {
-        let transport = UnixSocketTransport(socketPath: socketPath)
-        try await transport.connect()
-        try await startWithTransport(transport)
+        guard listener == nil else { return }
+        let listener = UnixSocketListener(path: socketPath) { [weak self] transport in
+            Task { await self?.serve(transport) }
+        }
+        try listener.start()
+        self.listener = listener
+        isRunning = true
+        log.info("MCPService listening on \(socketPath, privacy: .public)")
     }
 
+    /// One server per connection, until that client goes away.
+    private func serve(_ transport: SocketConnectionTransport) async {
+        let id = UUID()
+        connectedClients += 1
+        let box = ScopeBox(Set(ClientScope.allCases))
+        let server = await host.makeServer(scopes: box)
+        let log = self.log
+        let task = Task {
+            do {
+                try await server.start(transport: transport, initializeHook: { info, _ in
+                    box.identity = ClientIdentity(key: "socket:\(info.name)", name: info.title ?? info.name)
+                })
+            }
+            catch { log.error("MCP connection ended: \(error.localizedDescription, privacy: .public)") }
+            await server.waitUntilCompleted()
+            await transport.disconnect()
+        }
+        connections[id] = task
+        await task.value
+        connections[id] = nil
+        connectedClients -= 1
+    }
+
+    /// Serves one already-connected transport (used by tests and embedding hosts).
     func startWithTransport(_ transport: any Transport) async throws {
-        let tools = buildTools()
-        let server = Server(
-            name: "vibecockpit",
-            version: "1.0.0",
-            title: "VibeCockpit",
-            instructions: "AI coding assistant with code search, indexing, git snapshots, and build execution.",
-            capabilities: Server.Capabilities(tools: .init())
-        )
-
-        await server.withMethodHandler(ListTools.self) { _ in
-            ListTools.Result(tools: tools.map { $0.toolDefinition })
-        }
-
-        await server.withMethodHandler(CallTool.self) { [weak self] params in
-            guard let self else { throw MCPError.methodNotFound("Service deallocated") }
-            guard let handler = tools.first(where: { $0.toolDefinition.name == params.name }) else {
-                throw MCPError.methodNotFound("Unknown tool: \(params.name)")
-            }
-            let opID = OperationID()
-            let task = Task<[Tool.Content], Error> {
-                try await handler.execute(arguments: params.arguments ?? [:])
-            }
-            let voidTask: Task<Void, Error> = Task { _ = try await task.value }
-            await self.runtime.trackTask(opID, task: voidTask)
-            do {
-                let content = try await task.value
-                await self.runtime.removeTask(opID)
-                return CallTool.Result(content: content)
-            } catch is CancellationError {
-                await self.runtime.removeTask(opID)
-                return CallTool.Result(
-                    content: [.text(text: "Operation cancelled", annotations: nil, _meta: nil)],
-                    isError: true
-                )
-            } catch {
-                await self.runtime.removeTask(opID)
-                return CallTool.Result(
-                    content: [.text(text: "Error: \(error.localizedDescription)", annotations: nil, _meta: nil)],
-                    isError: true
-                )
-            }
-        }
-
+        let server = await host.makeServer(scopes: ScopeBox(Set(ClientScope.allCases)))
         isRunning = true
-        serverTask = Task.detached(priority: .utility) { [log] in
-            do {
-                try await server.start(transport: transport)
-            } catch {
-                log.error("MCP server stopped: \(error.localizedDescription, privacy: .public)")
-            }
+        let log = self.log
+        singleServerTask = Task.detached(priority: .utility) {
+            do { try await server.start(transport: transport) }
+            catch { log.error("MCP server stopped: \(error.localizedDescription, privacy: .public)") }
         }
-        log.info("MCPService started")
     }
 
     public func stop() async {
-        serverTask?.cancel()
-        serverTask = nil
+        listener?.stop()
+        listener = nil
+        singleServerTask?.cancel()
+        singleServerTask = nil
+        for task in connections.values { task.cancel() }
+        connections.removeAll()
+        connectedClients = 0
         isRunning = false
         log.info("MCPService stopped")
-    }
-
-    // MARK: - Tools
-
-    private func buildTools() -> [any AgentToolHandler] {
-        [
-            SearchCodeTool(pipeline: pipeline),
-            RuntimeIndexWorkspaceTool(runtime: runtime),
-            RuntimeFileReaderTool(runtime: runtime),
-            RuntimeFileWriterTool(runtime: runtime),
-            RuntimeRunBuildTool(runtime: runtime),
-            SnapshotCreateTool(manager: gitManager),
-            SnapshotDiffTool(manager: gitManager),
-        ]
     }
 }
 
@@ -198,6 +173,15 @@ struct RuntimeFileWriterTool: AgentToolHandler {
         ])
     )
     let runtime: ToolRuntime
+    var requiredScope: ClientScope { .toolsWrite }
+    func approvalSummary(arguments: [String: Value]) -> String {
+        guard case .string(let path) = arguments["path"] else { return "Write a file" }
+        var size = ""
+        if case .string(let content) = arguments["content"] {
+            size = " (" + ByteCountFormatter.string(fromByteCount: Int64(content.utf8.count), countStyle: .file) + ")"
+        }
+        return "Write \(path)\(size)"
+    }
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let path) = arguments["path"],
@@ -224,6 +208,11 @@ struct RuntimeRunBuildTool: AgentToolHandler {
         ])
     )
     let runtime: ToolRuntime
+    var requiredScope: ClientScope { .toolsExec }
+    func approvalSummary(arguments: [String: Value]) -> String {
+        guard case .string(let command) = arguments["command"] else { return "Run a command" }
+        return "Run: \(command)"
+    }
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let command) = arguments["command"],
@@ -252,6 +241,8 @@ struct SnapshotCreateTool: AgentToolHandler {
         ])
     )
     let manager: GitSnapshotManager
+    var requiredScope: ClientScope { .toolsWrite }
+    func approvalSummary(arguments: [String: Value]) -> String { "Save a snapshot of your project" }
 
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         let message: String

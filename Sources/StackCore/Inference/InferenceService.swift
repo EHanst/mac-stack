@@ -1,8 +1,10 @@
 import Foundation
 import os
 
-public enum InferenceError: LocalizedError {
+public enum InferenceError: LocalizedError, Equatable {
     case noProvider(RoutingPolicy)
+    case unknownModel(String)
+    case notAllowedByPolicy(model: String, policy: RoutingPolicy)
 
     public var errorDescription: String? {
         switch self {
@@ -10,6 +12,10 @@ public enum InferenceError: LocalizedError {
             "No local model is available. Download one, or allow cloud providers in settings."
         case .noProvider:
             "No model provider is available. Complete setup or add a provider."
+        case .unknownModel(let id):
+            "There is no model called '\(id)'."
+        case .notAllowedByPolicy(let model, _):
+            "'\(model)' would send data off this Mac, which the current privacy setting doesn't allow."
         }
     }
 }
@@ -67,16 +73,91 @@ public actor InferenceService {
     }
 
     /// Rough prompt size; ~2.5 characters per token is deliberately pessimistic for code.
-    static func estimateTokens(_ messages: [Message]) -> Int {
+    public static func estimateTokens(_ messages: [Message]) -> Int {
         Int(Double(messages.reduce(0) { $0 + $1.content.count }) / 2.5)
     }
+
+    // MARK: Models
+
+    /// `nil`, "", "auto" and "default" mean "let VibeCockpit choose"; anything else names a model.
+    public static func pin(for requested: String?) -> ProviderID? {
+        guard let r = requested?.trimmingCharacters(in: .whitespaces), !r.isEmpty else { return nil }
+        return ["auto", "default"].contains(r.lowercased()) ? nil : r
+    }
+
+    public struct ModelListing: Sendable, Equatable {
+        public let id: ProviderID
+        public let isLocal: Bool
+        public let capabilities: ProviderCapabilities
+        public let health: ProviderHealth
+    }
+
+    /// Everything registered, with current health (for `/v1/models` and the menu).
+    public func availableModels() async -> [ModelListing] {
+        var out: [ModelListing] = []
+        for p in await registry.allProviders {
+            out.append(ModelListing(id: p.id, isLocal: p.isLocal, capabilities: p.capabilities, health: await p.healthCheck()))
+        }
+        return out.sorted { ($0.isLocal ? 0 : 1, $0.id) < ($1.isLocal ? 0 : 1, $1.id) }
+    }
+
+    /// An explicitly requested model. Unknown ids are an error; a cloud model is refused when the
+    /// privacy setting is "Only on this Mac". No fallback: asking for a model by name means that model.
+    private func pinned(_ id: ProviderID, task: InferenceTask) async throws -> [any ModelProvider] {
+        guard let provider = await registry.provider(id: id),
+              provider.capabilities.contains(Router.requiredCapability(for: task)) else {
+            throw InferenceError.unknownModel(id)
+        }
+        if policy == .localOnly, !provider.isLocal {
+            throw InferenceError.notAllowedByPolicy(model: id, policy: policy)
+        }
+        return [provider]
+    }
+
+    // MARK: Embeddings
+
+    /// Embeddings from the best allowed provider (local first), falling back like `generate`.
+    public func embed(_ texts: [String], pin: ProviderID? = nil) async throws -> (vectors: [[Float]], provider: ProviderID) {
+        let candidates: [any ModelProvider]
+        if let pin {
+            candidates = try await pinned(pin, task: .embedding)
+        } else {
+            let plan = await registry.route(policy: policy, request: RoutingRequest(task: .embedding))
+            var list: [any ModelProvider] = []
+            for id in plan { if let p = await registry.provider(id: id) { list.append(p) } }
+            guard !list.isEmpty else { throw InferenceError.noProvider(policy) }
+            candidates = list
+        }
+        var lastError: Error?
+        for (index, provider) in candidates.enumerated() {
+            do { return (try await provider.embed(texts), provider.id) }
+            catch {
+                lastError = error
+                if error is CancellationError || index == candidates.count - 1 { throw error }
+            }
+        }
+        throw lastError ?? InferenceError.noProvider(policy)
+    }
+
+    // MARK: Generation
 
     public func generate(
         messages: [Message],
         tools: [ToolDefinition],
         options: GenerationOptions = GenerationOptions(),
-        priority: InferenceScheduler.Priority = .interactive
+        priority: InferenceScheduler.Priority = .interactive,
+        pin: ProviderID? = nil
     ) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        let candidates: [any ModelProvider]
+        if let pin {
+            candidates = try await pinned(pin, task: .textGeneration)
+        } else {
+            candidates = try await routedCandidates(messages: messages)
+        }
+        return stream(candidates, messages: messages, tools: tools, options: options, priority: priority)
+    }
+
+    private func routedCandidates(messages: [Message]) async throws -> [any ModelProvider] {
         let request = RoutingRequest(
             task: .textGeneration,
             estimatedTokens: Self.estimateTokens(messages),
@@ -87,11 +168,16 @@ public actor InferenceService {
             if let provider = await registry.provider(id: id) { candidates.append(provider) }
         }
         guard !candidates.isEmpty else { throw InferenceError.noProvider(policy) }
+        return candidates
+    }
 
+    private func stream(
+        _ providers: [any ModelProvider], messages: [Message], tools: [ToolDefinition],
+        options: GenerationOptions, priority: InferenceScheduler.Priority
+    ) -> AsyncThrowingStream<GenerationEvent, Error> {
         let scheduler = self.scheduler
         let notify = noticeHandler
         let logger = self.logger
-        let providers = candidates
 
         return AsyncThrowingStream { continuation in
             let task = Task {

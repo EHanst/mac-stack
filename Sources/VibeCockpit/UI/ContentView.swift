@@ -41,12 +41,24 @@ enum NavDestination: Hashable, CaseIterable {
 
 struct ContentView: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @Environment(AppServices.self) private var services
 
     var body: some View {
-        if coordinator.state.onboardingNeeded {
-            OnboardingView()
-        } else {
-            MainLayout()
+        Group {
+            if coordinator.state.onboardingNeeded {
+                OnboardingView()
+            } else {
+                MainLayout()
+            }
+        }
+        // Other apps asking to change files or run commands; answered before anything else.
+        .sheet(item: Binding(
+            get: { services.approvals.pending.first },
+            set: { _ in })
+        ) { request in
+            ApprovalSheet(request: request, waitingAfterThis: services.approvals.pending.count - 1) {
+                services.approvals.resolve(request.id, $0)
+            }
         }
     }
 }
@@ -267,6 +279,8 @@ struct SettingsView: View {
                 pageHeader
                 generationSection
                 startupSection
+                SharingCard()
+                ConnectCard()
                 indexingSection
                 aboutSection
             }
