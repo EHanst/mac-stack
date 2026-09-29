@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import MLX
 import MLXRandom
-import VibeCockpitCore
+import StackCore
 
 // vibe-bench — performance harness for the local model.
 //   swift run -c release VibeBench [--model DIR] [--contexts 512,4096] [--gen 128] [--runs 3]
@@ -21,6 +21,7 @@ struct Options {
     var matmul = true
     var sweep: [Int] = []
     var guardTest = false
+    var serviceTest = false
     var chunks = [512]
     var timeout = 300.0
     var gen = 128
@@ -36,6 +37,7 @@ struct Options {
             case "--warm-prefix": if let v = it.next(), let n = Int(v) { warmPrefix = max(0, n) }
             case "--no-matmul": matmul = false
             case "--guard-test": guardTest = true
+            case "--service-test": serviceTest = true
             case "--sweep": if let v = it.next() { sweep = v.split(separator: ",").compactMap { Int($0) } }
             case "--chunks": if let v = it.next() { chunks = v.split(separator: ",").compactMap { Int($0) } }
             case "--timeout": if let v = it.next(), let n = Double(v) { timeout = max(1, n) }
@@ -201,6 +203,9 @@ func modelDims(_ dir: URL) -> (hidden: Int, intermediate: Int, bits: Int, group:
     return (h, i, q["bits"] as? Int ?? 2, q["group_size"] as? Int ?? 128)
 }
 
+func userMessage(_ text: String) -> Message { Message(role: .user, content: text) }
+func generationOptions(_ maxTokens: Int) -> GenerationOptions { GenerationOptions(maxTokens: maxTokens, temperature: 0) }
+
 func run() async throws {
     setvbuf(stdout, nil, _IOLBF, 0)   // line-buffered so `> log` shows progress live
     let opts = Options(CommandLine.arguments)
@@ -255,6 +260,47 @@ func run() async throws {
         } catch {
             print("  refused in \(fmt(Date().timeIntervalSince(t0), 2)) s: \(error.localizedDescription)")
         }
+        print("")
+    }
+
+    // ── InferenceService on the real model: serialisation and cancellation ───────────
+    if opts.serviceTest {
+        print("[service test] routing through InferenceService (localOnly) with the real model")
+        let registry = ModelRegistry()
+        await registry.register(provider)
+        let service = InferenceService(registry: registry, policy: .localOnly)
+
+        // 1. Two concurrent requests must run one after the other.
+        let t0 = Date()
+        async let a: Double = {
+            for try await _ in try await service.generate(messages: [userMessage("Count from 1 to 5.")], tools: [], options: generationOptions(24)) {}
+            return Date().timeIntervalSince(t0)
+        }()
+        async let b: Double = {
+            for try await _ in try await service.generate(messages: [userMessage("Name three colours.")], tools: [], options: generationOptions(24)) {}
+            return Date().timeIntervalSince(t0)
+        }()
+        let (ta, tb) = try await (a, b)
+        let first = min(ta, tb), second = max(ta, tb)
+        print("  concurrent x2: first done at \(fmt(first, 1)) s, second at \(fmt(second, 1)) s  (serialised if second ≈ 2× first: ratio \(fmt(second / first, 2)))")
+
+        // 2. Cancel a long generation after its first token; the next request must not wait for it.
+        let longTask = Task { () -> Int in
+            var n = 0
+            for try await event in try await service.generate(
+                messages: [userMessage("Write a long story about a lighthouse.")], tools: [], options: generationOptions(600)) {
+                if case .token = event { n += 1; if n == 3 { throw CancellationError() } }
+            }
+            return n
+        }
+        _ = try? await longTask.value
+        let t1 = Date()
+        var firstTokenAfterCancel: Double?
+        for try await event in try await service.generate(
+            messages: [userMessage("Say hi.")], tools: [], options: generationOptions(8)) {
+            if case .token = event, firstTokenAfterCancel == nil { firstTokenAfterCancel = Date().timeIntervalSince(t1) }
+        }
+        print("  next request first token \(fmt(firstTokenAfterCancel ?? -1, 2)) s after cancelling a 600-token generation (≈55 s if the GPU had not been freed)")
         print("")
     }
 

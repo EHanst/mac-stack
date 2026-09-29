@@ -17,7 +17,9 @@ public final class AppServices {
 
     public let credentials = CredentialStore()
     public private(set) var workspaceName: String?
-    private let registry = ModelRegistry()
+    private let registry: ModelRegistry
+    /// All text generation goes through here: routing policy, GPU scheduling, fallback.
+    private let inference: InferenceService
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
     private var mcpService: MCPService?
@@ -28,7 +30,20 @@ public final class AppServices {
     private var ledger = PromptLedger()
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
-    public init() {}
+    public init() {
+        let registry = ModelRegistry()
+        self.registry = registry
+        let policy = UserDefaults.standard.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
+        self.inference = InferenceService(registry: registry, policy: policy)
+    }
+
+    private static let policyKey = "routingPolicy"
+
+    /// Local only / Local first / Cloud allowed. Persisted; takes effect on the next request.
+    public func setRoutingPolicy(_ policy: RoutingPolicy) async {
+        UserDefaults.standard.set(policy.rawValue, forKey: Self.policyKey)
+        await inference.setPolicy(policy)
+    }
 
     public var isMCPRunning: Bool {
         get async { await mcpService?.isRunning ?? false }
@@ -182,12 +197,6 @@ public final class AppServices {
     // MARK: - Inference
 
     public func processIntent(_ text: String, coordinator: AppCoordinator) async {
-        guard let provider = await registry.preferredProvider(for: .textGeneration) else {
-            coordinator.send(.generationFailed("No model provider configured. Complete onboarding first."))
-            coordinator.send(.generationFinished)
-            return
-        }
-
         coordinator.send(.generationStarted)
 
         let ragContext = await retrieveContext(for: text)
@@ -217,7 +226,7 @@ public final class AppServices {
         // (provider-reported, tokens → chars at a conservative 2.5 chars/token). Drops whole old
         // turns permanently so the prompt stays append-only afterwards.
         var charBudget = (GenerationOptions().maxTokens * 4 * 4) / 5
-        if let limit = await provider.maxContextTokens() {
+        if let limit = await inference.localContextLimit() {
             charBudget = min(charBudget, Int(Double(limit) * 2.5 * 0.9))
         }
         ledger.trim(toCharacterBudget: charBudget)
@@ -225,8 +234,9 @@ public final class AppServices {
         do {
             var continueLoop = true
             while continueLoop {
-                let stream = await provider.generate(
-                    messages: ledger.messages, tools: toolDefs, options: GenerationOptions())
+                let stream = try await inference.generate(
+                    messages: ledger.messages, tools: toolDefs, options: GenerationOptions(),
+                    priority: .interactive)
                 var pendingToolCalls: [ToolCall] = []
                 var assistantText = ""
                 do {
