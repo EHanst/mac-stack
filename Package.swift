@@ -74,6 +74,19 @@ let package = Package(
             ]
         ),
 
+        // Performance harness for the local model (see docs/plans/2026-09-28-next-phase-plan.md, M0).
+        .executableTarget(
+            name: "VibeBench",
+            dependencies: [
+                "VibeCockpitCore",
+                .product(name: "MLX", package: "mlx-swift"),
+            ],
+            path: "Sources/VibeBench",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete"]),
+            ]
+        ),
+
         .testTarget(
             name: "VibeCockpitTests",
             dependencies: ["VibeCockpitCore"],

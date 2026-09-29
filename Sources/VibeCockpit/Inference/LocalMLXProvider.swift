@@ -28,6 +28,8 @@ public actor LocalMLXProvider: ModelProvider {
 
     /// Cache state after the most recent prompt prefill, for prefix reuse across turns.
     private var promptSnapshot: PromptCacheSnapshot?
+    /// Timing and memory for the most recent request (read by the benchmark harness and diagnostics).
+    public private(set) var lastStats: GenerationStats?
     /// Bytes to wire in GPU memory while generating (weights + headroom).
     private var wiredBytes = 0
 
@@ -245,6 +247,11 @@ public actor LocalMLXProvider: ModelProvider {
         let decodeRate = Double(generated) / max(decodeSecs, 1e-6)
         let prefillRate = Double(prefilled) / max(prefillSecs, 1e-6)
         logger.info("prefill \(prefilled, privacy: .public) tok (+\(consumed, privacy: .public) cached) @ \(prefillRate, format: .fixed(precision: 1), privacy: .public) tok/s; decode \(generated, privacy: .public) tok @ \(decodeRate, format: .fixed(precision: 1), privacy: .public) tok/s")
+
+        lastStats = GenerationStats(
+            promptTokens: promptIds.count, cachedTokens: consumed,
+            prefillSeconds: prefillSecs, generatedTokens: generated,
+            decodeSeconds: decodeSecs, peakGPUBytes: Memory.peakMemory)
 
         continuation.yield(.finished(finish))
         continuation.finish()

@@ -88,3 +88,19 @@ struct StopSequenceFilter {
         return buffer
     }
 }
+
+/// Per-request performance record.
+public struct GenerationStats: Sendable, Codable, Equatable {
+    public let promptTokens: Int
+    /// Prompt tokens served from the prefix cache (not re-prefilled).
+    public let cachedTokens: Int
+    public let prefillSeconds: Double
+    public let generatedTokens: Int
+    public let decodeSeconds: Double
+    /// Peak MLX allocation since the last `Memory.peakMemory = 0`.
+    public let peakGPUBytes: Int
+
+    public var prefilledTokens: Int { promptTokens - cachedTokens }
+    public var prefillTokensPerSecond: Double { Double(prefilledTokens) / max(prefillSeconds, 1e-9) }
+    public var decodeTokensPerSecond: Double { Double(generatedTokens) / max(decodeSeconds, 1e-9) }
+}
