@@ -61,21 +61,21 @@ extension Color {
 // MARK: - Typography scale
 
 extension Font {
-    static let mtDisplayLarge   = Font.system(size: 57, weight: .regular, design: .rounded)
-    static let mtDisplayMedium  = Font.system(size: 45, weight: .regular, design: .rounded)
-    static let mtDisplaySmall   = Font.system(size: 36, weight: .regular, design: .rounded)
-    static let mtHeadlineLarge  = Font.system(size: 32, weight: .regular)
-    static let mtHeadlineMedium = Font.system(size: 28, weight: .regular)
-    static let mtHeadlineSmall  = Font.system(size: 24, weight: .regular)
-    static let mtTitleLarge     = Font.system(size: 22, weight: .regular)
-    static let mtTitleMedium    = Font.system(size: 16, weight: .medium)
-    static let mtTitleSmall     = Font.system(size: 14, weight: .medium)
-    static let mtBodyLarge      = Font.system(size: 16, weight: .regular)
-    static let mtBodyMedium     = Font.system(size: 14, weight: .regular)
-    static let mtBodySmall      = Font.system(size: 12, weight: .regular)
-    static let mtLabelLarge     = Font.system(size: 14, weight: .medium)
-    static let mtLabelMedium    = Font.system(size: 12, weight: .medium)
-    static let mtLabelSmall     = Font.system(size: 11, weight: .medium)
+    static var mtDisplayLarge: Font { AppTypography.font(size: 57, weight: .regular) }
+    static var mtDisplayMedium: Font { AppTypography.font(size: 45, weight: .regular) }
+    static var mtDisplaySmall: Font { AppTypography.font(size: 36, weight: .regular) }
+    static var mtHeadlineLarge: Font { AppTypography.font(size: 32, weight: .regular) }
+    static var mtHeadlineMedium: Font { AppTypography.font(size: 28, weight: .regular) }
+    static var mtHeadlineSmall: Font { AppTypography.font(size: 24, weight: .regular) }
+    static var mtTitleLarge: Font { AppTypography.font(size: 22, weight: .regular) }
+    static var mtTitleMedium: Font { AppTypography.font(size: 16, weight: .medium) }
+    static var mtTitleSmall: Font { AppTypography.font(size: 14, weight: .medium) }
+    static var mtBodyLarge: Font { AppTypography.font(size: 16, weight: .regular) }
+    static var mtBodyMedium: Font { AppTypography.font(size: 14, weight: .regular) }
+    static var mtBodySmall: Font { AppTypography.font(size: 12, weight: .regular) }
+    static var mtLabelLarge: Font { AppTypography.font(size: 14, weight: .medium) }
+    static var mtLabelMedium: Font { AppTypography.font(size: 12, weight: .medium) }
+    static var mtLabelSmall: Font { AppTypography.font(size: 11, weight: .medium) }
 }
 
 // MARK: - Shape & motion
