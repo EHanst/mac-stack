@@ -74,7 +74,7 @@ public enum Router {
         }
     }
 
-    static func requiredCapability(for task: InferenceTask) -> ProviderCapabilities {
+    public static func requiredCapability(for task: InferenceTask) -> ProviderCapabilities {
         switch task {
         case .textGeneration: .textGeneration
         case .embedding: .embedding

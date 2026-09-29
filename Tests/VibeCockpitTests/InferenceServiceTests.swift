@@ -67,6 +67,22 @@ private actor StubProvider: ModelProvider {
     func maxContextTokens() async -> Int? { contextLimit }
 }
 
+private actor EmbedStub: ModelProvider {
+    nonisolated let id: ProviderID
+    nonisolated let capabilities: ProviderCapabilities = [.embedding]
+    let fail: Bool
+    let value: Float
+    init(id: String, value: Float, fail: Bool = false) { self.id = id; self.value = value; self.fail = fail }
+    func generate(messages: [Message], tools: [ToolDefinition], options: GenerationOptions) -> AsyncThrowingStream<GenerationEvent, Error> {
+        AsyncThrowingStream { $0.finish(throwing: StubFailure()) }
+    }
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        if fail { throw StubFailure() }
+        return texts.map { _ in [value] }
+    }
+    func healthCheck() async -> ProviderHealth { .healthy }
+}
+
 @Suite("InferenceService")
 struct InferenceServiceTests {
 
@@ -210,5 +226,80 @@ struct InferenceServiceTests {
         #expect(Date().timeIntervalSince(started) < 0.2)           // well under the local request's 400 ms
         #expect(await shared.runningCount == 1)                    // local still running
         _ = try await slow.value
+    }
+
+    // MARK: Pinned models, listing, embeddings (used by the HTTP API)
+
+    @Test("a pinned model is used even when routing would prefer another; no fallback if it fails")
+    func pinned() async throws {
+        let probe = Probe()
+        let svc = await service([
+            StubProvider(id: "local:bonsai", behavior: .tokens(["local"]), probe: probe),
+            StubProvider(id: "openai", behavior: .failBeforeOutput, probe: probe),
+        ])
+        await #expect(throws: StubFailure.self) {
+            _ = try await self.collect(try await svc.generate(messages: self.msgs, tools: [], pin: "openai"))
+        }
+        #expect(await probe.calls == ["openai"])                       // asked for openai ⇒ never silently answered by local
+    }
+
+    @Test("an unknown model id is an error, not a silent reroute")
+    func unknownModel() async {
+        let svc = await service([StubProvider(id: "local:bonsai", behavior: .tokens(["x"]), probe: Probe())])
+        await #expect(throws: InferenceError.unknownModel("gpt-9")) { _ = try await svc.generate(messages: self.msgs, tools: [], pin: "gpt-9") }
+    }
+
+    @Test("Only-on-this-Mac refuses a pinned cloud model")
+    func pinnedCloudRefusedByPolicy() async {
+        let svc = await service([StubProvider(id: "openai", behavior: .tokens(["x"]), probe: Probe())], policy: .localOnly)
+        await #expect(throws: InferenceError.notAllowedByPolicy(model: "openai", policy: .localOnly)) {
+            _ = try await svc.generate(messages: self.msgs, tools: [], pin: "openai")
+        }
+    }
+
+    @Test("pinning an embedding-only model for chat is an unknown model")
+    func pinWrongCapability() async {
+        let registry = ModelRegistry()
+        await registry.register(EmbedStub(id: "local:embed", value: 1))
+        let svc = InferenceService(registry: registry)
+        await #expect(throws: InferenceError.unknownModel("local:embed")) { _ = try await svc.generate(messages: self.msgs, tools: [], pin: "local:embed") }
+    }
+
+    @Test("model listing shows local first, then cloud, with health and capabilities")
+    func listing() async throws {
+        let registry = ModelRegistry()
+        await registry.register(StubProvider(id: "openai", behavior: .tokens(["x"]), probe: Probe()))
+        await registry.register(StubProvider(id: "local:bonsai", behavior: .tokens(["x"]), probe: Probe(), health: .degraded("loading")))
+        await registry.register(EmbedStub(id: "local:embed", value: 1))
+        let list = await InferenceService(registry: registry).availableModels()
+        #expect(list.map(\.id) == ["local:bonsai", "local:embed", "openai"])
+        #expect(list[0].isLocal && list[0].health == .degraded("loading") && !list[2].isLocal)
+        #expect(list[1].capabilities == [.embedding])
+    }
+
+    @Test("embeddings use the local embedder first and fall back to cloud when it fails")
+    func embeddings() async throws {
+        let registry = ModelRegistry()
+        await registry.register(EmbedStub(id: "local:embed", value: 1))
+        await registry.register(EmbedStub(id: "cloud-embed", value: 2))
+        let ok = try await InferenceService(registry: registry).embed(["a", "b"])
+        #expect(ok.provider == "local:embed" && ok.vectors == [[1], [1]])
+
+        let registry2 = ModelRegistry()
+        await registry2.register(EmbedStub(id: "local:embed", value: 1, fail: true))
+        await registry2.register(EmbedStub(id: "cloud-embed", value: 2))
+        let fallback = try await InferenceService(registry: registry2).embed(["a"])
+        #expect(fallback.provider == "cloud-embed")
+        // Only on this Mac: the local failure is reported as it is; the cloud embedder is never tried.
+        await #expect(throws: StubFailure.self) { _ = try await InferenceService(registry: registry2, policy: .localOnly).embed(["a"]) }
+    }
+
+    @Test("a pinned embedding model is used as asked")
+    func pinnedEmbedding() async throws {
+        let registry = ModelRegistry()
+        await registry.register(EmbedStub(id: "local:embed", value: 1))
+        await registry.register(EmbedStub(id: "cloud-embed", value: 2))
+        let r = try await InferenceService(registry: registry).embed(["a"], pin: "cloud-embed")
+        #expect(r.provider == "cloud-embed")
     }
 }
