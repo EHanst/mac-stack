@@ -43,6 +43,8 @@ public actor InferenceService {
 
     private let registry: ModelRegistry
     private let scheduler: InferenceScheduler
+    private let gate: EgressGate?
+    private let governor: SystemGovernor?
     public private(set) var policy: RoutingPolicy
     private var noticeHandler: (@Sendable (RouteNotice) -> Void)?
     private let logger = Logger(subsystem: "com.vibecockpit", category: "InferenceService")
@@ -50,14 +52,21 @@ public actor InferenceService {
     public init(
         registry: ModelRegistry,
         scheduler: InferenceScheduler = InferenceScheduler(),
-        policy: RoutingPolicy = .localFirst
+        policy: RoutingPolicy = .localFirst,
+        gate: EgressGate? = nil,
+        governor: SystemGovernor? = nil
     ) {
+        self.gate = gate
+        self.governor = governor
         self.registry = registry
         self.scheduler = scheduler
         self.policy = policy
     }
 
-    public func setPolicy(_ policy: RoutingPolicy) { self.policy = policy }
+    public func setPolicy(_ policy: RoutingPolicy) {
+        self.policy = policy
+        if let gate { Task { await gate.setPolicy(policy) } }
+    }
 
     public func setNoticeHandler(_ handler: (@Sendable (RouteNotice) -> Void)?) {
         noticeHandler = handler
@@ -146,7 +155,8 @@ public actor InferenceService {
         tools: [ToolDefinition],
         options: GenerationOptions = GenerationOptions(),
         priority: InferenceScheduler.Priority = .interactive,
-        pin: ProviderID? = nil
+        pin: ProviderID? = nil,
+        onRoute: (@Sendable (RouteNotice) -> Void)? = nil
     ) async throws -> AsyncThrowingStream<GenerationEvent, Error> {
         let candidates: [any ModelProvider]
         if let pin {
@@ -154,29 +164,37 @@ public actor InferenceService {
         } else {
             candidates = try await routedCandidates(messages: messages)
         }
-        return stream(candidates, messages: messages, tools: tools, options: options, priority: priority)
+        return stream(candidates, messages: messages, tools: tools, options: options, priority: priority, onRoute: onRoute)
     }
 
     private func routedCandidates(messages: [Message]) async throws -> [any ModelProvider] {
         let request = RoutingRequest(
             task: .textGeneration,
             estimatedTokens: Self.estimateTokens(messages),
-            localContextLimit: await localContextLimit())
+            localContextLimit: await localContextLimit(),
+            underMemoryPressure: await governor?.current.isStrained ?? false)
         let plan = await registry.route(policy: policy, request: request)
         var candidates: [any ModelProvider] = []
         for id in plan {
             if let provider = await registry.provider(id: id) { candidates.append(provider) }
         }
-        guard !candidates.isEmpty else { throw InferenceError.noProvider(policy) }
+        guard !candidates.isEmpty else {
+            // Say *why* the cloud fallback wasn't used when the only thing in the way is the monthly limit.
+            if policy != .localOnly, let gate, let refusal = await gate.cloudAllowed() { throw refusal }
+            throw InferenceError.noProvider(policy)
+        }
         return candidates
     }
 
     private func stream(
         _ providers: [any ModelProvider], messages: [Message], tools: [ToolDefinition],
-        options: GenerationOptions, priority: InferenceScheduler.Priority
+        options: GenerationOptions, priority: InferenceScheduler.Priority,
+        onRoute: (@Sendable (RouteNotice) -> Void)?
     ) -> AsyncThrowingStream<GenerationEvent, Error> {
         let scheduler = self.scheduler
-        let notify = noticeHandler
+        let gate = self.gate
+        let global = noticeHandler
+        let notify: @Sendable (RouteNotice) -> Void = { global?($0); onRoute?($0) }
         let logger = self.logger
 
         return AsyncThrowingStream { continuation in
@@ -185,14 +203,16 @@ public actor InferenceService {
                 for (index, provider) in providers.enumerated() {
                     if let failed {
                         logger.notice("falling back from \(failed.id, privacy: .public) to \(provider.id, privacy: .public): \(failed.error.localizedDescription, privacy: .public)")
-                        notify?(RouteNotice(kind: .fellBack(
+                        notify(RouteNotice(kind: .fellBack(
                             from: failed.id, to: provider.id, reason: failed.error.localizedDescription)))
                     } else {
-                        notify?(RouteNotice(kind: .using(provider.id)))
+                        notify(RouteNotice(kind: .using(provider.id)))
                     }
 
                     var produced = false
                     do {
+                        // A cloud provider is skipped (with the reason) when the monthly limit is used up.
+                        if !provider.isLocal, let gate, let refusal = await gate.cloudAllowed() { throw refusal }
                         let inner: AsyncThrowingStream<GenerationEvent, Error>
                         if provider.isLocal {
                             inner = scheduler.stream(priority: priority) {
@@ -201,9 +221,18 @@ public actor InferenceService {
                         } else {
                             inner = await provider.generate(messages: messages, tools: tools, options: options)
                         }
+                        var completionChars = 0
+                        var reported: GenerationUsage?
                         for try await event in inner {
                             produced = true
+                            if case .token(let t) = event { completionChars += t.count }
+                            if case .usage(let u) = event { reported = u }
                             continuation.yield(event)
+                        }
+                        if !provider.isLocal, let gate {
+                            let used = reported.map { $0.promptTokens + $0.completionTokens }
+                                ?? Self.estimateTokens(messages) + max(1, completionChars / 3)
+                            await gate.recordCloudTokens(used)
                         }
                         continuation.finish()
                         return

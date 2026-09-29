@@ -64,7 +64,7 @@ public struct AppState: Sendable {
 
 public struct IntentEvent: Sendable, Identifiable {
     public enum Kind: Sendable {
-        case userPrompt, assistantToken, toolCall, toolResult, error
+        case userPrompt, assistantToken, toolCall, toolResult, error, notice
     }
     public let id: UUID = UUID()
     public let kind: Kind
@@ -100,6 +100,7 @@ public final class AppCoordinator {
         case generationStarted
         case generationFinished
         case generationFailed(String)
+        case noticeShown(String)                    // e.g. "answered from the cloud because …"
         case onboardingRequired
         case onboardingCompleted
         // Model management
@@ -184,6 +185,9 @@ public final class AppCoordinator {
 
         case .generationFailed(let reason):
             next.intentHistory.append(IntentEvent(kind: .error, content: reason))
+
+        case .noticeShown(let text):
+            next.intentHistory.append(IntentEvent(kind: .notice, content: text))
 
         case .onboardingRequired:
             next.onboardingNeeded = true

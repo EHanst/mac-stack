@@ -79,8 +79,10 @@ public struct StackAPIServer: Sendable {
 
     // MARK: Helpers
 
-    private static func json(_ body: String, status: HTTPResponse.Status = .ok) -> Response {
-        Response(status: status, headers: [.contentType: "application/json"], body: .init(byteBuffer: .init(string: body)))
+    private static func json(_ body: String, status: HTTPResponse.Status = .ok, headers extra: HTTPFields = [:]) -> Response {
+        var headers = extra
+        headers[.contentType] = "application/json"
+        return Response(status: status, headers: headers, body: .init(byteBuffer: .init(string: body)))
     }
 
     private func body<T: Decodable>(_ type: T.Type, from request: Request) async throws -> T {
@@ -125,13 +127,15 @@ public struct StackAPIServer: Sendable {
                 param: "tools", code: "tools_unsupported")
         }
 
+        let route = RouteTracker()
         let events = try await inference.generate(
-            messages: gen.messages, tools: [], options: gen.options, priority: .api, pin: pin)
+            messages: gen.messages, tools: [], options: gen.options, priority: .api, pin: pin,
+            onRoute: { route.record($0) })
         let builder = ChatCompletionBuilder(model: gen.requestedModel ?? "vibecockpit")
         let promptEstimate = max(1, InferenceService.estimateTokens(gen.messages))
 
         if gen.stream {
-            return streamingResponse(events: events, builder: builder, includeUsage: gen.includeUsage, promptEstimate: promptEstimate)
+            return streamingResponse(events: events, builder: builder, includeUsage: gen.includeUsage, promptEstimate: promptEstimate, route: route)
         }
 
         // Non-streaming: collect the whole answer.
@@ -147,7 +151,10 @@ public struct StackAPIServer: Sendable {
             }
         }
         let u = usage ?? GenerationUsage(promptTokens: promptEstimate, completionTokens: max(1, text.count / 3))
-        return Self.json(builder.response(text: text, finish: finish, usage: u))
+        var headers = HTTPFields()
+        if let served = route.servedBy { headers[HTTPField.Name("X-VibeCockpit-Served-By")!] = served }
+        if let from = route.fellBackFrom { headers[HTTPField.Name("X-VibeCockpit-Fallback-From")!] = from }
+        return Self.json(builder.answered(by: route.servedBy ?? builder.model).response(text: text, finish: finish, usage: u), headers: headers)
     }
 
     // MARK: Streaming
@@ -160,7 +167,7 @@ public struct StackAPIServer: Sendable {
     }
 
     private func streamingResponse(
-        events: AsyncThrowingStream<GenerationEvent, Error>, builder: ChatCompletionBuilder, includeUsage: Bool, promptEstimate: Int
+        events: AsyncThrowingStream<GenerationEvent, Error>, builder: ChatCompletionBuilder, includeUsage: Bool, promptEstimate: Int, route: RouteTracker
     ) -> Response {
         let keepAlive = configuration.keepAlive
         let headers: HTTPFields = [
@@ -205,7 +212,7 @@ public struct StackAPIServer: Sendable {
                     try await send(": keep-alive\n\n")
                 case .event(.token(let t)):
                     text += t
-                    try await send(builder.streamDelta(t))
+                    try await send(builder.answered(by: route.servedBy ?? builder.model).streamDelta(t))
                 case .event(.usage(let u)): usage = u
                 case .event(.finished(let f)): finish = f
                 case .event(.toolCall): break
@@ -214,7 +221,7 @@ public struct StackAPIServer: Sendable {
                     try await writer.finish(nil)
                     return
                 case .end:
-                    try await send(builder.streamEnd(finish: finish, usage: usage ?? GenerationUsage(promptTokens: promptEstimate, completionTokens: max(1, text.count / 3)), includeUsage: includeUsage))
+                    try await send(builder.answered(by: route.servedBy ?? builder.model).streamEnd(finish: finish, usage: usage ?? GenerationUsage(promptTokens: promptEstimate, completionTokens: max(1, text.count / 3)), includeUsage: includeUsage))
                     try await writer.finish(nil)
                     return
                 }
@@ -222,4 +229,21 @@ public struct StackAPIServer: Sendable {
             try await writer.finish(nil)
         })
     }
+}
+
+/// Which model actually answered (it can differ from the one asked for after a fallback).
+final class RouteTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var used: String?
+    private var from: String?
+    func record(_ notice: RouteNotice) {
+        lock.withLock {
+            switch notice.kind {
+            case .using(let id): used = id
+            case .fellBack(let f, let to, _): from = f; used = to
+            }
+        }
+    }
+    var servedBy: String? { lock.withLock { used } }
+    var fellBackFrom: String? { lock.withLock { from } }
 }
