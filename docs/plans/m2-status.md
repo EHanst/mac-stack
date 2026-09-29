@@ -12,9 +12,9 @@ Decisions in force: API is **opt-in, 127.0.0.1 only, per-client bearer tokens, o
 
 ## Queue
 1. [x] **M2.1 `ClientRegistry`** — DONE (`StackCore/Security/ClientRegistry.swift`, 11 tests) — clients, scoped bearer tokens (`vc_…`, shown once, stored hashed), revoke, persistence 0600, last-used. Tests.
-2. [ ] **M2.2 OpenAI-compatible translation** (pure): request JSON → `[Message]`/options; `GenerationEvent` → SSE chunks / full response; errors in OpenAI shape; usage. Tests.
-3. [ ] **M2.3 `StackHTTP` server** (Hummingbird): loopback bind, Bearer auth, Host/Origin checks (DNS-rebinding), `/v1/models`, `/v1/chat/completions` (stream + non-stream), `/v1/embeddings`, `/healthz`. Integration tests over a real loopback socket with stub providers.
-4. [ ] **M2.4 `InferenceService`**: pin a provider by `model` id, `.api` priority, token usage.
+2. [x] **M2.2 OpenAI-compatible translation** — DONE (`StackHTTP/OpenAI/*`, `OpenAICompatTests`): request JSON → `[Message]`/options; `GenerationEvent` → SSE chunks / full response; errors in OpenAI shape; usage.
+3. [x] **M2.3 `StackHTTP` server** — DONE (`StackHTTP/Server/*`, `StackAPIServerTests`, 18 tests over a live loopback socket with stub providers): loopback bind, Bearer auth + scopes, Host/Origin checks (DNS-rebinding), `/v1/models`, `/v1/chat/completions` (stream + non-stream, keep-alives), `/v1/embeddings`, `/healthz`, OpenAI-shaped 404/4xx/5xx.
+4. [x] **M2.4 `InferenceService`** — DONE (in `InferenceServiceTests`): pin a provider by `model` id (no fallback; cloud refused under "Only on this Mac"), `.api` priority, token usage, embedding routing.
 5. [ ] **M2.5 Real-model verification**: streaming completion via HTTP with sensible text; concurrent UI + API requests; cancel on client disconnect frees the GPU.
 6. [ ] **M2.6 App wiring + UI**: server lifecycle in `AppServices`, Settings "Share with other apps" (off by default), clients list with create/revoke, token shown once.
 7. [ ] **M2.7 MCP v2**: multi-client Unix socket, Streamable HTTP (SDK transport + bearer/origin validators), `chat`/`embed`/`list_models` tools, workspace-less mode, `vibe-mcp` stdio shim replacing `socat`.
@@ -29,3 +29,4 @@ Decisions in force: API is **opt-in, 127.0.0.1 only, per-client bearer tokens, o
 
 ## Done
 - **M2.1** tokens `vc_` + 43 base64url chars (256 random bits), shown once; only the SHA-256 is stored; revoke is immediate and persisted; per-client scopes (new clients: models/chat/embeddings only — no file access); "last used" kept in memory and flushed ≤ once/minute; file store is atomic, 0600, no plaintext token anywhere (tested).
+- **M2.2–M2.4** Full suite 276 passing. Server verified against stub providers only: streaming shape (role → deltas → finish → optional usage → `[DONE]`), keep-alive comments during a slow first token, 401/403/421 (bad `Host`)/403 (`Origin`), tools refused for local/unpinned models but allowed for a named cloud model, pinned model used exactly (unknown → 404, blocked by privacy switch → 403), embeddings, and **client disconnect terminates the provider stream**. Not yet verified on the real model (M2.5). Test client hits `localhost`, which the live test server binds as `::1`; the app binds `127.0.0.1`.

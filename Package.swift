@@ -152,7 +152,10 @@ let package = Package(
 
         .testTarget(
             name: "VibeCockpitTests",
-            dependencies: ["VibeCockpitCore", "StackCore", "StackMCP", "StackHTTP"],
+            dependencies: [
+                "VibeCockpitCore", "StackCore", "StackMCP", "StackHTTP",
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
+            ],
             path: "Tests/VibeCockpitTests"
         ),
     ]

@@ -73,7 +73,7 @@ public actor InferenceService {
     }
 
     /// Rough prompt size; ~2.5 characters per token is deliberately pessimistic for code.
-    static func estimateTokens(_ messages: [Message]) -> Int {
+    public static func estimateTokens(_ messages: [Message]) -> Int {
         Int(Double(messages.reduce(0) { $0 + $1.content.count }) / 2.5)
     }
 
