@@ -86,9 +86,10 @@ User-pinned messages are never elided or summarized.
 |---|---|
 | A | Done. `CompactionPlanner` (`Sources/StackCore/Inference/CompactionPlanner.swift`) with 10 tests. |
 | B | Mostly done. `PromptLedger.elide` and the send-path call in `AppServices` (runs before `trim`, only when the local memory ceiling applies, posts a chat notice). Notice uses its own icon; undo was cut (see §8). **Left:** pinning has no UI yet, so `isPinned` is always false. Tool output is treated as untrusted. |
-| C | Not started. Summarization stays off (`allowSummarize: false`) until the quality gate passes. |
-| D | Done analytically (§10); `VibeBench` not run, since the cost follows from the measured 83 tok/s prefill. Thresholds: trigger 78%, target 35%. |
-| E | Not started. |
+| C | Done, with a deterministic gate instead of a measured one. `CompactionSummarizer` (`StackCore`) builds the request (tool output fenced as untrusted, no tools offered), **extracts file paths and error lines by code and appends them verbatim**, and rejects empty, tiny or over-budget summaries. `PromptLedger.summarize` swaps the run for one assistant message only if the ledger is unchanged. `AppServices.scheduleSummaryCompaction` runs it after a turn, pinned to the local model at background priority; the next send cancels it. Only the narrative depends on the 2-bit model; paths and errors cannot be lost. **Not measured:** how good the narrative is on the real model, and whether the background prefill evicts the chat's prefix snapshot. |
+| D | Done analytically (§10). Thresholds: trigger 78%, target 35%. |
+| E | Done by construction. `localContextLimit()` already reads `SystemMemory.availableBytes()` on every call, so memory pressure lowers the ceiling and the planner tightens with it. Cloud-only chats (no local provider) never compact. Compaction is not disabled for a turn the Router sends to the cloud while a local model exists; that is harmless (it only shrinks history). |
+| Pinning | Deferred. `Item.isPinned` is honored by the planner but nothing sets it; no UI. |
 
 Note: `trim` (drop whole old turns at 80% of the character budget) still runs after elision and remains the last resort before the Router falls back to cloud.
 

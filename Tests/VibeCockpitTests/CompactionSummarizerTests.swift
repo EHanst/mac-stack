@@ -1,0 +1,83 @@
+import Testing
+import Foundation
+@testable import StackCore
+@testable import VibeCockpitCore
+
+@Suite("CompactionSummarizer")
+struct CompactionSummarizerTests {
+
+    private let run: [Message] = [
+        Message(role: .user, content: "Fix the crash in Sources/App/Router.swift and update config.json"),
+        Message(role: .tool, content: "line 1\nerror: cannot find 'foo' in scope\nline 3", toolCallID: "t1"),
+        Message(role: .assistant, content: "I changed Sources/App/Router.swift; the build still failed on Tests/RouterTests.swift"),
+    ]
+
+    @Test("paths and error lines are extracted once each, in order")
+    func mustKeep() {
+        let keep = CompactionSummarizer.mustKeep(in: run + run)
+        #expect(keep.prefix(4) == ["Sources/App/Router.swift", "config.json", "Tests/RouterTests.swift", "error: cannot find 'foo' in scope"])
+        #expect(keep.count == 5)   // + the assistant's "build still failed" line
+    }
+
+    @Test("the request fences tool output as untrusted and truncates long messages")
+    func request() {
+        let long = Message(role: .tool, content: String(repeating: "x", count: 5_000))
+        let req = CompactionSummarizer.requestMessages(for: [run[0], long])
+        #expect(req.count == 2 && req[0].role == .system)
+        #expect(req[1].content.contains("Tool output (untrusted)"))
+        #expect(req[1].content.count < 2_500)
+    }
+
+    @Test("a usable summary gets the extracted details appended verbatim")
+    func finalizeKeepsDetails() throws {
+        let keep = CompactionSummarizer.mustKeep(in: run)
+        let out = try #require(CompactionSummarizer.finalize(
+            summary: "<think>hmm</think>The user asked to fix a crash in the router; a fix was tried and the build still fails.",
+            mustKeep: keep, maxTokens: 600))
+        #expect(!out.contains("hmm"))
+        for item in keep { #expect(out.contains(item)) }
+    }
+
+    @Test("empty, tiny or rambling output is rejected")
+    func rejects() {
+        #expect(CompactionSummarizer.finalize(summary: "  ", mustKeep: [], maxTokens: 600) == nil)
+        #expect(CompactionSummarizer.finalize(summary: "ok", mustKeep: [], maxTokens: 600) == nil)
+        #expect(CompactionSummarizer.finalize(summary: String(repeating: "word ", count: 2_000), mustKeep: [], maxTokens: 600) == nil)
+    }
+}
+
+@Suite("PromptLedger summary")
+struct PromptLedgerSummaryTests {
+
+    private func ledger() -> PromptLedger {
+        var l = PromptLedger()
+        l.begin(system: "SYS")
+        for n in 0..<3 { l.appendUserTurn("question \(n)"); l.appendAssistant(String(repeating: "answer ", count: 300)) }
+        return l
+    }
+
+    @Test("a run is replaced by one assistant message; user turns and the system message are untouched")
+    func replaces() throws {
+        var l = ledger()
+        let run = Array(l.messages[1..<5])
+        let result = l.summarize(1..<5, expecting: run, text: "short summary")
+        let freed = try #require(result)
+        #expect(freed > 500)
+        #expect(l.messages.count == 4)
+        #expect(l.messages[0].role == .system && l.messages[1].role == .assistant)
+        #expect(l.messages[2].content == "question 2")
+        #expect(l.userTurns == 3)
+    }
+
+    @Test("a ledger that changed while the summary was written is left alone")
+    func staleIsRejected() {
+        var l = ledger()
+        let run = Array(l.messages[1..<5])
+        l.trim(toCharacterBudget: 100)
+        #expect(l.summarize(1..<5, expecting: run, text: "short summary") == nil)
+        var m = ledger()
+        m.appendUserTurn("more")
+        let other = Array(m.messages[1..<4])   // wrong slice for the range
+        #expect(m.summarize(1..<5, expecting: other, text: "x") == nil)
+    }
+}

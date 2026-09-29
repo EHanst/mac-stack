@@ -43,6 +43,8 @@ public final class AppServices {
     /// Exactly what has been sent to the model this session; append-only so the local model's
     /// prefix cache stays valid across tool-loop turns and follow-up messages.
     private var ledger = PromptLedger()
+    /// A summary being written in the background after a turn; cancelled when the next send starts.
+    private var compactionTask: Task<Void, Never>?
     /// Outside content (web pages, search results) seen in this conversation; see `ToolCallGuard`.
     private let untrusted = UntrustedContext()
     private let toolGuard: ToolCallGuard
@@ -356,6 +358,8 @@ public final class AppServices {
     // MARK: - Inference
 
     public func processIntent(_ text: String, coordinator: AppCoordinator, intent intentOverride: PromptEngineer.Intent? = nil) async {
+        compactionTask?.cancel()
+        compactionTask = nil
         coordinator.send(.generationStarted)
 
         let composed = await composeUserTurn(text, intentOverride: intentOverride)
@@ -448,6 +452,37 @@ public final class AppServices {
 
         coordinator.send(.generationFinished)
         await diagnostics.reload()
+        await scheduleSummaryCompaction(coordinator: coordinator)
+    }
+
+    /// If clearing tool output wasn't enough, summarize the oldest turns on the local model while
+    /// the chat is idle. The next send cancels it, so it never delays a message. Runs only on this
+    /// Mac (nothing leaves it) and only when the local memory ceiling is what limits the chat.
+    private func scheduleSummaryCompaction(coordinator: AppCoordinator) async {
+        guard let limit = await inference.localContextLimit(),
+              let localID = await inference.localTextProviderID() else { return }
+        let planner = CompactionPlanner(allowSummarize: true)
+        let plan = planner.plan(items: ledger.compactionItems(), maxPromptTokens: min(limit, Self.contextTokenBudget))
+        guard let range = plan.summarize else { return }
+        let run = Array(ledger.messages[range])
+        let keep = CompactionSummarizer.mustKeep(in: run)
+        let inference = self.inference
+        let budget = planner.summaryTokens
+        compactionTask = Task { [weak self] in
+            var text = ""
+            do {
+                let stream = try await inference.generate(
+                    messages: CompactionSummarizer.requestMessages(for: run), tools: [],
+                    options: GenerationOptions(maxTokens: 700), priority: .background, pin: localID)
+                for try await event in stream {
+                    if case .token(let t) = event { text += t }
+                }
+            } catch { return }   // cancelled or failed: leave the chat as it is
+            guard !Task.isCancelled, let self,
+                  let summary = CompactionSummarizer.finalize(summary: text, mustKeep: keep, maxTokens: budget),
+                  let freed = self.ledger.summarize(range, expecting: run, text: summary) else { return }
+            coordinator.send(.noticeShown("Summarized \(run.count) earlier messages to make room (about \(freed) tokens). The full text stays visible here.", symbol: "text.append"))
+        }
     }
 
     /// What a rewrite done by a model on this Mac continues from: this conversation's prompt as the

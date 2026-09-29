@@ -92,4 +92,19 @@ public struct PromptLedger: Sendable {
         }
         return freed
     }
+
+    /// Replace `range` with one summary message, only if it still holds exactly `expected` (the
+    /// ledger may have grown or been trimmed while the summary was written). The summary is an
+    /// assistant message so the system message stays first and `userTurns` stays in step with the
+    /// visible chat. Returns the tokens freed, or nil if the ledger changed.
+    @discardableResult
+    public mutating func summarize(_ range: Range<Int>, expecting expected: [Message], text: String) -> Int? {
+        guard range.lowerBound >= 1, range.upperBound <= messages.count, range.count == expected.count,
+              zip(messages[range], expected).allSatisfy({ $0.role == $1.role && $0.content == $1.content && $0.toolCallID == $1.toolCallID })
+        else { return nil }
+        let summary = Message(role: .assistant, content: text)
+        let freed = InferenceService.estimateTokens(Array(messages[range])) - InferenceService.estimateTokens([summary])
+        messages.replaceSubrange(range, with: [summary])
+        return freed
+    }
 }

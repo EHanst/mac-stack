@@ -75,6 +75,11 @@ public actor InferenceService {
         noticeHandler = handler
     }
 
+    /// The first local text-generation provider, for work that must stay on this Mac.
+    public func localTextProviderID() async -> ProviderID? {
+        await registry.allProviders(with: .textGeneration).first(where: { $0.isLocal })?.id
+    }
+
     /// Smallest prompt limit among local generation providers (nil if none report one).
     public func localContextLimit() async -> Int? {
         var limits: [Int] = []
