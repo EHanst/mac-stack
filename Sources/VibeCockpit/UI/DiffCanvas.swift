@@ -149,7 +149,6 @@ private struct MaterialHunkCard: View {
         }
         .background(Color.mtSurface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .mtElevation(1)
     }
 
     private var fileHeader: some View {
@@ -245,8 +244,8 @@ private struct DiffLineRow: View {
 
     private var lineColor: Color {
         switch line.origin {
-        case .added:   return Color(red: 0.04, green: 0.36, blue: 0.12)
-        case .deleted: return Color(red: 0.44, green: 0.04, blue: 0.05)
+        case .added:   return Palette.onSuccessFill
+        case .deleted: return Palette.onDangerFill
         case .context: return Color.mtOnSurface
         }
     }

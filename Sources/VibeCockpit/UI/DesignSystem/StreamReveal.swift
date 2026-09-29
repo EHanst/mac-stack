@@ -1,0 +1,104 @@
+#if canImport(AppKit)
+#if SWIFT_PACKAGE
+import VibeCockpitCore
+#endif
+import SwiftUI
+
+/// Draws each glyph at the opacity `RevealCurve` gives it for the cursor position. Text keeps its
+/// final layout the whole time, so nothing reflows; only glyph opacity changes. Fading a glyph
+/// in over the surface behind it is the same as blending from that surface's color to the text
+/// color, in light and dark alike.
+struct RevealRenderer: TextRenderer, Animatable {
+    var position: Double
+    var edge: Double
+
+    var animatableData: Double {
+        get { position }
+        set { position = newValue }
+    }
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        var index = 0.0
+        for line in layout {
+            for run in line {
+                for glyph in run {
+                    let alpha = RevealCurve.opacity(position: position, index: index, edge: edge)
+                    index += 1
+                    guard alpha > 0 else { continue }
+                    var glyphContext = context
+                    glyphContext.opacity = alpha
+                    glyphContext.draw(glyph)
+                }
+            }
+        }
+    }
+}
+
+/// Owns the reveal cursor and steps it once a frame while there is something left to show.
+@MainActor @Observable
+final class RevealDriver {
+    private(set) var position: Double
+    private(set) var edge: Double = RevealPacer.edgeRange.lowerBound
+    var count: Int
+    var live: Bool
+    private var pacer: RevealPacer
+    private let showAll: Bool
+
+    /// `startRevealed`: finished text (history) is shown at once and never animates.
+    init(count: Int, live: Bool) {
+        self.count = count
+        self.live = live
+        showAll = !live
+        pacer = RevealPacer(position: live ? 0 : .greatestFiniteMagnitude)
+        position = live ? 0 : .greatestFiniteMagnitude
+    }
+
+    private var target: Double { live ? Double(count) : pacer.finishTarget(count: count) }
+    var isSettled: Bool { !live && (showAll || pacer.position >= target) }
+
+    func run() async {
+        guard !showAll else { return }
+        let clock = ContinuousClock()
+        var last = clock.now
+        while !Task.isCancelled {
+            if isSettled { return }
+            try? await clock.sleep(for: .milliseconds(8))
+            let now = clock.now
+            let dt = (now - last) / .seconds(1)
+            last = now
+            pacer.advance(dt: dt, target: target, streaming: live)
+            position = pacer.position
+            edge = pacer.edgeWidth
+        }
+    }
+}
+
+/// Streamed reply text: fades in glyph by glyph, left to right, at a steady, snappy pace.
+/// `live` is true while the model is still producing this reply; when it turns false the tail
+/// finishes quickly. Completed text (`live` false from the start) is shown plainly.
+struct StreamRevealText: View {
+    let text: String
+    let live: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var driver: RevealDriver
+
+    init(_ text: String, live: Bool) {
+        self.text = text
+        self.live = live
+        _driver = State(initialValue: RevealDriver(count: text.count, live: live))
+    }
+
+    var body: some View {
+        Group {
+            if reduceMotion || driver.isSettled {
+                Text(text)
+            } else {
+                Text(text).textRenderer(RevealRenderer(position: driver.position, edge: driver.edge))
+            }
+        }
+        .onChange(of: text) { driver.count = text.count }
+        .onChange(of: live) { driver.live = live }
+        .task(id: live) { await driver.run() }
+    }
+}
+#endif

@@ -72,15 +72,18 @@ struct MainLayout: View {
     @Environment(AppCoordinator.self) private var coordinator
     @State private var selectedDestination: NavDestination = .chat
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    /// Re-identifies the panels when the font changes so every `Font.mt*` is re-read.
+    @AppStorage(AppFont.storageKey) private var fontChoice = AppFont.default.rawValue
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebar
+            sidebar.id(fontChoice)
         } content: {
             contentPanel
+                .id(fontChoice)
                 .navigationSplitViewColumnWidth(min: 360, ideal: 440, max: 640)
         } detail: {
-            detailPanel
+            detailPanel.id(fontChoice)
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
@@ -277,11 +280,14 @@ struct SettingsView: View {
     @Environment(LoginItemModel.self) private var loginItem
     @Environment(UpdatesModel.self) private var updates
     @State private var workspacePath: String = ""
+    @AppStorage(AppTheme.storageKey) private var themeChoice = AppTheme.default.rawValue
+    @AppStorage(AppFont.storageKey) private var fontChoice = AppFont.default.rawValue
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 pageHeader
+                appearanceSection
                 generationSection
                 startupSection
                 AssistantCard()
@@ -307,6 +313,41 @@ struct SettingsView: View {
             Text("Configure VibeCockpit's inference, indexing and workspace behaviour.")
                 .font(.mtBodyMedium)
                 .foregroundStyle(Color.mtOnSurfaceVariant)
+        }
+    }
+
+    private var appearanceSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                Label("Appearance", systemImage: "circle.lefthalf.filled")
+                    .font(.mtTitleSmall)
+                    .foregroundStyle(Color.mtOnSurface)
+                MTDivider()
+                Picker("Theme", selection: $themeChoice) {
+                    ForEach(AppTheme.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                Text("System follows your Mac's Light or Dark setting as it changes.")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+                MTDivider()
+                HStack {
+                    Text("Font").font(.mtLabelLarge).foregroundStyle(Color.mtOnSurface)
+                    Spacer()
+                    Picker("Font", selection: $fontChoice) {
+                        ForEach(AppFont.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Text("The quick brown fox jumps over the lazy dog. 0123456789")
+                    .font(AppTypography.font(AppFont(stored: fontChoice), size: 14, weight: .regular))
+                    .foregroundStyle(Color.mtOnSurface)
+                Text("Code and diffs always use a monospaced font.")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+            }
         }
     }
 

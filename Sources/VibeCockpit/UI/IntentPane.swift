@@ -386,8 +386,14 @@ struct IntentPane: View {
 // MARK: - Intent event bubble
 
 private struct IntentEventBubble: View {
+    @Environment(AppCoordinator.self) private var coordinator
     let event: IntentEvent
     var onSave: (String) -> Void = { _ in }
+
+    /// True while this is the reply the model is still writing.
+    private var isLive: Bool {
+        coordinator.state.isGenerating && coordinator.state.intentHistory.last?.id == event.id
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -455,7 +461,7 @@ private struct IntentEventBubble: View {
             EmptyView()
 
         case .assistantToken:
-            Text(event.content)
+            StreamRevealText(event.content, live: isLive)
                 .font(.mtBodyMedium)
                 .foregroundStyle(Color.mtOnSurface)
 
@@ -516,7 +522,7 @@ private struct IntentEventBubble: View {
         case .userPrompt:     Color.mtPrimary
         case .assistantToken: Color.mtPrimaryContainer
         case .toolCall:       Color.mtTertiaryContainer
-        case .toolResult:     Color(red: 0.78, green: 0.95, blue: 0.82)
+        case .toolResult:     Palette.successFill
         case .error:          Color.mtErrorContainer
         case .notice:         Color.mtSurfaceContainerHighest
         }

@@ -86,7 +86,6 @@ struct MCPToolsView: View {
             }
             .background(Color.mtSurface)
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .mtElevation(1)
             .padding(16)
         }
     }
@@ -159,8 +158,8 @@ struct MCPToolsView: View {
         case "Retrieval": return Color.mtPrimaryContainer
         case "Indexing":  return Color.mtSecondaryContainer
         case "Files":     return Color.mtTertiaryContainer
-        case "Build":     return Color(red: 1.0, green: 0.92, blue: 0.78)
-        case "Git":       return Color(red: 0.78, green: 0.95, blue: 0.82)
+        case "Build":     return Palette.warningFill
+        case "Git":       return Palette.successFill
         default:          return Color.mtSurfaceVariant
         }
     }
@@ -170,8 +169,8 @@ struct MCPToolsView: View {
         case "Retrieval": return Color.mtOnPrimaryContainer
         case "Indexing":  return Color.mtOnSecondaryContainer
         case "Files":     return Color.mtOnTertiaryContainer
-        case "Build":     return Color(red: 0.50, green: 0.30, blue: 0.00)
-        case "Git":       return Color(red: 0.04, green: 0.40, blue: 0.14)
+        case "Build":     return Palette.onWarningFill
+        case "Git":       return Palette.onSuccessFill
         default:          return Color.mtOnSurfaceVariant
         }
     }

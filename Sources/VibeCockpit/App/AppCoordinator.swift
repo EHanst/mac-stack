@@ -66,13 +66,16 @@ public struct IntentEvent: Sendable, Identifiable {
     public enum Kind: Sendable {
         case userPrompt, assistantToken, toolCall, toolResult, error, notice
     }
-    public let id: UUID = UUID()
+    public let id: UUID
     public let kind: Kind
     public let content: String
     public let toolCallID: String?
     public let timestamp: Date = Date()
 
-    public init(kind: Kind, content: String, toolCallID: String? = nil) {
+    /// `id` is kept when a streamed reply grows, so the view showing it keeps its identity
+    /// (and its reveal animation) instead of restarting on every token.
+    public init(id: UUID = UUID(), kind: Kind, content: String, toolCallID: String? = nil) {
+        self.id = id
         self.kind = kind
         self.content = content
         self.toolCallID = toolCallID
@@ -138,7 +141,7 @@ public final class AppCoordinator {
         case .tokenReceived(let token):
             if let last = next.intentHistory.last, last.kind == .assistantToken {
                 let combined = last.content + token
-                next.intentHistory[next.intentHistory.count - 1] = IntentEvent(kind: .assistantToken, content: combined)
+                next.intentHistory[next.intentHistory.count - 1] = IntentEvent(id: last.id, kind: .assistantToken, content: combined)
             } else {
                 next.intentHistory.append(IntentEvent(kind: .assistantToken, content: token))
             }

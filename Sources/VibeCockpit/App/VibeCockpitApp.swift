@@ -69,10 +69,12 @@ struct VibeCockpitApp: App {
     @State private var services = AppServices()
     @State private var loginItem = LoginItemModel()
     @State private var updates = UpdatesModel()
+    @AppStorage(AppTheme.storageKey) private var themeChoice = AppTheme.default.rawValue
 
     var body: some Scene {
         Window("VibeCockpit", id: "main") {
             ContentView()
+                .appTheme(AppTheme(stored: themeChoice))
                 .environment(coordinator)
                 .environment(services)
                 .environment(loginItem)
