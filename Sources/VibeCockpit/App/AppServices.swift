@@ -30,6 +30,9 @@ public final class AppServices {
     /// Every outbound request passes this: privacy switch, monthly cloud limit, "what left" record.
     public let egress: EgressGate
     public let cloudUsage: CloudUsageModel
+    private let governor = SystemGovernor()
+    /// Memory pressure, heat and Low Power Mode, for the menu and for routing.
+    public private(set) var systemLoad = SystemLoad()
     private let installer: ModelInstaller
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
@@ -57,7 +60,7 @@ public final class AppServices {
         self.egress = gate
         self.cloudUsage = CloudUsageModel(gate: gate)
         self.installer = ModelInstaller(gate: gate)
-        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate)
+        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate, governor: governor)
         self.inference = inference
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
@@ -129,6 +132,7 @@ public final class AppServices {
 
         // Other apps may ask for models as soon as the server is up, so start it once they're registered.
         await sharing.startIfEnabled()
+        await startGovernor()
 
         let providers = await registry.allProviders(with: .textGeneration)
         for provider in providers {
@@ -184,6 +188,23 @@ public final class AppServices {
 
         // Populate model info list for the model manager UI.
         await refreshModels(coordinator: coordinator)
+    }
+
+    /// On critical memory pressure the local model's saved prompt snapshots (big) are dropped;
+    /// the next request just re-reads its prompt.
+    private func startGovernor() async {
+        let registry = self.registry
+        await governor.onChange { [weak self] load in
+            Task { @MainActor in self?.systemLoad = load }
+            guard load.memory == .critical else { return }
+            Task {
+                for provider in await registry.allProviders(with: .textGeneration) {
+                    await (provider as? LocalMLXProvider)?.clearPromptCache()
+                }
+            }
+        }
+        await governor.start()
+        systemLoad = await governor.current
     }
 
     public func stopMCPService() async {
@@ -274,9 +295,14 @@ public final class AppServices {
         do {
             var continueLoop = true
             while continueLoop {
+                let load = await governor.current
                 let stream = try await inference.generate(
                     messages: ledger.messages, tools: toolDefs, options: GenerationOptions(),
-                    priority: .interactive)
+                    priority: .interactive,
+                    onRoute: { notice in
+                        guard let text = Self.noticeText(notice, load: load) else { return }
+                        Task { @MainActor in coordinator.send(.noticeShown(text)) }
+                    })
                 var pendingToolCalls: [ToolCall] = []
                 var assistantText = ""
                 do {
@@ -312,6 +338,18 @@ public final class AppServices {
         }
 
         coordinator.send(.generationFinished)
+    }
+
+    /// A line for the chat when the answer didn't come from the local model the way you'd expect.
+    nonisolated static func noticeText(_ notice: RouteNotice, load: SystemLoad) -> String? {
+        switch notice.kind {
+        case .fellBack(let from, let to, let reason):
+            let what = from.hasPrefix("local:") ? "The model on this Mac" : from
+            return "\(what) couldn't answer (\(reason)), so this reply comes from \(to) in the cloud."
+        case .using(let id):
+            guard !id.hasPrefix("local:"), let why = load.explanation else { return nil }
+            return "\(why), so this reply comes from \(id) in the cloud."
+        }
     }
 
     private func executeTool(_ call: ToolCall, handlers: [AgentToolHandler]) async -> String {
@@ -494,7 +532,7 @@ public final class AppServices {
                     ChatMessage(role: .tool, content: event.content, toolCallID: event.toolCallID),
                     at: 0
                 )
-            case .toolCall, .error:
+            case .toolCall, .error, .notice:
                 break
             }
         }

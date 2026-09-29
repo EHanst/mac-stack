@@ -427,6 +427,29 @@ struct StackAPIServerTests {
         }
     }
 
+    @Test("after a fallback the response says which model really answered")
+    func servedBy() async throws {
+        let h = try await Harness.make([
+            StubModel(id: "local:bonsai", behavior: .failBeforeOutput),
+            StubModel(id: "openai", behavior: .tokens(["from cloud"])),
+        ])
+        try await h.server.makeApplication().test(.live) { client in
+            try await client.execute(uri: "/v1/chat/completions", method: .post, headers: h.auth, body: h.chatBody()) { response in
+                #expect(response.status == .ok)
+                #expect(response.headers[HTTPField.Name("X-VibeCockpit-Served-By")!] == "openai")
+                #expect(response.headers[HTTPField.Name("X-VibeCockpit-Fallback-From")!] == "local:bonsai")
+                let obj = try? JSONSerialization.jsonObject(with: Data(response.body.readableBytesView)) as? [String: Any]
+                #expect(obj?["model"] as? String == "openai")
+            }
+            try await client.execute(uri: "/v1/chat/completions", method: .post, headers: h.auth, body: h.chatBody(stream: true)) { response in
+                let chunks = sseEvents(response.body).dropLast().compactMap {
+                    try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]
+                }
+                #expect(chunks.dropFirst().allSatisfy { $0["model"] as? String == "openai" })
+            }
+        }
+    }
+
     // MARK: MCP over HTTP
 
     private func mcpClient(port: Int, token: String) async throws -> Client {

@@ -203,6 +203,11 @@ public struct ChatCompletionBuilder: Sendable {
         self.model = model
     }
 
+    /// Same completion id and time, reporting the model that actually answered.
+    public func answered(by model: String) -> ChatCompletionBuilder {
+        ChatCompletionBuilder(model: model, id: id, created: Date(timeIntervalSince1970: TimeInterval(created)))
+    }
+
     public func response(text: String, finish: FinishReason, usage: GenerationUsage) -> String {
         struct Body: Encodable {
             struct Choice: Encodable {

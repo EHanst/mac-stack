@@ -36,6 +36,7 @@ struct MenuBarContent: View {
     var body: some View {
         Text(status.title)
         if let detail = status.detail { Text(detail) }
+        if let why = services.systemLoad.explanation { Text(why + ".") }
         if case .running(let port) = services.sharing.status {
             Text("Shared with other apps · port \(port)")
         }

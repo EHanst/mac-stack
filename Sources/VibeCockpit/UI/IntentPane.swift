@@ -231,6 +231,15 @@ private struct IntentEventBubble: View {
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
+        case .notice:
+            Label(event.content, systemImage: "cloud")
+                .font(.mtBodySmall)
+                .foregroundStyle(Color.mtOnSurfaceVariant)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.mtSurfaceContainerHighest)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
         case .error:
             Label(event.content, systemImage: "exclamationmark.triangle.fill")
                 .font(.mtBodySmall)
@@ -249,6 +258,7 @@ private struct IntentEventBubble: View {
         case .toolCall:       "wrench.and.screwdriver.fill"
         case .toolResult:     "checkmark"
         case .error:          "exclamationmark.triangle.fill"
+        case .notice:         "cloud"
         }
     }
 
@@ -259,6 +269,7 @@ private struct IntentEventBubble: View {
         case .toolCall:       Color.mtTertiaryContainer
         case .toolResult:     Color(red: 0.78, green: 0.95, blue: 0.82)
         case .error:          Color.mtErrorContainer
+        case .notice:         Color.mtSurfaceContainerHighest
         }
     }
 
@@ -269,6 +280,7 @@ private struct IntentEventBubble: View {
         case .toolCall:       Color.mtOnTertiaryContainer
         case .toolResult:     Color.mtHealthy
         case .error:          Color.mtError
+        case .notice:         Color.mtOnSurfaceVariant
         }
     }
 }
