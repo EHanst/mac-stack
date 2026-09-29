@@ -138,8 +138,8 @@ struct IdentityPromptTests {
 
     @Test("stays short: it is sent with every conversation and eats local context")
     func short() {
-        // ~4 characters per token for English prose: 800 characters is about 200 tokens.
-        #expect(AppServices.identityPrompt(persona: true, addressName: "Senpai").count <= 800)
+        // ~4 characters per token for English prose: 1000 characters is about 250 tokens.
+        #expect(AppServices.identityPrompt(persona: true, addressName: "Senpai").count <= 1000)
     }
 
     @Test("is a pure function of its settings, so the prompt is identical every turn (cache-safe)")
@@ -151,7 +151,7 @@ struct IdentityPromptTests {
     func content() {
         let plain = AppServices.identityPrompt(persona: true, addressName: nil)
         #expect(plain.contains("Kokoro"))
-        #expect(plain.contains("none in code, diffs, commit messages"))
+        #expect(plain.contains("never use it in code, diffs, commit messages"))
         #expect(!plain.contains("Address the user as"))
         #expect(!AppServices.identityPrompt(persona: true, addressName: "   ").contains("Address the user as"))
         #expect(AppServices.identityPrompt(persona: true, addressName: "Sam").hasSuffix("Address the user as Sam."))
@@ -162,6 +162,34 @@ struct IdentityPromptTests {
         let text = AppServices.identityPrompt(persona: false, addressName: "Sam")
         #expect(!text.contains("Kokoro") && !text.contains("Sam"))
         #expect(text.hasPrefix("You are VibeCockpit"))
+    }
+
+    @Test("the user can rewrite Kokoro's personality; the safety and stack rules stay")
+    func customPersonality() {
+        let text = AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: "You are Mochi, a calm, terse pair programmer.")
+        #expect(text.hasPrefix("You are Mochi, a calm, terse pair programmer."))
+        #expect(!text.contains("Kokoro") && !text.contains("playful"))
+        #expect(text.contains("never use it in code, diffs, commit messages"))
+        #expect(text.contains("Never suggest Python, Node, Docker"))
+        #expect(text.contains("Substance comes first"))
+    }
+
+    @Test("blank or missing custom text falls back to the default; over-long text is capped")
+    func personalityFallbackAndCap() {
+        let base = AppServices.identityPrompt(persona: true, addressName: nil)
+        #expect(AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: "  \n ") == base)
+        #expect(AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: nil) == base)
+        let long = String(repeating: "x", count: 5_000)
+        let capped = AppServices.effectivePersonality(long)
+        #expect(capped.count == AppServices.personalityLimit)
+        #expect(AppServices.identityPrompt(persona: true, addressName: "Sam", customPersonality: long).count
+                <= AppServices.personalityLimit + AppServices.coreRules.count + 60)
+    }
+
+    @Test("a custom personality does not switch the personality off, and off ignores it")
+    func customIgnoredWhenOff() {
+        let text = AppServices.identityPrompt(persona: false, addressName: nil, customPersonality: "You are Mochi.")
+        #expect(!text.contains("Mochi"))
     }
 
     @Test("the assistant is never told to use Python, Docker or Node")

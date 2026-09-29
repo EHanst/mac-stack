@@ -173,3 +173,7 @@ Risk 2 was real: `PromptSnapshotStore.prune` drops every snapshot that isn't a p
 - **Not built:** project instructions file (idea 11), side-by-side model compare, local usage stats, hotkey capture (later/next lists).
 - **Improve tolerance:** a rewrite that differs only in capitalisation, spacing or a final full stop is reported as "already clear".
 - **Known flaky, unrelated:** `ModelInstaller` "installs the included files" failed once under the full parallel run (`sizeMismatch`) and passed in 3 isolated reruns.
+
+
+## Addendum: editable Kokoro personality
+Settings → Kokoro now has a **Personality** text box (default: Kokoro's voice). The user can rewrite or rename it; blank or unchanged stores nothing so the default keeps improving. Only the personality is editable: the core rules (correctness, safety, native-Swift stack, "never use the voice in code, diffs, commit messages, tool arguments or file contents") are appended after it and always apply. Custom text is capped at 600 characters (~150 tokens) because it rides along with every conversation and eats local context. Off toggle still gives the plain assistant line. Applies to new conversations (system prompt is built once for the prefix cache).

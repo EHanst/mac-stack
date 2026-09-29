@@ -691,7 +691,8 @@ public final class AppServices {
 
     private func buildSystemPrompt() -> String {
         var lines = [Self.identityPrompt(persona: defaults.object(forKey: Self.personaKey) as? Bool ?? true,
-                                         addressName: defaults.string(forKey: Self.addressNameKey))]
+                                         addressName: defaults.string(forKey: Self.addressNameKey),
+                                         customPersonality: defaults.string(forKey: Self.personalityKey))]
         if let workspace = detectWorkspaceURL() {
             lines.append("Workspace root: \(workspace.path)")
         }
@@ -707,22 +708,44 @@ public final class AppServices {
 
     static let personaKey = "kokoroPersonaEnabled"
     static let addressNameKey = "kokoroAddressName"
+    static let personalityKey = "kokoroPersonality"
+    /// Longest custom personality that is used (about 150 tokens). It rides along with every
+    /// conversation and eats local context, so it is capped rather than trusted to be short.
+    public nonisolated static let personalityLimit = 600
+
+    /// Kokoro's default voice. This is the part the user can rewrite in Settings; the rules below
+    /// it (substance, stack, no persona in code) always apply.
+    public nonisolated static let defaultPersonality = """
+        You are Kokoro, the assistant inside VibeCockpit. You are warm, upbeat and a little playful, and you enjoy a good debugging puzzle.
+
+        Voice: short and friendly. Celebrate a green build briefly. Treat errors as puzzles. Accept praise shyly. At most one light flourish per reply.
+        """
+
+    /// What never changes, whatever personality the user writes.
+    nonisolated static let coreRules = """
+        You work inside VibeCockpit, a macOS app for building Swift software with a local model.
+
+        Substance comes first: be correct, concise and safe. If unsure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
+
+        Stack: Swift 6, SwiftUI/AppKit, actors, MLX. Never suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
+
+        Whatever your voice, never use it in code, diffs, commit messages, tool arguments or file contents.
+        """
+
+    /// The user's personality text if they wrote one (trimmed, capped), else the default.
+    public nonisolated static func effectivePersonality(_ custom: String?) -> String {
+        let trimmed = custom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return defaultPersonality }
+        return String(trimmed.prefix(personalityLimit))
+    }
 
     /// Who the model is. Kept short and fixed for the session: the system message is built once
     /// so the local prefix cache stays valid.
-    nonisolated static func identityPrompt(persona: Bool, addressName: String?) -> String {
+    nonisolated static func identityPrompt(persona: Bool, addressName: String?, customPersonality: String? = nil) -> String {
         guard persona else {
             return "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications."
         }
-        var text = """
-            You are Kokoro, the assistant inside VibeCockpit, a macOS app for building Swift software with a local model. You are warm, upbeat and a little playful, and you enjoy a good debugging puzzle.
-
-            Substance comes first: be correct, concise and safe. If unsure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
-
-            Stack: Swift 6, SwiftUI/AppKit, actors, MLX. Never suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
-
-            Voice: short and friendly. Celebrate a green build briefly. Treat errors as puzzles. Accept praise shyly. At most one light flourish per reply, none in code, diffs, commit messages, tool arguments or file contents.
-            """
+        var text = effectivePersonality(customPersonality) + "\n\n" + coreRules
         if let name = addressName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             text += "\nAddress the user as \(name)."
         }
