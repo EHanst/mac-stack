@@ -354,3 +354,15 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.bonsai27B.attribution?.contains("Prism ML") == true)
     }
 }
+
+@Suite("ModelInstaller hub endpoint")
+struct ModelInstallerHubTests {
+    @Test("defaults to Hugging Face; honours HF_ENDPOINT for https and loopback http only")
+    func endpoint() {
+        #expect(ModelInstaller.defaultHub(environment: [:]).host == "huggingface.co")
+        #expect(ModelInstaller.defaultHub(environment: ["HF_ENDPOINT": "https://hf-mirror.example"]).host == "hf-mirror.example")
+        #expect(ModelInstaller.defaultHub(environment: ["HF_ENDPOINT": "http://127.0.0.1:8123"]).port == 8123)
+        #expect(ModelInstaller.defaultHub(environment: ["HF_ENDPOINT": "http://evil.example"]).host == "huggingface.co")
+        #expect(ModelInstaller.defaultHub(environment: ["HF_ENDPOINT": "not a url"]).host == "huggingface.co")
+    }
+}

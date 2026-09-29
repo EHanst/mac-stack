@@ -70,7 +70,7 @@ public actor ModelInstaller {
     public init(
         root: URL = ModelInstaller.defaultRoot(),
         session: URLSession = ModelInstaller.makeSession(),
-        hub: URL = URL(string: "https://huggingface.co")!,
+        hub: URL = ModelInstaller.defaultHub(),
         chunkBytes: Int64 = 64 << 20,
         maxRetries: Int = 4,
         retryDelay: Duration = .seconds(1),
@@ -83,6 +83,16 @@ public actor ModelInstaller {
         self.maxRetries = maxRetries
         self.retryDelay = retryDelay
         self.availableBytes = availableBytes
+    }
+
+    /// `https://huggingface.co`, or the mirror named by the standard `HF_ENDPOINT` variable.
+    /// Plain HTTP is accepted only for a loopback host (local testing); anything else falls back.
+    public static func defaultHub(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        let official = URL(string: "https://huggingface.co")!
+        guard let raw = environment["HF_ENDPOINT"], let url = URL(string: raw), let host = url.host else { return official }
+        if url.scheme == "https" { return url }
+        if url.scheme == "http", ["127.0.0.1", "localhost", "::1"].contains(host) { return url }
+        return official
     }
 
     public static func defaultRoot() -> URL {

@@ -22,6 +22,7 @@ struct Options {
     var sweep: [Int] = []
     var guardTest = false
     var serviceTest = false
+    var textTest = false
     var chunks = [512]
     var timeout = 300.0
     var gen = 128
@@ -38,6 +39,7 @@ struct Options {
             case "--no-matmul": matmul = false
             case "--guard-test": guardTest = true
             case "--service-test": serviceTest = true
+            case "--text-test": textTest = true
             case "--sweep": if let v = it.next() { sweep = v.split(separator: ",").compactMap { Int($0) } }
             case "--chunks": if let v = it.next() { chunks = v.split(separator: ",").compactMap { Int($0) } }
             case "--timeout": if let v = it.next(), let n = Double(v) { timeout = max(1, n) }
@@ -231,6 +233,32 @@ func run() async throws {
     func peakText(_ bytes: Int) -> String {
         guard let ws = workingSet, ws > 0 else { return gb(bytes) }
         return "\(gb(bytes)) (\(Int(Double(bytes) / Double(ws) * 100))% of working set)"
+    }
+
+    // ── Text correctness: does the model still say sensible things? ─────────────────
+    if opts.textTest {
+        print("[text test] greedy output, 40 tokens, per prefill chunk size")
+        let guidance = String(repeating: "When generating code: produce complete, compilable Swift. Follow the Swift API Design Guidelines. Prefer value types. ", count: 5)
+        let cases: [(String, [Message])] = [
+            ("short", [Message(role: .user, content: "Say hello in five words.")]),
+            ("app-like (~400 tok)", [Message(role: .system, content: "You are VibeCockpit, an AI coding assistant. " + guidance),
+                                     Message(role: .user, content: "[Task: general]\nThink step by step. Say hello in five words.")]),
+        ]
+        for chunk in [128, 512, 8192] {
+            var t = await provider.tuning
+            t.prefillChunkSize = chunk
+            await provider.setTuning(t)
+            for (name, messages) in cases {
+                await provider.clearPromptCache()
+                var text = ""
+                for try await event in await provider.generate(messages: messages, tools: [], options: GenerationOptions(maxTokens: 40, temperature: 0)) {
+                    if case .token(let x) = event { text += x }
+                }
+                let stats = await provider.lastStats
+                print("  chunk \(chunk) · \(name) (\(stats?.promptTokens ?? 0) tok): \(text.replacingOccurrences(of: "\n", with: "⏎").prefix(150))")
+            }
+        }
+        print("")
     }
 
     // ── Context budget: this machine, and what other RAM tiers would get ─────────────

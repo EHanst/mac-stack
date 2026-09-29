@@ -22,6 +22,7 @@ public final class AppServices {
     private let inference: InferenceService
     /// One GPU, one queue: chat generation and local embeddings both go through this.
     private let gpuScheduler = InferenceScheduler()
+    private let installer = ModelInstaller()
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
     private var mcpService: MCPService?
@@ -93,14 +94,7 @@ public final class AppServices {
             credentials: credentials
         )
 
-        // Offline embeddings (bge-small) if the model is installed; shares the GPU scheduler.
-        let embedder = LocalEmbedder(scheduler: gpuScheduler)
-        if await embedder.isInstalled {
-            await registry.register(embedder)
-            for provider in await registry.allProviders(with: .textGeneration) {
-                await (provider as? LocalMLXProvider)?.reserveMemory(bytes: LocalEmbedder.residentBytesEstimate)
-            }
-        }
+        await registerEmbedderIfInstalled()
 
         let providers = await registry.allProviders(with: .textGeneration)
         for provider in providers {
@@ -108,7 +102,8 @@ public final class AppServices {
             coordinator.send(.providerStatusChanged(provider.id, health))
         }
 
-        if await registry.isEmpty {
+        // Onboarding is about having something to *chat* with; the embedder alone doesn't count.
+        if await registry.allProviders(with: .textGeneration).isEmpty {
             coordinator.send(.onboardingRequired)
         }
 
@@ -322,8 +317,57 @@ public final class AppServices {
 
     public func registerLocalModel(at url: URL, coordinator: AppCoordinator) async {
         try? await registry.discover(localDirectory: url, remoteConfigs: [], credentials: credentials)
-        if await !registry.isEmpty {
+        if await !registry.allProviders(with: .textGeneration).isEmpty {
             coordinator.send(.onboardingCompleted)
+        }
+    }
+
+    /// Offline embeddings (bge-small) if installed; shares the GPU scheduler. Safe to call twice.
+    private func registerEmbedderIfInstalled() async {
+        let embedder = LocalEmbedder(scheduler: gpuScheduler)
+        guard await embedder.isInstalled, await registry.provider(id: embedder.id) == nil else { return }
+        await registry.register(embedder)
+        for provider in await registry.allProviders(with: .textGeneration) {
+            await (provider as? LocalMLXProvider)?.reserveMemory(bytes: LocalEmbedder.residentBytesEstimate)
+        }
+    }
+
+    // MARK: - First-run setup
+
+    /// The first-run model: what this Mac can do, and the installer that makes it so.
+    public func makeSetupModel(coordinator: AppCoordinator) async -> SetupModel {
+        var installed = Set<String>()
+        for entry in ModelCatalog.all where await installer.state(of: entry) == .installed {
+            installed.insert(entry.id)
+        }
+        let hardware = HardwareProfile.current(installRoot: ModelInstaller.defaultRoot())
+        let plan = SetupPlan.make(for: hardware, installed: installed)
+        let gib = Double(hardware.physicalMemoryBytes) / 1_073_741_824
+        let installer = self.installer
+        return SetupModel(
+            plan: plan,
+            hardwareLine: "\(hardware.chipName) · \(Int(gib.rounded())) GB memory",
+            install: { entry, progress in try await installer.install(entry, progress: progress) },
+            onFinished: { [weak self] in await self?.finishLocalInstall(coordinator: coordinator) })
+    }
+
+    /// After the downloads: pick up the new models, start loading the chat model, leave onboarding.
+    private func finishLocalInstall(coordinator: AppCoordinator) async {
+        let modelsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("VibeCockpit/Models")
+        try? await registry.discover(localDirectory: modelsDir, remoteConfigs: [], credentials: credentials)
+        await registerEmbedderIfInstalled()
+        await refreshModels(coordinator: coordinator)
+        if await !registry.allProviders(with: .textGeneration).isEmpty {
+            coordinator.send(.onboardingCompleted)
+        }
+        let local = await registry.allProviders(with: .textGeneration).compactMap { $0 as? LocalMLXProvider }
+        Task.detached(priority: .background) { [weak self] in
+            for provider in local {
+                try? await provider.warmUp()
+                let health = await provider.healthCheck()
+                await self?.notifyHealth(provider.id, health, coordinator: coordinator)
+            }
         }
     }
 
