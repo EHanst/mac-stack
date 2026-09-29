@@ -33,11 +33,53 @@ public actor LocalMLXProvider: ModelProvider {
     /// Bytes to wire in GPU memory while generating (weights + headroom).
     private var wiredBytes = 0
 
-    /// Tokens per prefill chunk. Bounds the O(L²) linear-attention intermediates and the
-    /// lazy graph size so long prompts don't spike memory.
-    private static let prefillChunkSize = 512
-    /// MLX buffer-cache ceiling; the default is unbounded and grows with prompt length.
-    private static let bufferCacheLimit = 1 << 30
+    /// Memory/throughput knobs. Smaller prefill chunks lower peak memory at some cost in speed.
+    public struct Tuning: Sendable, Equatable {
+        /// Tokens per prefill chunk. Bounds the O(L²) linear-attention intermediates and the
+        /// lazy graph size so long prompts don't spike memory. 128 measured ≈2 GiB lower peak
+        /// than 512 with no prefill slowdown (docs/plans/m0-status.md).
+        public var prefillChunkSize = 128
+        /// MLX buffer-cache ceiling; the default is unbounded and grows with prompt length.
+        public var bufferCacheLimit = 1 << 30
+        public init() {}
+    }
+    public private(set) var tuning = Tuning()
+    /// Bytes of model weights once loaded (0 before load).
+    public private(set) var weightBytes = 0
+    /// Memory model used to keep prompts inside what this Mac can safely hold.
+    public var budget = ContextBudget.bonsai27B2bit
+
+    /// How much prompt fits right now, given this Mac's GPU working set, what we already hold,
+    /// and what other apps have left free. A Metal out-of-memory error aborts the whole
+    /// process, so this is checked *before* dispatch rather than caught after.
+    public func contextVerdict() -> ContextBudget.Verdict {
+        budget.verdict(
+            workingSetBytes: GPU.maxRecommendedWorkingSetBytes() ?? Int(ProcessInfo.processInfo.physicalMemory) * 3 / 4,
+            weightBytes: weightBytes > 0 ? weightBytes : onDiskWeightBytes(),
+            currentActiveBytes: model != nil ? Memory.activeMemory : 0,
+            availableSystemBytes: SystemMemory.availableBytes())
+    }
+
+    public func maxContextTokens() async -> Int? {
+        switch contextVerdict() {
+        case .ok(let n), .belowFloor(let n): return n
+        }
+    }
+
+    private func onDiskWeightBytes() -> Int {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: modelDirectory, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+        return files.filter { $0.pathExtension == "safetensors" }
+            .reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+    }
+
+    /// Drop all cached prompt prefixes (frees their memory; the next request prefills in full).
+    public func clearPromptCache() { snapshots.removeAll() }
+
+    public func setTuning(_ t: Tuning) {
+        tuning = t
+        if model != nil { Memory.cacheLimit = t.bufferCacheLimit }
+    }
 
     private var runtime: ModelRuntime {
         if let r = _runtime { return r }
@@ -107,6 +149,9 @@ public actor LocalMLXProvider: ModelProvider {
               FileManager.default.fileExists(atPath: index.path) else {
             return .unavailable("Model weights not found at \(modelDirectory.lastPathComponent)")
         }
+        if case .belowFloor = contextVerdict() {
+            return .unavailable("Not enough free GPU memory for local inference right now")
+        }
         return model != nil ? .healthy : .degraded("Model not yet loaded — will load on first use")
     }
 
@@ -122,6 +167,12 @@ public actor LocalMLXProvider: ModelProvider {
         let (mdl, tok) = try await ensureLoaded()
 
         let (promptIds, boundaries) = tokenize(messages, with: tok)
+        let verdict = contextVerdict()
+        let limit: Int
+        switch verdict { case .ok(let n), .belowFloor(let n): limit = n }
+        if promptIds.count > limit {
+            throw LocalModelError.contextTooLarge(promptTokens: promptIds.count, limit: limit)
+        }
         guard !promptIds.isEmpty else {
             continuation.yield(.finished(.stop))
             continuation.finish()
@@ -134,6 +185,7 @@ public actor LocalMLXProvider: ModelProvider {
         _ = await ticket.start()
         do {
             try generateLoop(model: mdl, tokenizer: tok, promptIds: promptIds, boundaries: boundaries,
+                             startsWithSystem: messages.first?.role == .system,
                              options: options, continuation: continuation)
         } catch {
             _ = await ticket.end()
@@ -148,6 +200,7 @@ public actor LocalMLXProvider: ModelProvider {
         tokenizer tok: any Tokenizer,
         promptIds: [Int32],
         boundaries: [Int],
+        startsWithSystem: Bool,
         options: GenerationOptions,
         continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     ) throws {
@@ -178,15 +231,16 @@ public actor LocalMLXProvider: ModelProvider {
             boundaries: boundaries, restoredUpTo: consumed, prefillEnd: lastIndex)
         if lastIndex > consumed, !stops.contains(lastIndex) { stops.append(lastIndex) }   // tail
         for range in PrefillPlan.chunks(
-            from: consumed, to: lastIndex, chunk: Self.prefillChunkSize, stops: stops) {
+            from: consumed, to: lastIndex, chunk: tuning.prefillChunkSize, stops: stops) {
             try Task.checkCancellation()
             let chunk = MLXArray(Array(promptIds[range]))[.newAxis]
             mdl.prefill(chunk, cache: cache)
             MLX.eval(cache.stateArrays)
             if stops.contains(range.upperBound) {
                 let isBoundary = boundaries.contains(range.upperBound)
+                let isSystemEnd = startsWithSystem && range.upperBound == boundaries.first
                 let kind: PromptSnapshotStore<Qwen35Cache>.Kind =
-                    range.upperBound == boundaries.first ? .system : (isBoundary ? .boundary : .tail)
+                    isSystemEnd ? .system : (isBoundary ? .boundary : .tail)
                 let snap = cache.fork()
                 snapshots.insert(
                     tokens: Array(promptIds[0..<range.upperBound]), payload: snap,
@@ -284,8 +338,8 @@ public actor LocalMLXProvider: ModelProvider {
         MLX.eval(allW)
         logger.info("Weights eval'd (\(allW.count, privacy: .public) tensors)")
 
-        Memory.cacheLimit = Self.bufferCacheLimit
-        let weightBytes = allW.reduce(0) { $0 + $1.nbytes }
+        Memory.cacheLimit = tuning.bufferCacheLimit
+        weightBytes = allW.reduce(0) { $0 + $1.nbytes }
         wiredBytes = min(weightBytes + (2 << 30), GPU.maxRecommendedWorkingSetBytes() ?? Int.max)
 
         let tok = try await AutoTokenizer.from(modelFolder: modelDirectory)
@@ -432,12 +486,15 @@ public enum LocalModelError: LocalizedError {
     case noWeightsFound(String)
     case missingWeight(String)
     case unsupportedOperation(String)
+    case contextTooLarge(promptTokens: Int, limit: Int)
 
     public var errorDescription: String? {
         switch self {
         case .noWeightsFound(let dir):    return "No .safetensors files found in \(dir)"
         case .missingWeight(let key):     return "Required weight key missing: \(key)"
         case .unsupportedOperation(let op): return "Operation not supported: \(op)"
+        case .contextTooLarge(let n, let limit):
+            return "This conversation (\(n) tokens) is larger than this Mac can safely process locally right now (about \(limit) tokens). Start a new chat, or switch to a cloud provider."
         }
     }
 }

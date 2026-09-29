@@ -91,6 +91,13 @@ public protocol ModelProvider: Actor {
     func embed(_ texts: [String]) async throws -> [[Float]]
 
     func healthCheck() async -> ProviderHealth
+
+    /// Largest prompt (in tokens) this provider can take right now, or nil if unbounded/unknown.
+    func maxContextTokens() async -> Int?
+}
+
+extension ModelProvider {
+    public func maxContextTokens() async -> Int? { nil }
 }
 
 public enum InferenceTask: Sendable {

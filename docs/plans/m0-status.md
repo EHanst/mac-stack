@@ -41,6 +41,31 @@ Decode ≈ 10.5–11 tok/s (unchanged).
 ## Finding: GPU working-set limit (from item 3's print)
 `GPU.maxRecommendedWorkingSetBytes()` = **13.32 GB on this 18 GB M3 Pro** (≈74% of RAM). Peak GPU was 10.9 GB @ 0.7k tokens and 12.2 GB @ 5.6k tokens (91% of the limit) → the ~20k run very likely exceeded it and thrashed (never finished in 15 min). On a 16 GB Mac the limit is probably ≈10–11 GB [G: scaling by the same ratio], only ~2–3 GB above the 8 GB of weights. **The 16 GB floor decision is at risk; needs context caps by RAM tier and lower prefill-intermediate memory. Revisit once the run below finishes.**
 
+## Finding: Metal OOM aborts the whole process (2026-09-28)
+Memory-sweep run #1 died on its first row: `libc++abi: terminating due to uncaught exception … [METAL] Command buffer execution failed: Insufficient Memory` (exit 134). Cause here: **Ollama had a 4.8 GB model resident on the GPU** (its other `llama-server` also running), leaving too little of the shared working set. Two consequences for the product, both must be handled in item 1:
+1. An OOM is an **uncaught C++ exception → the app crashes**, not a recoverable Swift error. We need a pre-flight guard (refuse/route to cloud *before* dispatch) — can't rely on catching it.
+2. Other GPU-resident apps (Ollama, other MLX apps) shrink what we get; a beginner's Mac will often have these. The governor must use *current* free memory, not just RAM tier.
+Model load also slowed 4.7 s → 17.9 s under that pressure.
+
+## Results: memory sweep (isolated rows, M3 Pro 18 GB, weights 7.14 GiB, working set 13.32 GiB)
+Peak GPU **over weights**, GiB (prefill tok/s):
+| chunk | ~1k tok | ~2k | ~4k | ~8.4k |
+|---|---|---|---|---|
+| 512 (old default) | +3.68 (82.2) | +3.85 (82.0) | +4.04 (82.0) | +4.72 (76.4) |
+| 256 | +2.56 (79.6) | +2.68 (80.2) | +2.90 (79.9) | +3.44 (78.6) |
+| **128** | **+1.72 (81.2)** | **+1.88 (82.4)** | **+2.12 (82.4)** | **+2.72 (81.2)** |
+→ Chunk 128 saves ~2 GiB vs 512 with no speed loss (and no slowdown at 8k). Fit at chunk 128: **fixed ≈ 1.6 GiB + ≈ 0.15 MB/token** (conservative; KV ≈ 64 KB/token + snapshot copy-on-write copies). An earlier sweep was invalid (stale snapshot entries leaked memory between rows — fixed: one `.system` entry only, mislabel fixed, `clearPromptCache()` between rows).
+
+## Result: context budget by RAM tier (model-predicted; working set assumed 74% of RAM, nothing else running)
+| RAM | max prompt tokens |
+|---|---|
+| 8 GB | below floor → cloud-only |
+| **16 GB** | **≈ 8.6k** (floor holds, small context) |
+| 18 GB | ≈ 16.8k (this Mac measured OK to 8.4k; 16.8k extrapolated, not run) |
+| 24 GB | ≈ 41k |
+| ≥ 32 GB | 64k (model window) |
+On this Mac *right now* the live check gives 8,019 because other apps hold memory. **Caveats [G]:** 74%-of-RAM working-set ratio measured only on the 18 GB machine; the 16 GB row is unmeasured on real 16 GB hardware; snapshot copies cost ~64 KB/token extra and could be trimmed to raise limits later.
+
 ## Notes from this step
 - Design change to flag: intent guidance (`systemAddendum`) now lives in each user turn (`PromptEngineer.augmentUserTurn`) instead of the system message, because the system message must be fixed for the session. The old `PromptEngineer.engineer(...)` is kept (still tested) but unused by `AppServices`.
 - Your WIP (EOS ids `248044/248046`, empty `<think>` in generation prompt) is re-applied and now committed with this change; assistant history renders the same think block for cache consistency.
@@ -51,6 +76,12 @@ Decode ≈ 10.5–11 tok/s (unchanged).
 - Local provider **ignores `tools`**: `buildPrompt` never renders tool definitions, so the local model can't call tools (found while reading; not in scope yet).
 - Anthropic-style remote provider ignores tools entirely (M2/M3).
 - Your original uncommitted edits (EOS ids `248044/248046`, empty `<think>` block in prompt) are saved as a patch at `.../scratchpad/wip.patch` and **not currently applied** to `LocalMLXProvider.swift` — must re-apply after committing the stats change.
+
+## Queue (user-ordered 2026-09-28; do in this order, mark each as it lands)
+1. [x] **Long-context memory caps by RAM tier** — DONE. Default prefill chunk 512→**128** (−2 GiB peak, no speed loss). `ContextBudget` (fixed 1.6 GiB + 165 KB/token, 85% of working set, also limited by *currently available* system memory so Ollama etc. count). Provider pre-flight guard refuses oversize prompts with a plain message (verified on the real model: 11.3k-token prompt refused in 0.16 s, no crash); `maxContextTokens()` on `ModelProvider`; `AppServices` trims the ledger to it; local health goes `.unavailable` below the floor.
+2. [ ] **`StackCore` module split** (core vs adapters)
+3. [ ] **Wire `InferenceScheduler` + `Router` into `AppServices`**
+4. [ ] **Embedder bake-off via `mlx-swift-lm`** (needs downloads — ask first)
 
 ## Remaining M0
 - [x] Benchmark numbers on M3 Pro 18 GB (512 / 4k done; 16k+ hangs — see working-set finding)

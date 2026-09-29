@@ -7,6 +7,7 @@ import VibeCockpitCore
 // vibe-bench — performance harness for the local model.
 //   swift run -c release VibeBench [--model DIR] [--contexts 512,4096] [--gen 128] [--runs 3]
 //                                  [--warm-prefix 4096] [--no-matmul] [--timeout 300] [--json out.json]
+//                                  [--sweep 1024,2048,4096,8192 --chunks 512,256]   (memory profile)
 // Reports load time, TTFT, prefill/decode tokens per second and memory per context size, a
 // warm-prefix (prefix-cache) case, and a matmul micro-benchmark at M=512 for the compute ceiling.
 // `--contexts none` / `--warm-prefix 0` skip those sections. Every generation has a watchdog
@@ -18,6 +19,9 @@ struct Options {
     var contexts = [512, 4096]
     var warmPrefix = 4096
     var matmul = true
+    var sweep: [Int] = []
+    var guardTest = false
+    var chunks = [512]
     var timeout = 300.0
     var gen = 128
     var runs = 3
@@ -31,6 +35,9 @@ struct Options {
             case "--contexts": if let v = it.next() { contexts = v.split(separator: ",").compactMap { Int($0) } }
             case "--warm-prefix": if let v = it.next(), let n = Int(v) { warmPrefix = max(0, n) }
             case "--no-matmul": matmul = false
+            case "--guard-test": guardTest = true
+            case "--sweep": if let v = it.next() { sweep = v.split(separator: ",").compactMap { Int($0) } }
+            case "--chunks": if let v = it.next() { chunks = v.split(separator: ",").compactMap { Int($0) } }
             case "--timeout": if let v = it.next(), let n = Double(v) { timeout = max(1, n) }
             case "--gen": if let v = it.next(), let n = Int(v) { gen = n }
             case "--runs": if let v = it.next(), let n = Int(v) { runs = max(1, n) }
@@ -221,6 +228,36 @@ func run() async throws {
         return "\(gb(bytes)) (\(Int(Double(bytes) / Double(ws) * 100))% of working set)"
     }
 
+    // ── Context budget: this machine, and what other RAM tiers would get ─────────────
+    do {
+        let budget = await provider.budget
+        let weights = await provider.weightBytes
+        print("[context budget]  model: \(gb(Int(budget.model.fixedOverheadBytes))) fixed + \(budget.model.bytesPerToken / 1000) KB/token, safety \(Int(budget.safetyFraction * 100))%")
+        let v = await provider.contextVerdict()
+        print("  this Mac now: \(v)")
+        print("  by RAM tier (working set assumed 74% of RAM, as measured on the 18 GB Mac; nothing else running):")
+        for ram in [8, 16, 18, 24, 32, 64] {
+            let ws = Int(Double(ram) * 0.74 * 1_073_741_824)
+            print("    \(ram) GB → \(budget.verdict(workingSetBytes: ws, weightBytes: weights))")
+        }
+        print("")
+    }
+
+    if opts.guardTest {
+        let limit = await provider.maxContextTokens() ?? 0
+        print("[guard test] limit \(limit) tokens; sending a prompt of ~\(limit + 3000)…")
+        let t0 = Date()
+        do {
+            for try await _ in await provider.generate(
+                messages: [Message(role: .user, content: makePrompt(tokens: limit + 3000, nonce: 1))],
+                tools: [], options: GenerationOptions(maxTokens: 1)) {}
+            print("  UNEXPECTED: oversized prompt was accepted")
+        } catch {
+            print("  refused in \(fmt(Date().timeIntervalSince(t0), 2)) s: \(error.localizedDescription)")
+        }
+        print("")
+    }
+
     // ── Cold contexts ──────────────────────────────────────────────────────────────
     var results: [ContextResult] = []
     if !opts.contexts.isEmpty {
@@ -243,6 +280,29 @@ func run() async throws {
               + " | decode \(fmt(median(samples.map(\.stats.decodeTokensPerSecond)))) tok/s"
               + " | peak \(peakText(samples.map(\.stats.peakGPUBytes).max() ?? 0))"
               + " | RSS \(gb(samples.map(\.rssBytes).max() ?? 0))")
+    }
+
+    // ── Memory sweep: peak GPU vs context length and prefill chunk size ───────────
+    if !opts.sweep.isEmpty {
+        let weights = await provider.weightBytes
+        print("\n[memory sweep]  weights \(gb(weights))  working set \(workingSet.map(gb) ?? "n/a")")
+        print("chunk | prompt tok | TTFT s | prefill tok/s | peak GPU | over weights | % working set")
+        for chunk in opts.chunks {
+            var t = await provider.tuning
+            t.prefillChunkSize = chunk
+            await provider.setTuning(t)
+            for target in opts.sweep {
+                await provider.clearPromptCache()   // isolate rows: no memory carried over from earlier prompts
+                Memory.clearCache()
+                let m = await measure(provider, [Message(role: .user, content: makePrompt(tokens: target, nonce: 7_000 + target))],
+                                      gen: 1, timeout: opts.timeout)
+                if m.timedOut { print("\(chunk) | ~\(target) | TIMED OUT after \(Int(opts.timeout)) s — stopping this chunk size"); break }
+                guard let st = m.stats else { continue }
+                let pct = workingSet.map { Int(Double(st.peakGPUBytes) / Double($0) * 100) } ?? 0
+                print("\(chunk) | \(st.promptTokens) | \(fmt(m.ttft, 1)) | \(fmt(st.prefillTokensPerSecond)) | \(gb(st.peakGPUBytes)) | +\(gb(st.peakGPUBytes - weights)) | \(pct)%")
+                if let ws = workingSet, st.peakGPUBytes > ws { print("  peak exceeded the working set — stopping this chunk size"); break }
+            }
+        }
     }
 
     // ── Warm prefix: does the cache actually save prefill? ─────────────────────────

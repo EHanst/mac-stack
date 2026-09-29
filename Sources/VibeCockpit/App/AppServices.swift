@@ -207,8 +207,14 @@ public final class AppServices {
             ledger.begin(system: buildSystemPrompt())
         }
         ledger.appendUserTurn(PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext))
-        // Budget: ~80% of maxTokens, approximated as chars/4. Drops whole old turns permanently.
-        ledger.trim(toCharacterBudget: (GenerationOptions().maxTokens * 4 * 4) / 5)
+        // Budget: the smaller of ~80% of maxTokens and what this Mac can hold right now
+        // (provider-reported, tokens → chars at a conservative 2.5 chars/token). Drops whole old
+        // turns permanently so the prompt stays append-only afterwards.
+        var charBudget = (GenerationOptions().maxTokens * 4 * 4) / 5
+        if let limit = await provider.maxContextTokens() {
+            charBudget = min(charBudget, Int(Double(limit) * 2.5 * 0.9))
+        }
+        ledger.trim(toCharacterBudget: charBudget)
 
         do {
             var continueLoop = true

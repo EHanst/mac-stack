@@ -12,7 +12,8 @@ import Foundation
 struct PromptSnapshotStore<Payload> {
 
     enum Kind: Equatable {
-        /// End of the system message. Shared by every session, so it is never evicted.
+        /// End of the system message. Shared by every session, so it survives pruning — but only
+        /// one is kept: a new system prompt supersedes the old one.
         case system
         /// End of a message; safe cut point between turns.
         case boundary
@@ -49,10 +50,12 @@ struct PromptSnapshotStore<Payload> {
             .max { $0.tokens.count < $1.tokens.count }
     }
 
-    /// Store a snapshot, replacing any entry for the same token sequence; a new `.tail`
-    /// replaces the previous one.
+    /// Store a snapshot, replacing any entry for the same token sequence; a new `.tail` or
+    /// `.system` replaces the previous one of that kind.
     mutating func insert(tokens: [Int32], payload: Payload, bytes: Int, kind: Kind) {
-        entries.removeAll { $0.tokens == tokens || (kind == .tail && $0.kind == .tail) }
+        entries.removeAll {
+            $0.tokens == tokens || (kind != .boundary && $0.kind == kind)
+        }
         entries.append(Entry(tokens: tokens, payload: payload, bytes: bytes, kind: kind))
     }
 

@@ -21,6 +21,17 @@ struct PromptSnapshotStoreTests {
         #expect(s.bestMatch(for: other, maxLength: other.count - 1) == nil)
     }
 
+    @Test("only one system snapshot is kept: a new system prompt supersedes the old one")
+    func singleSystemEntry() {
+        var s = PromptSnapshotStore<String>()
+        s.insert(tokens: toks(10), payload: "sysA", bytes: 1, kind: .system)
+        s.insert(tokens: toks(12, base: 500), payload: "sysB", bytes: 1, kind: .system)
+        s.insert(tokens: toks(30, base: 500), payload: "turn", bytes: 1, kind: .boundary)
+        #expect(Set(s.entries.map(\.payload)) == ["sysB", "turn"])
+        s.prune(keepingPrefixesOf: toks(40, base: 500))
+        #expect(Set(s.entries.map(\.payload)) == ["sysB", "turn"])
+    }
+
     @Test("bestMatch never returns an entry longer than maxLength")
     func respectsMaxLength() {
         var s = PromptSnapshotStore<String>()
