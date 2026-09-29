@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 #if SWIFT_PACKAGE
@@ -124,6 +125,46 @@ public final class APISharingModel {
             return "Port \(port) is already used by another program."
         }
         return "The server couldn't start: \(error.localizedDescription)"
+    }
+
+    // MARK: Connection check
+
+    public struct CheckLine: Equatable, Sendable, Identifiable {
+        public let id = UUID()
+        public let ok: Bool
+        public let text: String
+    }
+
+    /// "Test it": is the server answering, and is the local MCP socket accepting connections?
+    public func runCheck(socketPath: String) async -> [CheckLine] {
+        var lines: [CheckLine] = []
+        guard case .running(let actual) = status else {
+            return [CheckLine(ok: false, text: isEnabled ? "The server isn't running yet." : "Sharing is off. Turn on \"Let other apps on this Mac use my models\" first.")]
+        }
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(actual)/healthz")!)
+        request.timeoutInterval = 3
+        if let (_, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200 {
+            lines.append(CheckLine(ok: true, text: "API answering at 127.0.0.1:\(actual)"))
+        } else {
+            lines.append(CheckLine(ok: false, text: "Nothing answered at 127.0.0.1:\(actual)"))
+        }
+        let models = await inference.availableModels().filter { $0.health == .healthy }
+        lines.append(CheckLine(ok: !models.isEmpty, text: models.isEmpty ? "No model is ready yet" : "\(models.count) model\(models.count == 1 ? "" : "s") ready: \(models.map(\.id).joined(separator: ", "))"))
+        lines.append(CheckLine(ok: Self.canConnect(socketPath: socketPath), text: Self.canConnect(socketPath: socketPath) ? "Local MCP socket accepting connections" : "Local MCP socket isn't reachable"))
+        return lines
+    }
+
+    nonisolated static func canConnect(socketPath: String) -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        guard socketPath.utf8.count < MemoryLayout.size(ofValue: addr.sun_path) else { return false }
+        withUnsafeMutableBytes(of: &addr.sun_path) { dst in socketPath.withCString { src in _ = memcpy(dst.baseAddress!, src, strlen(src) + 1) } }
+        return withUnsafePointer(to: addr) {
+            connect(fd, UnsafeRawPointer($0).assumingMemoryBound(to: sockaddr.self), socklen_t(MemoryLayout<sockaddr_un>.size))
+        } == 0
     }
 
     // MARK: Apps

@@ -19,7 +19,7 @@ Decisions in force: API is **opt-in, 127.0.0.1 only, per-client bearer tokens, o
 6. [x] **M2.6 App wiring + UI** — DONE (`APISharingModel`, `SharingCard`, menu-bar line; 7 model tests; verified in the real app, see Done): server lifecycle in `AppServices`, Settings "Share with other apps" (off by default), clients list with create/revoke, token shown once.
 7. [x] **M2.7 MCP v2** — DONE (`StackMCP/MCP/{MCPToolHost,UnixSocketListener,MCPHTTPSessions}`, `StackMCP/Agent/InferenceTools`, `StackHTTP/Server/MCPRoute`, `Sources/VibeMCP`; 13 new tests, see Done): multi-client Unix socket, Streamable HTTP (SDK transport + bearer/origin validators), `chat`/`embed`/`list_models` tools, workspace-less mode, `vibe-mcp` stdio shim replacing `socat`.
 8. [x] **M2.8 Tool permission prompts + scopes** — DONE (`StackCore/Security/ToolApproval.swift`, `App/ApprovalCenter.swift`, `UI/Sharing/ApprovalSheet.swift`; 16 tests, see Done): read free; write/exec ask; "Always allow" remembered per app and kind of action.
-9. [ ] **M2.9 "Connect an app"** screen with copy-paste snippets (Claude Desktop, Cursor, OpenAI SDK) + test button.
+9. [x] **M2.9 "Connect an app"** — DONE (`ConnectSnippets`, `ConnectCard`, `APISharingModel.runCheck`; 4 tests). Claude Desktop snippet uses macOS's own `/usr/bin/nc -U` so nothing needs installing; Cursor uses `/mcp` + key; the OpenAI/curl text shows the real address and fills in a just-created key. screen with copy-paste snippets (Claude Desktop, Cursor, OpenAI SDK) + test button.
 
 ## Facts / constraints that shape the work
 - Local model **ignores `tools`** (prompt doesn't render them) → the API rejects `tools` with a clear 400 for local models until tool calling is implemented (M4); cloud providers still get them.

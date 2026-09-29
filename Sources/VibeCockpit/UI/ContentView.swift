@@ -280,6 +280,7 @@ struct SettingsView: View {
                 generationSection
                 startupSection
                 SharingCard()
+                ConnectCard()
                 indexingSection
                 aboutSection
             }
