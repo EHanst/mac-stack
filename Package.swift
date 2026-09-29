@@ -80,6 +80,7 @@ let package = Package(
             dependencies: [
                 "VibeCockpitCore",
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXRandom", package: "mlx-swift"),
             ],
             path: "Sources/VibeBench",
             swiftSettings: [
