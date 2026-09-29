@@ -69,3 +69,11 @@ public final class LoginItemModel {
         }
     }
 }
+
+/// Whether this launch should stay in the menu bar without opening the window: the user's login
+/// item started us, or `-launchHidden` was passed (for testing and scripts).
+public enum LaunchMode {
+    public static func startsHidden(arguments: [String], launchedAsLoginItem: Bool) -> Bool {
+        launchedAsLoginItem || arguments.contains("-launchHidden")
+    }
+}

@@ -174,3 +174,16 @@ struct RoutingPolicyLabelTests {
         #expect(RoutingPolicy.localOnly.summary.contains("Nothing ever leaves this Mac"))
     }
 }
+
+@Suite("Launch mode")
+struct LaunchModeTests {
+    @Test func normalLaunchShowsWindow() {
+        #expect(!LaunchMode.startsHidden(arguments: ["VibeCockpit"], launchedAsLoginItem: false))
+    }
+    @Test func loginItemLaunchStaysHidden() {
+        #expect(LaunchMode.startsHidden(arguments: ["VibeCockpit"], launchedAsLoginItem: true))
+    }
+    @Test func flagStaysHidden() {
+        #expect(LaunchMode.startsHidden(arguments: ["VibeCockpit", "-launchHidden"], launchedAsLoginItem: false))
+    }
+}
