@@ -23,6 +23,7 @@ struct MenuBarContent: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
     @Environment(LoginItemModel.self) private var loginItem
+    @Environment(UpdaterModel.self) private var updater
     @Environment(\.openWindow) private var openWindow
 
     private var status: MenuBarStatus {
@@ -66,6 +67,8 @@ struct MenuBarContent: View {
             .disabled(!loginItem.isAvailable)
         if let message = loginItem.message { Text(message) }
 
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(!updater.isConfigured)
         Divider()
         Button("Quit VibeCockpit") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")

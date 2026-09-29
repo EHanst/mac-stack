@@ -15,13 +15,18 @@ VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 DRY_RUN="${DRY_RUN:-}"
 KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-notarytool}"
-ENTITLEMENTS="Config/VibeCockpit.entitlements"
+ENTITLEMENTS="Config/VibeCockpit.entitlements"   # dry run swaps in a temp copy, see below
 ARCHIVE="build/VibeCockpit.xcarchive"
 APP="build/export/VibeCockpit.app"
 DMG="build/VibeCockpit-$VERSION.dmg"
 
 if [ -n "$DRY_RUN" ]; then
   IDENTITY="-"; TIMESTAMP="--timestamp=none"
+  # Ad-hoc signatures carry no team ID, so library validation would refuse the embedded Sparkle
+  # framework. A real Developer ID signs app and framework with one team, so the shipped build
+  # keeps library validation ON (see Config/VibeCockpit.entitlements).
+  ENTITLEMENTS=$(mktemp).entitlements
+  sed 's|<false/>\(.*\)|<false/>\1|; s|</dict>|<key>com.apple.security.cs.disable-library-validation</key><true/></dict>|' Config/VibeCockpit.entitlements > "$ENTITLEMENTS"
 else
   IDENTITY="${DEVELOPER_ID_APPLICATION:-}"; TIMESTAMP="--timestamp"
   [ -n "$IDENTITY" ] || { echo "ERROR: set DEVELOPER_ID_APPLICATION to your 'Developer ID Application: ...' certificate name (or DRY_RUN=1)." >&2; exit 1; }
@@ -40,9 +45,12 @@ xcodebuild archive -scheme VibeCockpit -project VibeCockpit.xcodeproj -configura
 cp -R "$ARCHIVE/Products/Applications/VibeCockpit.app" "$APP"
 
 echo "==> Signing app (hardened runtime)"
-# Sign nested code first (none today: everything is statically linked), then the app itself.
-find "$APP/Contents" \( -name "*.dylib" -o -name "*.framework" -o -name "*.xpc" \) -print0 | xargs -0 -I{} \
-  codesign --force --options runtime $TIMESTAMP --sign "$IDENTITY" {}
+# Sign nested code first, deepest first (Sparkle ships helper apps and XPC services inside its
+# framework), then the app itself.
+find "$APP/Contents/Frameworks" \( -name "*.xpc" -o -name "*.app" -o -name "*.framework" -o -name "*.dylib" -o -name "Autoupdate" -o -name "fileop" \) -print 2>/dev/null \
+  | awk '{ print gsub("/","/"), $0 }' | sort -rn | cut -d' ' -f2- | while IFS= read -r nested; do
+    codesign --force --options runtime $TIMESTAMP --sign "$IDENTITY" "$nested"
+  done
 codesign --force --options runtime $TIMESTAMP --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 
 echo "==> Verifying app"
@@ -79,4 +87,18 @@ xcrun stapler staple "$DMG"
 echo "==> Gatekeeper check"
 spctl --assess --type open --context context:primary-signature --verbose "$DMG"
 xcrun stapler validate "$DMG"
+
+echo "==> Update feed (Sparkle appcast)"
+GEN=$(find ~/Library/Developer/Xcode/DerivedData -path "*artifacts/sparkle/Sparkle/bin/generate_appcast" 2>/dev/null | head -1)
+[ -x "$GEN" ] || GEN=$(find .build -path "*artifacts/sparkle/Sparkle/bin/generate_appcast" 2>/dev/null | head -1)
+if [ -x "$GEN" ]; then
+  mkdir -p build/updates && cp "$DMG" build/updates/
+  KEYARGS=(); [ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ] && KEYARGS=(--ed-key-file -)
+  printf '%s' "${SPARKLE_ED_PRIVATE_KEY:-}" | "$GEN" "${KEYARGS[@]}" \
+    --download-url-prefix "https://github.com/EHanst/mac-stack/releases/download/v$VERSION/" build/updates
+  cp build/updates/appcast.xml build/appcast.xml
+  echo "appcast: build/appcast.xml (attach it to the GitHub release next to the DMG)"
+else
+  echo "WARNING: Sparkle's generate_appcast not found; no appcast written (build once in Xcode to fetch Sparkle)." >&2
+fi
 echo "OK: $DMG"

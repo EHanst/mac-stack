@@ -271,6 +271,7 @@ struct SettingsView: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
     @Environment(LoginItemModel.self) private var loginItem
+    @Environment(UpdaterModel.self) private var updater
     @State private var workspacePath: String = ""
 
     var body: some View {
@@ -353,6 +354,21 @@ struct SettingsView: View {
                     if let message = loginItem.message {
                         Text(message).font(.mtBodySmall).foregroundStyle(Color.mtDegraded)
                     }
+                }
+                MTDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Check for updates daily", isOn: Binding(
+                        get: { updater.automaticChecks },
+                        set: { updater.setAutomaticChecks($0) }))
+                        .disabled(!updater.isConfigured)
+                    Text(updater.isConfigured
+                         ? "Off by default: VibeCockpit only contacts GitHub for updates when you choose \"Check for Updates…\" in the menu bar, or turn this on. Nothing about you or your work is sent."
+                         : "Updates aren't set up in this build yet.")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Check now") { updater.checkForUpdates() }
+                        .disabled(!updater.isConfigured)
                 }
             }
         }

@@ -62,6 +62,7 @@ struct VibeCockpitApp: App {
     @State private var coordinator = AppCoordinator()
     @State private var services = AppServices()
     @State private var loginItem = LoginItemModel()
+    @State private var updater = UpdaterModel()
 
     var body: some Scene {
         Window("VibeCockpit", id: "main") {
@@ -69,6 +70,7 @@ struct VibeCockpitApp: App {
                 .environment(coordinator)
                 .environment(services)
                 .environment(loginItem)
+                .environment(updater)
                 .task { await services.startup(coordinator: coordinator) }
         }
         .commands {
@@ -80,6 +82,7 @@ struct VibeCockpitApp: App {
                 .environment(coordinator)
                 .environment(services)
                 .environment(loginItem)
+                .environment(updater)
         } label: {
             MenuBarLabel()
                 .environment(coordinator)

@@ -187,3 +187,15 @@ struct LaunchModeTests {
         #expect(LaunchMode.startsHidden(arguments: ["VibeCockpit", "-launchHidden"], launchedAsLoginItem: false))
     }
 }
+
+@Suite("Update key")
+struct UpdateKeyTests {
+    @Test func placeholderIsNotAKey() {
+        #expect(!UpdateKey.isReal("REPLACE_WITH_SPARKLE_PUBLIC_KEY"))
+        #expect(!UpdateKey.isReal(""))
+    }
+    @Test func thirtyTwoByteBase64IsAKey() {
+        #expect(UpdateKey.isReal(Data(repeating: 7, count: 32).base64EncodedString()))
+        #expect(!UpdateKey.isReal(Data(repeating: 7, count: 31).base64EncodedString()))
+    }
+}

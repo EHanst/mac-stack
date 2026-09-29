@@ -26,6 +26,8 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.31.3"),
         // HTTP server for the opt-in OpenAI-compatible API (decision 6 in docs/plans/2026-09-28-next-phase-plan.md).
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.27.0"),
+        // Software updates (app target only; the engine modules never touch the network for this).
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.0"),
     ],
     targets: [
         // C module: sqlite-vec (compiled amalgamation)
@@ -117,7 +119,7 @@ let package = Package(
 
         .executableTarget(
             name: "VibeCockpit",
-            dependencies: ["VibeCockpitCore"],
+            dependencies: ["VibeCockpitCore", .product(name: "Sparkle", package: "Sparkle")],
             path: "Sources/VibeCockpit",
             sources: [
                 "App/VibeCockpitApp.swift",

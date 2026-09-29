@@ -8,6 +8,7 @@
 #   NOTARYTOOL_APPLE_ID       - Apple ID used for notarization
 #   NOTARYTOOL_TEAM_ID        - 10-character Team ID
 #   NOTARYTOOL_APP_PASSWORD   - app-specific password for notarytool
+#   SPARKLE_ED_PRIVATE_KEY    - private key printed by Sparkle's `generate_keys -x` (see docs/RELEASING.md)
 name: Release
 
 on:
@@ -62,11 +63,14 @@ jobs:
           DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
           NOTARYTOOL_KEYCHAIN_PROFILE: notarytool
           VERSION: ${{ github.ref_name }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: VERSION="${VERSION#v}" ./scripts/release.sh
 
       - name: Locate DMG
         id: dmg
         run: echo "path=$(ls build/*.dmg | head -1)" >> "$GITHUB_OUTPUT"
+
+      # Sparkle reads https://github.com/EHanst/mac-stack/releases/latest/download/appcast.xml
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -74,7 +78,9 @@ jobs:
           name: VibeCockpit ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: ${{ steps.dmg.outputs.path }}
+          files: |
+            ${{ steps.dmg.outputs.path }}
+            build/appcast.xml
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
