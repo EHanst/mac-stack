@@ -52,9 +52,41 @@ final class PrismPackedLinear: Module, UnaryLayer, @unchecked Sendable {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let inp = block > 0 ? prismFWHT(x, block: block, signs: signs) : x
-        return quantizedMatmul(inp, weight, scales: scales, biases: biases,
-                               transpose: true, groupSize: 128, bits: 2)
+        apply(preRotated: rotate(x))
+    }
+
+    /// Apply the input-side Walsh-Hadamard rotation (identity when `block == 0`).
+    func rotate(_ x: MLXArray) -> MLXArray {
+        block > 0 ? prismFWHT(x, block: block, signs: signs) : x
+    }
+
+    /// Packed 2-bit matmul on an input that has already been rotated by `rotate(_:)`.
+    func apply(preRotated x: MLXArray) -> MLXArray {
+        quantizedMatmul(x, weight, scales: scales, biases: biases,
+                        transpose: true, groupSize: 128, bits: 2)
+    }
+
+    /// True when both layers rotate their input identically (same block size and the very
+    /// same sign vector), so a single rotated copy of `x` can feed both.
+    func sharesRotation(with other: PrismPackedLinear) -> Bool {
+        block == other.block && signs === other.signs
+    }
+
+    /// Project `x` through several layers, computing each distinct input rotation only once.
+    ///
+    /// Q/K/V, gate/up and the linear-attention input projections all read the same
+    /// activations with the same rotation; without this the WHT (fp32 cast, sign multiply,
+    /// Hadamard, cast back) runs once per projection on every token of every layer.
+    static func project(_ x: MLXArray, _ layers: PrismPackedLinear...) -> [MLXArray] {
+        var rotated: [(layer: PrismPackedLinear, value: MLXArray)] = []
+        return layers.map { layer in
+            if let hit = rotated.first(where: { $0.layer.sharesRotation(with: layer) }) {
+                return layer.apply(preRotated: hit.value)
+            }
+            let r = layer.rotate(x)
+            rotated.append((layer, r))
+            return layer.apply(preRotated: r)
+        }
     }
 }
 
@@ -80,8 +112,12 @@ final class PrismPackedEmbedding: Module, @unchecked Sendable {
     }
 
     /// Lookup embeddings by index.
+    ///
+    /// Gathers the packed rows (and their scales/biases) first and dequantizes only those,
+    /// instead of dequantizing the entire vocab × hidden table on every forward pass.
     func callAsFunction(_ indices: MLXArray) -> MLXArray {
-        let rows = dequantized(weight, scales: scales, biases: biases, groupSize: 128, bits: 2)[indices]
+        let rows = dequantized(weight[indices], scales: scales[indices], biases: biases[indices],
+                               groupSize: 128, bits: 2)
         return block > 0 ? prismIFWHT(rows, block: block, signs: signs) : rows
     }
 
