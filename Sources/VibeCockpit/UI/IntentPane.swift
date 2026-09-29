@@ -251,14 +251,22 @@ struct IntentPane: View {
         }
     }
 
+    /// Full labels when they fit; icons only (and a shorter token count) when the pane is narrow.
     private var toolRow: some View {
+        ViewThatFits(in: .horizontal) {
+            toolRowContent(compact: false)
+            toolRowContent(compact: true)
+        }
+    }
+
+    private func toolRowContent(compact: Bool) -> some View {
         HStack(spacing: 8) {
             Menu {
                 Button("Improve") { improve(.improve) }
                 Button("Expand with detail") { improve(.expand) }
                 Button("Adapt for \(studio.profile.displayName)") { improve(.adapt) }
             } label: {
-                Label("Improve", systemImage: "wand.and.stars")
+                Label("Improve", systemImage: "wand.and.stars").lineLimit(1)
             } primaryAction: {
                 improve(.improve)
             }
@@ -267,7 +275,12 @@ struct IntentPane: View {
             .keyboardShortcut("o", modifiers: [.command, .option])
             .help("Rewrite your message so the model understands it better (⌥⌘O). You review it before anything is sent.")
 
-            Button { showPalette = true } label: { Label("Prompts", systemImage: "text.book.closed") }
+            Button { showPalette = true } label: {
+                Label("Prompts", systemImage: "text.book.closed").lineLimit(1)
+                    .labelStyle(CompactLabelStyle(compact: compact))
+            }
+                .fixedSize()
+                .help("Saved prompts")
                 .popover(isPresented: $showPalette, arrowEdge: .top) {
                     PromptPaletteView(
                         studio: studio, canSave: !draftIsEmpty,
@@ -281,15 +294,20 @@ struct IntentPane: View {
                 Button {
                     if let back = studio.takeUndo() { intentText = back }
                 } label: {
-                    Label("Undo improve", systemImage: "arrow.uturn.backward")
+                    Label("Undo improve", systemImage: "arrow.uturn.backward").lineLimit(1)
+                        .labelStyle(CompactLabelStyle(compact: compact))
                 }
+                .fixedSize()
+                .help("Put back what you wrote before Improve")
             }
             Spacer(minLength: 4)
             intentMenu
             if !draftIsEmpty {
                 let tokens = PromptTokens.estimate(intentText)
-                Text("≈\(tokens.formatted()) tokens")
+                Text(compact ? "≈\(tokens.formatted())" : "≈\(tokens.formatted()) tokens")
                     .font(.mtLabelSmall)
+                    .lineLimit(1)
+                    .fixedSize()
                     .foregroundStyle(tokens > studio.profile.maxUsefulTokens ? Color.mtError : Color.mtOnSurfaceVariant)
                     .help("Rough size of what you typed. Guidance and project code are added on top; see “What the model sees”.")
             }
@@ -299,6 +317,13 @@ struct IntentPane: View {
         .buttonStyle(MTTextButtonStyle())
         .font(.mtLabelMedium)
         .padding(.horizontal, 4)
+    }
+
+    private struct CompactLabelStyle: LabelStyle {
+        let compact: Bool
+        func makeBody(configuration: Configuration) -> some View {
+            if compact { configuration.icon } else { Label(configuration) }
+        }
     }
 
     private var intentMenu: some View {
