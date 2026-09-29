@@ -258,6 +258,7 @@ struct MainLayout: View {
 struct SettingsView: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
+    @Environment(LoginItemModel.self) private var loginItem
     @State private var workspacePath: String = ""
 
     var body: some View {
@@ -265,6 +266,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 pageHeader
                 generationSection
+                startupSection
                 indexingSection
                 aboutSection
             }
@@ -292,6 +294,48 @@ struct SettingsView: View {
                     .foregroundStyle(Color.mtOnSurface)
                 MTDivider()
                 providerHealthRows
+            }
+        }
+    }
+
+    private var startupSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                Label("Privacy & startup", systemImage: "lock.shield")
+                    .font(.mtTitleSmall)
+                    .foregroundStyle(Color.mtOnSurface)
+                MTDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Where your work is processed")
+                        .font(.mtLabelLarge)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                    Picker("Privacy", selection: Binding(
+                        get: { services.routingPolicy },
+                        set: { policy in Task { await services.setRoutingPolicy(policy) } })
+                    ) {
+                        ForEach(RoutingPolicy.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    Text(services.routingPolicy.summary)
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                MTDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Launch VibeCockpit at login", isOn: Binding(
+                        get: { loginItem.isOn },
+                        set: { loginItem.setEnabled($0) }))
+                        .disabled(!loginItem.isAvailable)
+                    Text("VibeCockpit keeps running in the menu bar when you close its window, so other apps can keep using your local model.")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let message = loginItem.message {
+                        Text(message).font(.mtBodySmall).foregroundStyle(Color.mtDegraded)
+                    }
+                }
             }
         }
     }

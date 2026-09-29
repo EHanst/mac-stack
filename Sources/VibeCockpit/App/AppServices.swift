@@ -33,10 +33,16 @@ public final class AppServices {
     private var ledger = PromptLedger()
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
-    public init() {
+    /// Local only / Local first / Cloud allowed. Observable so the menu bar and Settings agree.
+    public private(set) var routingPolicy: RoutingPolicy
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) {
         let registry = ModelRegistry()
         self.registry = registry
-        let policy = UserDefaults.standard.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
+        self.defaults = defaults
+        let policy = defaults.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
+        self.routingPolicy = policy
         self.inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
     }
 
@@ -46,7 +52,8 @@ public final class AppServices {
 
     /// Local only / Local first / Cloud allowed. Persisted; takes effect on the next request.
     public func setRoutingPolicy(_ policy: RoutingPolicy) async {
-        UserDefaults.standard.set(policy.rawValue, forKey: Self.policyKey)
+        routingPolicy = policy
+        defaults.set(policy.rawValue, forKey: Self.policyKey)
         await inference.setPolicy(policy)
     }
 
