@@ -204,3 +204,87 @@ struct PromptOptimizerTests {
         #expect(await svc.plannedModel() == "local:bonsai")
     }
 }
+
+@Suite("PromptOptimizer conversation sharing")
+struct PromptOptimizerSharingTests {
+
+    private let prefix = [
+        Message(role: .system, content: "You are Kokoro."),
+        Message(role: .user, content: "earlier question"),
+        Message(role: .assistant, content: "earlier answer"),
+    ]
+
+    private func run(providerID: String, context: OptimizeContext, policy: RoutingPolicy = .cloudAllowed) async throws -> [Message] {
+        let cap = Captured()
+        let registry = ModelRegistry()
+        await registry.register(ReplyProvider(id: providerID, reply: ["<improved>Fix the crash in the loader code.</improved>"], captured: cap))
+        let svc = InferenceService(registry: registry, policy: policy)
+        for try await _ in PromptOptimizer(inference: svc).optimize(draft: "fix the crash in the loader", context: context) {}
+        return await cap.messages
+    }
+
+    @Test("a model on this Mac continues the conversation, so its cached prefix stays valid")
+    func localSharesPrefix() async throws {
+        let sent = try await run(providerID: "local:bonsai", context: OptimizeContext(sharedPrefix: prefix))
+        #expect(sent.count == prefix.count + 1)
+        #expect(sent.prefix(prefix.count).map(\.content) == prefix.map(\.content))
+        let last = try #require(sent.last)
+        #expect(last.role == .user)
+        #expect(last.content.contains("<draft>\nfix the crash in the loader\n</draft>"))
+        #expect(last.content.contains("prompt rewriter"))
+    }
+
+    @Test("a cloud model never sees the conversation, only the draft")
+    func cloudGetsDraftOnly() async throws {
+        let sent = try await run(providerID: "openai", context: OptimizeContext(sharedPrefix: prefix))
+        #expect(sent.count == 2)
+        #expect(!sent.contains { $0.content.contains("earlier question") || $0.content.contains("You are Kokoro.") })
+    }
+
+    @Test("a cloud model pinned to rewrite gets the draft only, even when chat is local")
+    func pinnedCloud() async throws {
+        let sent = try await run(providerID: "openai", context: OptimizeContext(pin: "openai", sharedPrefix: prefix))
+        #expect(sent.count == 2)
+    }
+
+    @Test("a conversation too long for the local model is left out")
+    func tooLongFallsBack() async throws {
+        let cap = Captured()
+        let registry = ModelRegistry()
+        await registry.register(LimitedProvider(captured: cap, limit: 100))
+        let svc = InferenceService(registry: registry, policy: .localOnly)
+        let long = prefix + [Message(role: .user, content: String(repeating: "word ", count: 400))]
+        for try await _ in PromptOptimizer(inference: svc).optimize(
+            draft: "fix the crash in the loader", context: OptimizeContext(sharedPrefix: long)) {}
+        #expect(await cap.messages.count == 2)
+    }
+
+    @Test("an empty conversation means a self-contained request")
+    func emptyPrefix() async throws {
+        let sent = try await run(providerID: "local:bonsai", context: OptimizeContext())
+        #expect(sent.count == 2 && sent[0].role == .system)
+    }
+
+    @Test("capitalisation and a final full stop don't count as a change")
+    func trivialChange() {
+        let r = PromptOptimizer.result(raw: "<improved>Fix the crash.</improved>", original: "fix the crash", mode: .improve, model: nil)
+        #expect(r.rejection == nil && !r.didChange)
+    }
+}
+
+private actor LimitedProvider: ModelProvider {
+    nonisolated let id: ProviderID = "local:small"
+    nonisolated let capabilities: ProviderCapabilities = [.textGeneration, .streaming]
+    let captured: Captured
+    let limit: Int
+    init(captured: Captured, limit: Int) { self.captured = captured; self.limit = limit }
+    func generate(messages: [Message], tools: [ToolDefinition], options: GenerationOptions) -> AsyncThrowingStream<GenerationEvent, Error> {
+        let captured = self.captured
+        return AsyncThrowingStream { c in
+            Task { await captured.record(messages); c.yield(.token("<improved>Fix the crash in the loader code.</improved>")); c.finish() }
+        }
+    }
+    func embed(_ texts: [String]) async throws -> [[Float]] { [] }
+    func healthCheck() async -> ProviderHealth { .healthy }
+    func maxContextTokens() async -> Int? { limit }
+}

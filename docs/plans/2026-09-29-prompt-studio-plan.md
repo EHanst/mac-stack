@@ -148,3 +148,28 @@ Total ≈ 6 weeks. Critical path: P1 → P2 → P3. P4 and P5 can overlap once P
 | Literal-preservation failures reaching the user | 0 |
 | Next-turn TTFT regression after an optimize call | ≤ 10% |
 | Outbound requests in Local-only mode | exactly 0 |
+
+---
+
+## 8. Implementation status (2026-09-29)
+
+P0–P5 are built on branch `prompt-studio`; the full test suite passes and the Xcode app target builds. Checked by eye in the running app: the chat box tools (Improve, Prompts, task chip, token count, hint chips) and the Prompts page. Not yet exercised in the running app: a real Improve round trip through the UI, the review sheet, saving from a message, project prompts.
+
+### Measured (VibeBench `--studio-test`, Bonsai-27B, M3 Pro 18 GB, ~1,600-token conversation)
+
+| Scenario | Improve call | Next chat message |
+|---|---|---|
+| No Improve call (baseline) | – | TTFT 1.25 s, 46 tokens prefilled |
+| Improve as a **separate prompt** | 3.8 s, 293 prefilled | **TTFT 19.8 s, all 1,631 tokens prefilled** (cache lost) |
+| Improve **continuing the conversation** (shipped) | 4.7 s, 347 prefilled | **TTFT 0.86 s**, 19 prefilled |
+
+Risk 2 was real: `PromptSnapshotStore.prune` drops every snapshot that isn't a prefix of the prompt just served, so an unrelated prompt wipes the chat's cache (16× slower next message; about 100 s at 8k tokens). A rewrite by a model on this Mac therefore continues the conversation (a final user message carries the instructions and draft), which also pre-warms the next turn. A cloud model, or a conversation too long for the local window, gets the self-contained draft-only request instead, so the conversation never leaves the Mac.
+
+### Deviations from the plan
+
+- **Partial acceptance:** per-change checkboxes aren't possible because the rewriter reports changes as one-line notes, not text spans. The review sheet shows a word-level diff, lets the user edit the rewrite before accepting, and offers Keep mine / Expand / Use this.
+- **Built-in blanks:** `{{workspace}}`, `{{date}}`, `{{clipboard}}` fill themselves in the app; `{{selection}}`, `{{file}}`, `{{git_diff}}` are asked for (the app has no editor selection to read). Over MCP, `{{clipboard}}` is never read for outside apps.
+- **New permission:** `prompts` ("Read your saved prompts"), off by default for new apps.
+- **Not built:** project instructions file (idea 11), side-by-side model compare, local usage stats, hotkey capture (later/next lists).
+- **Improve tolerance:** a rewrite that differs only in capitalisation, spacing or a final full stop is reported as "already clear".
+- **Known flaky, unrelated:** `ModelInstaller` "installs the included files" failed once under the full parallel run (`sizeMismatch`) and passed in 3 isolated reruns.

@@ -18,11 +18,18 @@ public struct OptimizeContext: Sendable {
     public var pin: ProviderID?
     /// Queue priority; outside apps use `.api` so they don't jump ahead of the chat.
     public var priority: InferenceScheduler.Priority
+    /// The conversation so far, system message included. When a model on this Mac does the rewriting,
+    /// the request continues this conversation instead of starting a new one, so the model's cached
+    /// prefix survives (a separate prompt would evict it; see docs/plans/2026-09-29-prompt-studio-plan.md).
+    /// Never sent to a cloud model.
+    public var sharedPrefix: [Message]
 
     public init(workspaceName: String? = nil, intent: String? = nil,
                 profile: ModelPromptProfile = .generic, pin: ProviderID? = nil,
-                priority: InferenceScheduler.Priority = .interactive) {
+                priority: InferenceScheduler.Priority = .interactive,
+                sharedPrefix: [Message] = []) {
         self.priority = priority
+        self.sharedPrefix = sharedPrefix
         self.workspaceName = workspaceName
         self.intent = intent
         self.profile = profile
@@ -47,7 +54,14 @@ public struct Optimization: Sendable, Equatable {
     public let model: ProviderID?
     public let rejection: Rejection?
 
-    public var didChange: Bool { rejection == nil && improved != original }
+    /// True when the rewrite says something different. A change of capitalisation, spacing or a final
+    /// full stop doesn't count, so an already-clear prompt isn't offered as an "improvement".
+    public var didChange: Bool { rejection == nil && Self.normalized(improved) != Self.normalized(original) }
+
+    static func normalized(_ text: String) -> String {
+        text.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            .trimmingCharacters(in: .punctuationCharacters)
+    }
 }
 
 public enum OptimizerEvent: Sendable {
@@ -81,10 +95,15 @@ public struct PromptOptimizer: Sendable {
                     continuation.finish()
                     return
                 }
-                let messages = [
-                    Message(role: .system, content: Self.metaPrompt(context: context, mode: mode)),
-                    Message(role: .user, content: Self.wrapDraft(trimmed)),
-                ]
+                let target = await inference.plannedModel()
+                let servedLocally = (context.pin ?? target)?.hasPrefix("local:") == true
+                var messages = Self.requestMessages(draft: trimmed, context: context, mode: mode,
+                                                    useSharedPrefix: servedLocally && !context.sharedPrefix.isEmpty)
+                if messages.count > 2, let limit = await inference.localContextLimit(),
+                   InferenceService.estimateTokens(messages) > limit {
+                    // The conversation is too long to continue; rewrite from the draft alone.
+                    messages = Self.requestMessages(draft: trimmed, context: context, mode: mode, useSharedPrefix: false)
+                }
                 let budget = mode == .expand ? 1_500 : min(1_024, max(200, PromptTokens.estimate(trimmed) * 3 + 150))
                 let route = RouteBox()
                 do {
@@ -115,6 +134,19 @@ public struct PromptOptimizer: Sendable {
     }
 
     // MARK: Prompt
+
+    /// The messages for one rewrite. With `useSharedPrefix` the request is the conversation so far plus
+    /// one more user message that carries the instructions and the draft; otherwise it is a
+    /// self-contained system + user pair.
+    public static func requestMessages(draft: String, context: OptimizeContext, mode: OptimizeMode,
+                                       useSharedPrefix: Bool) -> [Message] {
+        let meta = metaPrompt(context: context, mode: mode)
+        if useSharedPrefix {
+            let lead = "For this message only, set aside your usual role and personality: you are a prompt rewriter. Do not answer the request below; rewrite it.\n\n"
+            return context.sharedPrefix + [Message(role: .user, content: lead + meta + "\n\n" + wrapDraft(draft))]
+        }
+        return [Message(role: .system, content: meta), Message(role: .user, content: wrapDraft(draft))]
+    }
 
     static func metaPrompt(context: OptimizeContext, mode: OptimizeMode) -> String {
         var lines = [

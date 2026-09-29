@@ -25,6 +25,7 @@ struct Options {
     var serviceTest = false
     var apiTest = false
     var textTest = false
+    var studioTest = false
     var modelCheck = false
     var samplerCheck = false
     var noGuard = false
@@ -46,6 +47,7 @@ struct Options {
             case "--service-test": serviceTest = true
             case "--api-test": apiTest = true
             case "--text-test": textTest = true
+            case "--studio-test": studioTest = true
             case "--model-check": modelCheck = true
             case "--sampler-check": samplerCheck = true
             case "--no-guard": noGuard = true
@@ -336,6 +338,46 @@ func run() async throws {
                 print("  chunk \(chunk) · \(name) (\(stats?.promptTokens ?? 0) tok): \(text.replacingOccurrences(of: "\n", with: "⏎").prefix(150))")
             }
         }
+        print("")
+    }
+
+    // ── Prompt Studio: does an "Improve" call cost the chat its cached prefix? ─────────
+    if opts.studioTest {
+        print("[studio test] next chat turn after an Improve call, ~\(opts.warmPrefix) tok of conversation")
+        let persona = "You are Kokoro, the assistant inside VibeCockpit, a native macOS app for building Swift/macOS software with a local model. You are warm, upbeat and a little playful. Substance comes first: be correct, concise and safe."
+        let chatSystem = Message(role: .system, content: persona)
+        let q1 = Message(role: .user, content: makePrompt(tokens: opts.warmPrefix, nonce: 7_000))
+        let q2 = Message(role: .user, content: "Now list the first two notes.")
+        let draft = "fix the crash in `loadItems()` in Sources/App/Loader.swift when the list is empty"
+        let context = OptimizeContext(profile: .localSmall)
+
+        func run(_ label: String, sharing: Bool?) async {
+            await provider.clearPromptCache()
+            let first = await measure(provider, [chatSystem, q1], gen: 24, timeout: opts.timeout)
+            let a1 = Message(role: .assistant, content: first.text)
+            var rewrite = ""
+            var optimizeStats: GenerationStats?
+            var optimizeTTFT = Double.nan
+            if let sharing {
+                var ctx = context
+                ctx.sharedPrefix = sharing ? [chatSystem, q1, a1] : []
+                let messages = PromptOptimizer.requestMessages(draft: draft, context: ctx, mode: .improve, useSharedPrefix: sharing)
+                let m = await measure(provider, messages, gen: 160, timeout: opts.timeout)
+                rewrite = m.text; optimizeStats = m.stats; optimizeTTFT = m.ttft
+            }
+            let next = await measure(provider, [chatSystem, q1, a1, q2], gen: 24, timeout: opts.timeout)
+            print("  \(label)")
+            if let s = optimizeStats {
+                print("    improve call : TTFT \(fmt(optimizeTTFT, 2)) s | prompt \(s.promptTokens), cached \(s.cachedTokens), prefilled \(s.prefilledTokens) | \(s.generatedTokens) tok generated")
+                print("    rewrite      : \(rewrite.replacingOccurrences(of: "\n", with: "⏎").prefix(300))")
+            }
+            if let s = next.stats {
+                print("    next chat    : TTFT \(fmt(next.ttft, 2)) s | prompt \(s.promptTokens), cached \(s.cachedTokens), prefilled \(s.prefilledTokens)")
+            }
+        }
+        await run("no Improve call (baseline)", sharing: nil)
+        await run("Improve as a separate prompt", sharing: false)
+        await run("Improve continuing the conversation", sharing: true)
         print("")
     }
 

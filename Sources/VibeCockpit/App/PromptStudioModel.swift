@@ -35,6 +35,9 @@ public final class PromptStudioModel {
     /// Models the user can choose to run "Improve" (chat-capable only; utility models are left out).
     public private(set) var choices: [InferenceService.ModelListing] = []
     public var workspaceName: String?
+    /// The conversation so far (system message included), for a rewrite done by a model on this Mac.
+    /// Set by `AppServices`; empty means "start from the draft alone".
+    public var conversationPrefix: (@MainActor () -> [Message])?
 
     static let pinKey = "optimizerModelPin"
 
@@ -212,8 +215,9 @@ public final class PromptStudioModel {
             guard let self else { return }
             await self.refreshModel()
             let pin = self.optimizerPin
+            let prefix = self.conversationPrefix?() ?? []
             // The rewrite is tailored to the model that will *receive* the prompt, not the one rewriting it.
-            let context = OptimizeContext(workspaceName: self.workspaceName, intent: intent, profile: self.profile, pin: pin)
+            let context = OptimizeContext(workspaceName: self.workspaceName, intent: intent, profile: self.profile, pin: pin, sharedPrefix: prefix)
             do {
                 for try await event in self.optimizer.optimize(draft: draft, context: context, mode: mode) {
                     if Task.isCancelled { return }

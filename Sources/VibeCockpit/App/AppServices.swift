@@ -139,6 +139,10 @@ public final class AppServices {
         guard !startupComplete else { return }
         startupComplete = true
         DiagnosticsCollector.shared.start()
+        promptStudio.conversationPrefix = { [weak self, weak coordinator] in
+            guard let self, let coordinator else { return [] }
+            return self.optimizerPrefix(promptCount: coordinator.state.intentHistory.filter { $0.kind == .userPrompt }.count)
+        }
         await promptStudio.reload()
         await promptStudio.refreshModel()
 
@@ -434,6 +438,14 @@ public final class AppServices {
         await diagnostics.reload()
     }
 
+    /// What a rewrite done by a model on this Mac continues from: this conversation's prompt as the
+    /// model has it (so its cached prefix stays warm), or just the system message before the first
+    /// send or when the visible chat and the ledger disagree (a cleared chat).
+    private func optimizerPrefix(promptCount: Int) -> [ChatMessage] {
+        if !ledger.isEmpty, ledger.userTurns == promptCount { return ledger.messages }
+        return [ChatMessage(role: .system, content: buildSystemPrompt())]
+    }
+
     /// The full text of one user turn: task guidance (from the prompt library), framing, retrieved
     /// code, then the request. `processIntent` and the "what the model sees" inspector both call this,
     /// so what the inspector shows is what gets sent.
@@ -701,13 +713,13 @@ public final class AppServices {
             return "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications."
         }
         var text = """
-            You are Kokoro, the assistant inside VibeCockpit, a native macOS app for building Swift/macOS software with a local model. You are warm, upbeat and a little playful, and you enjoy a good debugging puzzle.
+            You are Kokoro, the assistant inside VibeCockpit, a macOS app for building Swift software with a local model. You are warm, upbeat and a little playful, and you enjoy a good debugging puzzle.
 
-            Substance comes first: be correct, concise and safe. If you are not sure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
+            Substance comes first: be correct, concise and safe. If unsure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
 
-            Stack: Swift 6, SwiftUI/AppKit, actors and structured concurrency, MLX. Do not suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
+            Stack: Swift 6, SwiftUI/AppKit, actors, MLX. Never suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
 
-            Voice: short and friendly. Celebrate a green build briefly. Treat errors as puzzles, not something to apologize for. Accept praise shyly. Use at most one light flourish per reply, and none in code, diffs, commit messages, tool arguments or file contents.
+            Voice: short and friendly. Celebrate a green build briefly. Treat errors as puzzles. Accept praise shyly. At most one light flourish per reply, none in code, diffs, commit messages, tool arguments or file contents.
             """
         if let name = addressName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
             text += "\nAddress the user as \(name)."
