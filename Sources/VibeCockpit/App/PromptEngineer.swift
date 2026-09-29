@@ -76,6 +76,17 @@ public struct PromptEngineer {
         return result
     }
 
+    /// Build the full text of one user turn — intent guidance, task framing, retrieved context,
+    /// then the request — exactly once. The caller stores the result verbatim (see
+    /// `PromptLedger`) instead of re-deriving it each request, so earlier turns never change and
+    /// the model's prefix cache stays valid. Guidance lives here rather than in the system
+    /// message because the system message is fixed for the whole session.
+    public static func augmentUserTurn(_ text: String, intent: Intent, ragContext: String?) -> String {
+        let body = ragContext.map { "\($0)\n\nUser request: \(text)" } ?? text
+        let framed = (userFraming(for: intent) ?? "") + body
+        return systemAddendum(for: intent) + "\n\n" + framed
+    }
+
     // MARK: - Per-intent content
 
     private static func systemAddendum(for intent: Intent) -> String {

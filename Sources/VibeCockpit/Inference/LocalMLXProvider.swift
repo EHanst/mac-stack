@@ -26,8 +26,8 @@ public actor LocalMLXProvider: ModelProvider {
     private var tokenizer: (any Tokenizer)?
     private var _runtime: ModelRuntime?
 
-    /// Cache state after the most recent prompt prefill, for prefix reuse across turns.
-    private var promptSnapshot: PromptCacheSnapshot?
+    /// Cache snapshots at message boundaries of recent prompts, for prefix reuse across turns.
+    private var snapshots = PromptSnapshotStore<Qwen35Cache>()
     /// Timing and memory for the most recent request (read by the benchmark harness and diagnostics).
     public private(set) var lastStats: GenerationStats?
     /// Bytes to wire in GPU memory while generating (weights + headroom).
@@ -62,7 +62,7 @@ public actor LocalMLXProvider: ModelProvider {
     private func _unloadModel() async {
         model = nil
         tokenizer = nil
-        promptSnapshot = nil
+        snapshots.removeAll()
         Memory.clearCache()
         logger.info("Model weights unloaded (idle eviction)")
     }
@@ -121,8 +121,7 @@ public actor LocalMLXProvider: ModelProvider {
         defer { Task { await self.runtime.release() } }
         let (mdl, tok) = try await ensureLoaded()
 
-        let prompt = buildPrompt(from: messages, tokenizer: tok)
-        let promptIds = tok.encode(text: prompt, addSpecialTokens: true).map { Int32($0) }
+        let (promptIds, boundaries) = tokenize(messages, with: tok)
         guard !promptIds.isEmpty else {
             continuation.yield(.finished(.stop))
             continuation.finish()
@@ -134,7 +133,7 @@ public actor LocalMLXProvider: ModelProvider {
         let ticket = WiredMemoryTicket(size: wiredBytes, policy: WiredSumPolicy(), kind: .active)
         _ = await ticket.start()
         do {
-            try generateLoop(model: mdl, tokenizer: tok, promptIds: promptIds,
+            try generateLoop(model: mdl, tokenizer: tok, promptIds: promptIds, boundaries: boundaries,
                              options: options, continuation: continuation)
         } catch {
             _ = await ticket.end()
@@ -148,10 +147,12 @@ public actor LocalMLXProvider: ModelProvider {
         model mdl: Qwen35ForCausalLM,
         tokenizer tok: any Tokenizer,
         promptIds: [Int32],
+        boundaries: [Int],
         options: GenerationOptions,
         continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     ) throws {
-        let eosIds: Set<Int> = [tok.eosTokenId ?? 151645, 151643]
+        // 248044 = <|endoftext|>, 248046 = <|im_end|> (Bonsai/Qwen3 tokenizer)
+        let eosIds: Set<Int> = [tok.eosTokenId ?? 248044, 248046]
         let maxTokens = options.maxTokens > 0 ? options.maxTokens : 64000
         let temperature = Float(max(options.temperature, 0))
 
@@ -163,28 +164,36 @@ public actor LocalMLXProvider: ModelProvider {
 
         let cache: Qwen35Cache
         var consumed = 0
-        if let snap = promptSnapshot, !snap.tokens.isEmpty, snap.tokens.count <= lastIndex,
-           commonPrefixLength(snap.tokens, promptIds) == snap.tokens.count {
-            // Recurrent state can't be rewound, so only an exact prefix match is reusable.
-            cache = snap.cache.fork()
-            consumed = snap.tokens.count
+        // Restore the longest stored prefix of this prompt (recurrent state can't be rewound, so
+        // only an exact token-prefix match is reusable — but any stored boundary will do).
+        if let hit = snapshots.bestMatch(for: promptIds, maxLength: lastIndex) {
+            cache = hit.payload.fork()
+            consumed = hit.tokens.count
         } else {
             cache = mdl.makeCache()
         }
 
-        var i = consumed
-        while i < lastIndex {
+        // Prefill in chunks cut at message boundaries so a snapshot can be taken at each one.
+        var stops = PrefillPlan.snapshotStops(
+            boundaries: boundaries, restoredUpTo: consumed, prefillEnd: lastIndex)
+        if lastIndex > consumed, !stops.contains(lastIndex) { stops.append(lastIndex) }   // tail
+        for range in PrefillPlan.chunks(
+            from: consumed, to: lastIndex, chunk: Self.prefillChunkSize, stops: stops) {
             try Task.checkCancellation()
-            let n = min(Self.prefillChunkSize, lastIndex - i)
-            let chunk = MLXArray(Array(promptIds[i..<(i + n)]))[.newAxis]
+            let chunk = MLXArray(Array(promptIds[range]))[.newAxis]
             mdl.prefill(chunk, cache: cache)
             MLX.eval(cache.stateArrays)
-            i += n
+            if stops.contains(range.upperBound) {
+                let isBoundary = boundaries.contains(range.upperBound)
+                let kind: PromptSnapshotStore<Qwen35Cache>.Kind =
+                    range.upperBound == boundaries.first ? .system : (isBoundary ? .boundary : .tail)
+                let snap = cache.fork()
+                snapshots.insert(
+                    tokens: Array(promptIds[0..<range.upperBound]), payload: snap,
+                    bytes: snap.stateArrays.reduce(0) { $0 + $1.nbytes }, kind: kind)
+            }
         }
-        if lastIndex > consumed {
-            promptSnapshot = PromptCacheSnapshot(
-                tokens: Array(promptIds[0..<lastIndex]), cache: cache.fork())
-        }
+        snapshots.prune(keepingPrefixesOf: promptIds)
         let prefilled = lastIndex - consumed
         let prefillSecs = Date().timeIntervalSince(prefillStart)
 
@@ -391,22 +400,29 @@ public actor LocalMLXProvider: ModelProvider {
 
     // MARK: - Chat template
 
-    private func buildPrompt(from messages: [Message], tokenizer: any Tokenizer) -> String {
-        var result = ""
-        for msg in messages {
-            switch msg.role {
-            case .system:
-                result += "<|im_start|>system\n\(msg.content)<|im_end|>\n"
-            case .user:
-                result += "<|im_start|>user\n\(msg.content)<|im_end|>\n"
-            case .assistant:
-                result += "<|im_start|>assistant\n\(msg.content)<|im_end|>\n"
-            case .tool:
-                result += "<|im_start|>tool\n\(msg.content)<|im_end|>\n"
-            }
+    /// Token ids for the prompt plus the token offset at the end of each message.
+    ///
+    /// Segments are tokenised separately to find message boundaries; ChatML markers are special
+    /// tokens, so this matches tokenising the whole text. That is verified each time, and if the
+    /// two ever disagree the boundaries are dropped (only the tail snapshot is kept) rather than
+    /// trusted.
+    private func tokenize(_ messages: [Message], with tok: any Tokenizer) -> (ids: [Int32], boundaries: [Int]) {
+        let rendered = ChatPromptRenderer.render(messages)
+        let whole = tok.encode(text: rendered.text, addSpecialTokens: true)
+
+        var joined: [Int] = []
+        var boundaries: [Int] = []
+        for segment in rendered.segments {
+            joined += tok.encode(text: segment, addSpecialTokens: false)
+            boundaries.append(joined.count)
         }
-        result += "<|im_start|>assistant\n"
-        return result
+        joined += tok.encode(text: rendered.generation, addSpecialTokens: false)
+
+        guard joined == whole else {
+            logger.notice("segment tokenisation differs from whole-prompt tokenisation; message-boundary snapshots disabled for this request")
+            return (whole.map { Int32($0) }, [])
+        }
+        return (whole.map { Int32($0) }, boundaries)
     }
 }
 

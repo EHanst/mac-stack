@@ -17,6 +17,9 @@ public final class AppServices {
     private var mcpService: MCPService?
     private var buildRunner: XPCBuildRunner?
     private var startupComplete = false
+    /// Exactly what has been sent to the model this session; append-only so the local model's
+    /// prefix cache stays valid across tool-loop turns and follow-up messages.
+    private var ledger = PromptLedger()
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
     public init() {}
@@ -192,32 +195,53 @@ public final class AppServices {
         ]
         let toolDefs = agentTools.map { ToolDefinition($0.toolDefinition) }
 
+        // Build the augmented user message once and store it verbatim (item 1: append-only).
+        let promptCount = coordinator.state.intentHistory.filter { $0.kind == .userPrompt }.count
+        if ledger.userTurns + 1 != promptCount {
+            // New or cleared session (or out of sync): start fresh, seeding from visible history.
+            ledger.reset()
+            var prior = historyMessages(coordinator.state)
+            if prior.last?.role == .user { prior.removeLast() }   // the prompt being sent now
+            ledger.begin(system: buildSystemPrompt(), prior: prior)
+        } else if ledger.isEmpty {
+            ledger.begin(system: buildSystemPrompt())
+        }
+        ledger.appendUserTurn(PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext))
+        // Budget: ~80% of maxTokens, approximated as chars/4. Drops whole old turns permanently.
+        ledger.trim(toCharacterBudget: (GenerationOptions().maxTokens * 4 * 4) / 5)
+
         do {
             var continueLoop = true
-            var isFirstTurn = true
             while continueLoop {
-                let raw = buildMessages(coordinator.state, ragContext: isFirstTurn ? ragContext : nil)
-                let messages = isFirstTurn ? PromptEngineer.engineer(messages: raw, intent: intent) : raw
-                isFirstTurn = false
-                let stream = await provider.generate(messages: messages, tools: toolDefs, options: GenerationOptions())
+                let stream = await provider.generate(
+                    messages: ledger.messages, tools: toolDefs, options: GenerationOptions())
                 var pendingToolCalls: [ToolCall] = []
-                for try await event in stream {
-                    switch event {
-                    case .token(let t):
-                        coordinator.send(.tokenReceived(t))
-                    case .toolCall(let call):
-                        coordinator.send(.toolCallMade(call.name, call.arguments, call.id))
-                        pendingToolCalls.append(call)
-                    case .finished:
-                        break
+                var assistantText = ""
+                do {
+                    for try await event in stream {
+                        switch event {
+                        case .token(let t):
+                            assistantText += t
+                            coordinator.send(.tokenReceived(t))
+                        case .toolCall(let call):
+                            coordinator.send(.toolCallMade(call.name, call.arguments, call.id))
+                            pendingToolCalls.append(call)
+                        case .finished:
+                            break
+                        }
                     }
+                } catch {
+                    ledger.appendAssistant(assistantText)   // keep what the model already said
+                    throw error
                 }
+                ledger.appendAssistant(assistantText)
                 if pendingToolCalls.isEmpty {
                     continueLoop = false
                 } else {
                     for call in pendingToolCalls {
                         let result = await executeTool(call, handlers: agentTools)
                         coordinator.send(.toolResultReceived(call.id, result))
+                        ledger.appendToolResult(id: call.id, content: result)
                     }
                 }
             }
@@ -334,11 +358,9 @@ public final class AppServices {
 
     // MARK: - Private helpers
 
-    private func buildMessages(_ state: AppState, ragContext: String? = nil) -> [Message] {
-        let systemContent = buildSystemPrompt()
-        let system = Message(role: .system, content: systemContent)
-
-        // Assemble candidate messages from history, newest-first for budget trimming
+    /// Conversation so far as plain messages, reconstructed from UI events. Only used to seed
+    /// the ledger when a session is rebuilt; earlier turns lose their RAG/framing here.
+    private func historyMessages(_ state: AppState) -> [Message] {
         var candidates: [Message] = []
         var pendingAssistant = ""
         for event in state.intentHistory.reversed() {
@@ -368,27 +390,7 @@ public final class AppServices {
             candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
         }
 
-        // Inject RAG context into the last user message
-        if let rag = ragContext,
-           let lastUserIdx = candidates.indices.reversed().first(where: { candidates[$0].role == .user }) {
-            let original = candidates[lastUserIdx]
-            candidates[lastUserIdx] = Message(
-                role: .user,
-                content: "\(rag)\n\nUser request: \(original.content)"
-            )
-        }
-
-        // Budget: ~80% of maxTokens, approximated as chars/4
-        let budget = (GenerationOptions().maxTokens * 4 * 4) / 5  // chars budget
-        var usedChars = systemContent.count
-        var kept: [Message] = []
-        for msg in candidates.reversed() {
-            usedChars += msg.content.count
-            if usedChars > budget && !kept.isEmpty { break }
-            kept.insert(msg, at: 0)
-        }
-
-        return [system] + kept
+        return candidates
     }
 
     private func buildSystemPrompt() -> String {
