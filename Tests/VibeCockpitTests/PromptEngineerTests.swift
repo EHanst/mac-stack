@@ -89,3 +89,46 @@ struct PromptEngineerTests {
         #expect(user.content == "hello")
     }
 }
+
+@Suite("PromptEngineer recipes and whole-word matching")
+struct PromptEngineerRecipeTests {
+
+    @Test("keywords match whole words, not fragments")
+    func wholeWords() {
+        #expect(PromptEngineer.classify("what is the address of the server") != .generate)
+        #expect(PromptEngineer.classify("remove the old cache") != .refactor)
+        #expect(PromptEngineer.classify("this is an evaluation of options") == .general)
+    }
+
+    @Test("plain inflections still match")
+    func inflections() {
+        #expect(PromptEngineer.classify("I keep hitting crashes") == .debug)
+        #expect(PromptEngineer.classify("we are creating a settings screen") == .generate)
+        #expect(PromptEngineer.classify("write some tests") == .test)
+    }
+
+    @Test("no recipe given: the built-in guidance is used")
+    func defaultRecipe() {
+        let turn = PromptEngineer.augmentUserTurn("fix it", intent: .debug, ragContext: nil)
+        #expect(turn.hasPrefix(BuiltInPrompts.recipeText(for: "debug")))
+        #expect(turn.hasSuffix("[Task: debug]\nfix it"))
+    }
+
+    @Test("an edited recipe replaces the built-in guidance")
+    func customRecipe() {
+        let turn = PromptEngineer.augmentUserTurn("fix it", intent: .debug, ragContext: nil, recipe: "Be brief.")
+        #expect(turn == "Be brief.\n\n[Task: debug]\nfix it")
+    }
+
+    @Test("a switched-off recipe adds no guidance and no stray blank lines")
+    func offRecipe() {
+        #expect(PromptEngineer.augmentUserTurn("fix it", intent: .debug, ragContext: nil, recipe: "") == "[Task: debug]\nfix it")
+        #expect(PromptEngineer.augmentUserTurn("hello", intent: .general, ragContext: nil, recipe: "") == "hello")
+    }
+
+    @Test("intent keys line up with the library's recipe keys")
+    func keys() {
+        let all: [PromptEngineer.Intent] = [.generate, .debug, .refactor, .explain, .test, .review, .general]
+        #expect(Set(all.map(\.rawValue)) == Set(BuiltInPrompts.intents))
+    }
+}

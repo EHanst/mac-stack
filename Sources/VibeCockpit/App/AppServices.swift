@@ -50,6 +50,8 @@ public final class AppServices {
     public let externalServers = MCPClientManager()
     /// Project folders the user added; each has its own index, git and boundary.
     public let workspaces: WorkspaceManager
+    /// Saved prompts and the editable per-task guidance (recipes).
+    public let promptLibrary: PromptLibrary
     public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
     public let diagnostics: DiagnosticsModel
     public let workspacesModel: WorkspacesModel
@@ -64,6 +66,7 @@ public final class AppServices {
     public init(defaults: UserDefaults = .standard) {
         let registry = ModelRegistry()
         self.registry = registry
+        self.promptLibrary = PromptLibrary()
         self.defaults = defaults
         let policy = defaults.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
         self.routingPolicy = policy
@@ -328,11 +331,12 @@ public final class AppServices {
 
     // MARK: - Inference
 
-    public func processIntent(_ text: String, coordinator: AppCoordinator) async {
+    public func processIntent(_ text: String, coordinator: AppCoordinator, intent intentOverride: PromptEngineer.Intent? = nil) async {
         coordinator.send(.generationStarted)
 
         let ragContext = await retrieveContext(for: text)
-        let intent = PromptEngineer.classify(text)
+        let intent = intentOverride ?? PromptEngineer.classify(text)
+        let recipe = await promptLibrary.recipeText(for: intent.rawValue)
 
         let externalTools = await externalServers.tools()
         let agentTools: [AgentToolHandler] = externalTools + [
@@ -355,7 +359,7 @@ public final class AppServices {
         } else if ledger.isEmpty {
             ledger.begin(system: buildSystemPrompt())
         }
-        ledger.appendUserTurn(PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext))
+        ledger.appendUserTurn(PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext, recipe: recipe))
         // Budget: the smaller of ~80% of maxTokens and what this Mac can hold right now
         // (provider-reported, tokens → chars at a conservative 2.5 chars/token). Drops whole old
         // turns permanently so the prompt stays append-only afterwards.
