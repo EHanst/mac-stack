@@ -14,7 +14,7 @@ All paths are relative to the repo root (`mac-stack/`).
 ```bash
 # macOS 15+ / Xcode 16+, Apple Silicon
 xcode-select --install           # installs Xcode command-line tools
-brew install libgit2 xcodegen    # libgit2 required for CLibGit2 module
+brew install cmake xcodegen && ./scripts/build-libgit2.sh   # builds the vendored static libgit2 (Vendor/)
 ```
 
 Verify:

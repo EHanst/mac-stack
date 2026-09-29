@@ -36,7 +36,7 @@ jobs:
           xcodebuild -version
 
       - name: Install build tools
-        run: brew install libgit2 xcodegen create-dmg xcbeautify
+        run: brew install cmake xcodegen create-dmg xcbeautify && ./scripts/build-libgit2.sh
 
       - name: Cache SPM build
         uses: actions/cache@v4

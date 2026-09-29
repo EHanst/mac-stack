@@ -76,8 +76,8 @@ targets:
         PROVISIONING_PROFILE_SPECIFIER: ""
         CODE_SIGN_ENTITLEMENTS: ""
         SWIFT_INCLUDE_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include $(PROJECT_DIR)/Modules/CLibGit2"
-        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include /opt/homebrew/Cellar/libgit2/1.9.7/include"
-        OTHER_LDFLAGS: "-L/opt/homebrew/Cellar/libgit2/1.9.7/lib -lgit2"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Modules/CSQLiteVec/include $(PROJECT_DIR)/Vendor/libgit2/include"
+        OTHER_LDFLAGS: "-L$(PROJECT_DIR)/Vendor/libgit2/lib -lgit2 -lz -liconv"
 
   CSQLiteVec:
     type: library.static
@@ -98,8 +98,8 @@ targets:
     sources: []
     settings:
       base:
-        OTHER_LDFLAGS: "-L/opt/homebrew/Cellar/libgit2/1.9.7/lib -lgit2"
-        HEADER_SEARCH_PATHS: "/opt/homebrew/Cellar/libgit2/1.9.7/include /opt/homebrew/Cellar/libssh2/1.11.1_4/include /opt/homebrew/Cellar/openssl@3/3.6.4/include"
+        OTHER_LDFLAGS: "-L$(PROJECT_DIR)/Vendor/libgit2/lib -lgit2 -lz -liconv"
+        HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/libgit2/include"
 
   VibeCockpitTests:
     type: bundle.unit-test

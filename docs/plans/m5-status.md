@@ -10,7 +10,7 @@ Exit criteria: notarized DMG passes `spctl`; 24 h soak with 3 clients: no leak >
 ## Queue
 1. [x] **M5.1 Diagnostics (#15)** — DONE (`StackCore/Diagnostics/{RequestLog,SupportBundle}.swift`, `DiagnosticsCollector/Model/Card`; 15 tests). Request log, "Why this speed?", support bundle, MetricKit crash reports kept on-device.
 2. [x] **M5.2 Soak harness** — DONE: `scripts/soak.py` (isolated home, stub cloud, throwaway token; chat + streaming API + MCP clients; RSS/FD sampling; pass = ≤5 % RSS growth first→last quarter, FDs flat, ≤1 % errors, app alive). 1-min pilot passed (61/61 streams, 0 errors). **24 h run is yours:** `python3 scripts/soak.py --hours 24 --out ~/soak` (needs the Debug app and `.build/debug/vibe-mcp` built; keep the Mac awake).
-3. [ ] **M5.3 Vendor libgit2** — Homebrew path in `project.yml` breaks any machine without it (and notarization); bundle it or switch.
+3. [x] **M5.3 Vendor libgit2** — DONE: `scripts/build-libgit2.sh` builds a pinned, checksum-verified static libgit2 1.9.7 (local ops only: no SSH/HTTPS) into git-ignored `Vendor/libgit2`; `Package.swift`, `project.yml`, modulemap, CI and release workflows use it. No Homebrew paths left; neither binary references a libgit2/Homebrew dylib (`otool -L`). SwiftPM + xcodebuild builds pass, 358 tests pass. libgit2 is GPL-2.0 with the linking exception — ship its `COPYING` in the About/licences. One full run died once with SIGPIPE in the test process (passed on rerun; same unexplained-flake family).
 4. [ ] **M5.4 Release script dry-run** — check `scripts/release.sh` and `Config/ExportOptions.plist` end to end up to the signing step; hardened runtime + entitlements review.
 5. [ ] **M5.5 Launch-hidden-at-login** (open item from M1).
 6. [ ] **M5.6 Updater** — after your decision above.

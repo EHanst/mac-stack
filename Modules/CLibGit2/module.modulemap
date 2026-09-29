@@ -1,5 +1,7 @@
 module CLibGit2 [system] {
-    header "/opt/homebrew/include/git2.h"
+    header "../../Vendor/libgit2/include/git2.h"
     link "git2"
+    link "z"
+    link "iconv"
     export *
 }
