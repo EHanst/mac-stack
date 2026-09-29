@@ -43,7 +43,10 @@ Plan reference: `docs/plans/2026-09-28-next-phase-plan.md` §5–6 (M1: #1 hardw
 | Warm: exact repeat | 0.22 s | **0.23 s** |
 | Warm: new session, same system prompt | 0.94 s | **0.91 s** |
 | Service test | serial ratio 2.01, cancel → 0.86 s | serial (1.9 s / 3.1 s), **cancel → 0.83 s** |
-Prefill speed is compute-bound and unchanged (82–85 tok/s vs ≈104 ceiling for 24.35 B params); peak GPU is ≈1.6 GB lower because the O(L²) matrices are gone. Memory sweep and ContextBudget re-fit: in progress.
+Prefill speed is compute-bound and unchanged (82–85 tok/s vs ≈104 ceiling for 24.35 B params); peak GPU is ≈1.6 GB lower because the O(L²) matrices are gone. **Memory (peak GPU over weights, chunk 128):** +1.45 / +1.57 / +1.92 / +2.46 GiB at 1,042 / 2,087 / 4,175 / 8,419 tokens (old wrong model: +1.72 / +1.88 / +2.12 / +2.72). `ContextBudget` re-fit to **1.35 GiB fixed + 155 KB/token** (was 1.6 GiB + 165 KB) — resulting limits (74 %-of-RAM working set assumed, embedder reserve included): **8 GB → cloud-only, 16 GB ≈ 8.9k tokens, 18 GB ≈ 17.6k, 24 GB ≈ 43.7k, 32 GB ≈ 78.6k (capped at our 64k)**; essentially unchanged from before because the per-token cost is dominated by KV + snapshot copies. Sweep stopped early on user instruction (chunk 512 and 16k rows are known-slow/worse and were skipped).
+
+## Cloud-provider fixes (from the fact-check) — DONE, 204 tests
+`RemoteAPIProvider.endpoint` (no more `/v1/v1`, handles v1beta bases), `max_completion_tokens` for api.openai.com, provider refuses to send an empty model name (clear message), onboarding gets a Model field (default `gpt-4o`) and picks the Anthropic style from the host, model-manager form now actually passes its model field (it used to drop it), stale `claude-3-5-sonnet-20241022` hint replaced. **Still open:** OpenAI `delta.tool_calls` / Anthropic `tool_use` parsing (M2/M3).
 
 ## Known gaps carried over
 - Local→cloud fallback is silent to the user (M3 adds notice + egress log). No UI control for routing policy yet.

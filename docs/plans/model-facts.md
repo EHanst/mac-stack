@@ -62,16 +62,16 @@ Severity: **A** = breaks output/requests · **B** = wrong numbers/claims · **C*
 ### Model implementation (`Sources/StackCore/Inference/Qwen35Model.swift`, `LocalMLXProvider.swift`, `ModelProvider.swift`)
 | # | Sev | Where | Code assumes | Fact |
 |---|---|---|---|---|
-| 1 | A | `Qwen35Model.swift:263` `let Q = qkv[…0..<dInner]` | qkv split `[6144 \| 2048 \| 2048]` | `[q 2048 \| k 2048 \| v 6144]` ("grouped" layout) |
-| 2 | A | `:189`, `:195`, `:309` "Mamba2-style … `in_proj_b` unused" | `S = g·S + k⊗v`; `y = q·S` | Gated DeltaNet: `β = σ(in_proj_b)`, `Δ = (v − (g·S)·k)·β`, `S = g·S + k⊗Δ`, `y = S·q` |
-| 3 | A | `BonsaiLinearAttn` (no norm) | raw q, k | `q ← (1/Dk)·rmsNorm(q)`, `k ← (1/√Dk)·rmsNorm(k)`, no weight, eps 1e-6 |
-| 4 | A | `:35` `rope_theta … ?? 1_000_000` | θ = 1e6 (key is `null` in `text_config`) | **θ = 1e7**, only in `rope_parameters` |
-| 5 | A | `:114` `RoPE(dimensions: headDim …)` | rotate all 256 dims | rotate **64** (`partial_rotary_factor 0.25`) |
-| 6 | A | `:131`, `:135` gate/q split | `[all q \| all gate]` | per head: reshape `[B,L,24,512]`, split → `q`, `gate` (`[q_h \| gate_h]`) |
-| 7 | A/B | `:131` `silu(gate)` | swish output gate | config says `swish`, but reference Qwen3.5 (mlx-lm/mlx-swift-lm) uses **sigmoid** — unresolved; test both against a known-good top token |
-| 8 | B | GDN state dtype (bf16) | bf16 | `mamba_ssm_dtype: float32` |
-| 9 | B | `ModelProvider.swift:68` default `maxTokens = 64000`; `LocalMLXProvider.swift:212` | one number = max *new* tokens **and** "context window" | native context 262,144; max new tokens ≠ context. 64,000 new tokens at ~11 tok/s ≈ 97 min; also exceeds gpt-4o's 16,384 output cap |
-| 10 | B | `ModelProvider.swift:68` `temperature = 0.0`; `sample()` = argmax/temperature only | greedy | non-thinking: **T 0.7, top_p 0.8, top_k 20, presence 1.5**; greedy on a non-thinking instruct model is prone to repetition. No top-p/top-k/penalty support exists |
+| 1 | A | `Qwen35Model.swift:263` `let Q = qkv[…0..<dInner]` | qkv split `[6144 \| 2048 \| 2048]` | `[q 2048 \| k 2048 \| v 6144]` ("grouped" layout) | **FIXED (6a88150)**
+| 2 | A | `:189`, `:195`, `:309` "Mamba2-style … `in_proj_b` unused" | `S = g·S + k⊗v`; `y = q·S` | Gated DeltaNet: `β = σ(in_proj_b)`, `Δ = (v − (g·S)·k)·β`, `S = g·S + k⊗Δ`, `y = S·q` | **FIXED**
+| 3 | A | `BonsaiLinearAttn` (no norm) | raw q, k | `q ← (1/Dk)·rmsNorm(q)`, `k ← (1/√Dk)·rmsNorm(k)`, no weight, eps 1e-6 | **FIXED**
+| 4 | A | `:35` `rope_theta … ?? 1_000_000` | θ = 1e6 (key is `null` in `text_config`) | **θ = 1e7**, only in `rope_parameters` | **FIXED**
+| 5 | A | `:114` `RoPE(dimensions: headDim …)` | rotate all 256 dims | rotate **64** (`partial_rotary_factor 0.25`) | **FIXED**
+| 6 | A | `:131`, `:135` gate/q split | `[all q \| all gate]` | per head: reshape `[B,L,24,512]`, split → `q`, `gate` (`[q_h \| gate_h]`) | **FIXED**
+| 7 | A/B | `:131` `silu(gate)` | swish output gate | config says `swish`, but reference Qwen3.5 (mlx-lm/mlx-swift-lm) uses **sigmoid** — unresolved; test both against a known-good top token | **Resolved: sigmoid works (' Paris' 83 %)**
+| 8 | B | GDN state dtype (bf16) | bf16 | `mamba_ssm_dtype: float32` | **FIXED (fp32 state)**
+| 9 | B | `ModelProvider.swift:68` default `maxTokens = 64000`; `LocalMLXProvider.swift:212` | one number = max *new* tokens **and** "context window" | native context 262,144; max new tokens ≠ context. 64,000 new tokens at ~11 tok/s ≈ 97 min; also exceeds gpt-4o's 16,384 output cap | **FIXED (default 8192; 64k is a separate context cap)**
+| 10 | B | `ModelProvider.swift:68` `temperature = 0.0`; `sample()` = argmax/temperature only | greedy | non-thinking: **T 0.7, top_p 0.8, top_k 20, presence 1.5**; greedy on a non-thinking instruct model is prone to repetition. No top-p/top-k/penalty support exists | **FIXED (model-card preset; greedy only when asked)**
 | 11 | B | `ChatPromptRenderer.emptyThink` (forced non-thinking) | fine per template, **but** the published quality (98.2 %) is for **thinking** mode; non-thinking quality is unreported, and thinking mode needs `<think>` parsing/hiding in the UI |
 | 12 | C | `Qwen35Config.from` default `vocab_size ?? 151936` | 151,936 | 248,320 (only a fallback, but wrong) |
 
@@ -89,11 +89,11 @@ Severity: **A** = breaks output/requests · **B** = wrong numbers/claims · **C*
 ### Cloud (`RemoteAPIProvider.swift`, `AppServices.swift`, onboarding/UI)
 | # | Sev | Where | Code | Fact |
 |---|---|---|---|---|
-| 20 | A | `CredentialEntryView.swift:12` default `https://api.openai.com/v1`; `ModelManagerView` hint; `RemoteAPIProvider.swift:130,178` append `"v1/chat/completions"` | URL becomes `…/v1/v1/chat/completions` | OpenAI base is `https://api.openai.com/v1` + `/chat/completions` ⇒ **404** for the very default we show |
-| 21 | A | `AppServices.swift:385` `modelIdentifier: ""` | onboarding saves a provider with **no model name** | requests send `"model": ""` ⇒ rejected |
-| 22 | A | `RemoteAPIProvider.swift:185` `"max_tokens": options.maxTokens` (64,000) | — | gpt-4o max output 16,384 ⇒ 400; gpt-5/o-series reject `max_tokens` entirely |
+| 20 | A | `CredentialEntryView.swift:12` default `https://api.openai.com/v1`; `ModelManagerView` hint; `RemoteAPIProvider.swift:130,178` append `"v1/chat/completions"` | URL becomes `…/v1/v1/chat/completions` | OpenAI base is `https://api.openai.com/v1` + `/chat/completions` ⇒ **404** for the very default we show | **FIXED (`RemoteAPIProvider.endpoint`, tested)**
+| 21 | A | `AppServices.swift:385` `modelIdentifier: ""` | onboarding saves a provider with **no model name** | requests send `"model": ""` ⇒ rejected | **FIXED (model required; onboarding + model manager pass it — the model-manager form was collecting the name and dropping it)**
+| 22 | A | `RemoteAPIProvider.swift:185` `"max_tokens": options.maxTokens` (64,000) | — | gpt-4o max output 16,384 ⇒ 400; gpt-5/o-series reject `max_tokens` entirely | **PARTLY FIXED: `max_completion_tokens` for api.openai.com, default max tokens 8192; tool-call parsing (23) still open**
 | 23 | A | `parseSSEToken` handles only `delta.content` | — | OpenAI tool calls arrive in `delta.tool_calls`; they are dropped, so the agent loop never sees a tool call from OpenAI. Anthropic path ignores `tools` entirely and doesn't emit `tool_use` |
-| 24 | C | `ModelManagerView.swift:397` hint `claude-3-5-sonnet-20241022` | — | not in current or legacy-available lists |
+| 24 | C | `ModelManagerView.swift:397` hint `claude-3-5-sonnet-20241022` | — | not in current or legacy-available lists | **FIXED**
 
 ### bge-small
 No contradictions found: 384-dim ✓ (VectorStore default), 512-token cap ✓, CLS + normalize ✓ (library reads `1_Pooling`), query-only instruction ✓ (`embedQuery` prefixes, `embed` doesn't), MIT ✓. One refinement: the card says the instruction is *optional* for v1.5 — our bake-off used it; a no-instruction run was not compared.
@@ -125,6 +125,8 @@ Real shapes: backbone 24.35 B params (computed 24.35 B ✓ from config: MLP 267.
 | 32,768 | 2.00 GiB | 2.14 GiB | 1.81 PFLOP | 357 s (5.9 min) | 11.7 % |
 | 65,536 | 4.00 GiB | 4.14 GiB | 4.04 PFLOP | 798 s (13 min) | 20.9 % |
 | 262,144 | **16.0 GiB** | 16.1 GiB | 26.3 PFLOP | 5,193 s (87 min) | 51.4 % |
+
+**Measured after the fix** (chunk 128, M3 Pro 18 GB, AC power): peak GPU over the 7.14 GiB of weights = **+1.45 / +1.57 / +1.92 / +2.46 GiB at 1,042 / 2,087 / 4,175 / 8,419 tokens**; cold prefill 82–86 tok/s (vs ≈104 ceiling); decode 10.7–11.3 tok/s (vs ≈20.7 bandwidth ceiling). The slope (≈0.13–0.17 MiB/token) matches 64 KiB KV × (1 live + 1–2 snapshot copies); the fixed part is ≈1.3 GiB, larger than the 0.3–0.5 GiB hypothesis below (prefill activations + fp32 recurrent-state snapshots + allocator overhead). Fit used by `ContextBudget`: **1.35 GiB + 155 KB/token** (predicts every measured row 1.6–5 % high). The 16k row and chunk-512 comparison were deliberately not re-run (known slow / known worse).
 
 Consequences:
 1. **262K context is not usable locally on any Mac we target**: KV alone is 16 GiB; even at 64K, KV = 4 GiB and a cold prefill is ≈13 minutes. Prefix caching (already built) is what makes long sessions viable.

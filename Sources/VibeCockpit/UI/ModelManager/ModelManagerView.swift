@@ -394,7 +394,7 @@ struct AddModelSheet: View {
             fieldGroup("Base URL", hint: "e.g. https://api.openai.com/v1") {
                 MTTextField("https://…", text: $remoteBaseURL)
             }
-            fieldGroup("Model Identifier", hint: "e.g. gpt-4o, claude-3-5-sonnet-20241022") {
+            fieldGroup("Model Identifier", hint: "e.g. gpt-4o, claude-sonnet-5-5") {
                 MTTextField("model-name", text: $remoteModelID)
             }
             fieldGroup("API Token", hint: "Stored in macOS Keychain") {
@@ -412,7 +412,8 @@ struct AddModelSheet: View {
                     .buttonStyle(MTOutlinedButtonStyle())
                 Button(isBusy ? "Saving…" : "Add Provider") {
                     guard let base = URL(string: remoteBaseURL),
-                          !remoteID.isEmpty, !remoteToken.isEmpty else { return }
+                          !remoteID.isEmpty, !remoteToken.isEmpty,
+                          !remoteModelID.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     isBusy = true
                     Task {
                         do {
@@ -420,6 +421,7 @@ struct AddModelSheet: View {
                                 token: remoteToken,
                                 providerID: remoteID,
                                 baseURL: base,
+                                modelIdentifier: remoteModelID.trimmingCharacters(in: .whitespaces),
                                 coordinator: coordinator
                             )
                             await services.refreshModels(coordinator: coordinator)
@@ -432,7 +434,8 @@ struct AddModelSheet: View {
                     }
                 }
                 .buttonStyle(MTFilledButtonStyle())
-                .disabled(remoteID.isEmpty || remoteBaseURL.isEmpty || remoteToken.isEmpty || isBusy)
+                .disabled(remoteID.isEmpty || remoteBaseURL.isEmpty || remoteToken.isEmpty
+                          || remoteModelID.trimmingCharacters(in: .whitespaces).isEmpty || isBusy)
             }
         }
     }

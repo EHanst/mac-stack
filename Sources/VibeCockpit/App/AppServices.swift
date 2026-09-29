@@ -377,6 +377,7 @@ public final class AppServices {
         token: String,
         providerID: ProviderID,
         baseURL: URL,
+        modelIdentifier: String,
         coordinator: AppCoordinator
     ) async throws {
         try await credentials.store(token: token, for: providerID)
@@ -384,9 +385,9 @@ public final class AppServices {
         let config = RemoteAPIProvider.Config(
             id: providerID,
             baseURL: baseURL,
-            modelIdentifier: "",
+            modelIdentifier: modelIdentifier,
             capabilities: [.textGeneration, .streaming],
-            apiStyle: .openAIChat,
+            apiStyle: baseURL.host == "api.anthropic.com" ? .anthropicMessages : .openAIChat,
             envVarKey: envKey
         )
         try? await registry.discover(localDirectory: nil, remoteConfigs: [config], credentials: credentials)
