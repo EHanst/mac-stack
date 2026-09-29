@@ -125,6 +125,7 @@ let package = Package(
             name: "VibeBench",
             dependencies: [
                 "StackCore",
+                "StackHTTP",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ],
