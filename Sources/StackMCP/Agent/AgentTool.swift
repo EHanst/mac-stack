@@ -10,6 +10,12 @@ import StackCore
 public protocol AgentToolHandler: Sendable {
     var toolDefinition: Tool { get }
     func execute(arguments: [String: Value]) async throws -> [Tool.Content]
+    /// What an outside app must be allowed to do before it may call this tool.
+    var requiredScope: ClientScope { get }
+}
+
+extension AgentToolHandler {
+    public var requiredScope: ClientScope { .toolsRead }
 }
 
 // MARK: - File Reader
@@ -53,6 +59,7 @@ public struct FileWriterTool: AgentToolHandler {
             "createDirectories": .object(["type": "boolean"]),
         ])
     )
+    public var requiredScope: ClientScope { .toolsWrite }
 
     public init() {}
 
@@ -86,6 +93,7 @@ public struct CompilerRunnerTool: AgentToolHandler {
         ])
     )
 
+    public var requiredScope: ClientScope { .toolsExec }
     private let runner: XPCBuildRunner
     public init(runner: XPCBuildRunner) { self.runner = runner }
 

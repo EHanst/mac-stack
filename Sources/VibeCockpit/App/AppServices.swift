@@ -27,6 +27,8 @@ public final class AppServices {
     private let installer = ModelInstaller()
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
+    /// The tools offered to MCP clients; one instance for the Unix socket and the HTTP endpoint.
+    private let mcpHost: MCPToolHost
     private var mcpService: MCPService?
     private var buildRunner: XPCBuildRunner?
     private var startupComplete = false
@@ -47,6 +49,7 @@ public final class AppServices {
         self.routingPolicy = policy
         let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
         self.inference = inference
+        self.mcpHost = MCPToolHost(inference: inference)
         self.sharing = APISharingModel(inference: inference, defaults: defaults)
     }
 
@@ -136,7 +139,7 @@ public final class AppServices {
             }
         }
 
-        // Start embedded MCP server if we have a workspace
+        // MCP: model tools are always offered; workspace tools join when a project is open.
         if let workspaceURL = workspaceURL ?? detectWorkspaceURL(),
            let pipeline = indexingPipeline,
            let gitMgr = snapshotManager {
@@ -151,17 +154,17 @@ public final class AppServices {
             let boundary = WorkspaceBoundary(context: ctx)
             let runtime = ToolRuntime(boundary: boundary, buildRunner: runner,
                                       gitManager: gitMgr, pipeline: pipeline)
-            let socketDir = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".vibecockpit")
-            let socketPath = socketDir.appendingPathComponent("mcp.sock").path
-            let service = MCPService(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
-            do {
-                try await service.start(socketPath: socketPath)
-                mcpService = service
-                await refreshMCPTools(coordinator: coordinator)
-            } catch {
-                logger.error("MCPService failed to start: \(error.localizedDescription, privacy: .public)")
-            }
+            await mcpHost.attachWorkspace(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
+        }
+        let socketPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".vibecockpit/mcp.sock").path
+        let service = MCPService(host: mcpHost)
+        do {
+            try await service.start(socketPath: socketPath)
+            mcpService = service
+            await refreshMCPTools(coordinator: coordinator)
+        } catch {
+            logger.error("MCPService failed to start: \(error.localizedDescription, privacy: .public)")
         }
 
         // Populate model info list for the model manager UI.

@@ -79,6 +79,12 @@ public actor InferenceService {
 
     // MARK: Models
 
+    /// `nil`, "", "auto" and "default" mean "let VibeCockpit choose"; anything else names a model.
+    public static func pin(for requested: String?) -> ProviderID? {
+        guard let r = requested?.trimmingCharacters(in: .whitespaces), !r.isEmpty else { return nil }
+        return ["auto", "default"].contains(r.lowercased()) ? nil : r
+    }
+
     public struct ModelListing: Sendable, Equatable {
         public let id: ProviderID
         public let isLocal: Bool

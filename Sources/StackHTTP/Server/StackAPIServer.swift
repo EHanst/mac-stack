@@ -81,11 +81,7 @@ public struct StackAPIServer: Sendable {
         return try JSONDecoder().decode(T.self, from: Data(buffer.readableBytesView))
     }
 
-    /// `nil`, "", "auto" and "default" mean "let VibeCockpit choose"; anything else names a model.
-    static func pin(for requested: String?) -> ProviderID? {
-        guard let r = requested?.trimmingCharacters(in: .whitespaces), !r.isEmpty else { return nil }
-        return ["auto", "default"].contains(r.lowercased()) ? nil : r
-    }
+    static func pin(for requested: String?) -> ProviderID? { InferenceService.pin(for: requested) }
 
     // MARK: /v1/models
 
