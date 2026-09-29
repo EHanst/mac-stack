@@ -39,7 +39,6 @@ public final class AppServices {
     /// The tools offered to MCP clients; one instance for the Unix socket and the HTTP endpoint.
     private let mcpHost: MCPToolHost
     private var mcpService: MCPService?
-    private var buildRunner: XPCBuildRunner?
     private var startupComplete = false
     /// Exactly what has been sent to the model this session; append-only so the local model's
     /// prefix cache stays valid across tool-loop turns and follow-up messages.
@@ -49,6 +48,9 @@ public final class AppServices {
     private let toolGuard: ToolCallGuard
     /// External MCP servers the user added; their tools join the model's and our own `tools/list`.
     public let externalServers = MCPClientManager()
+    /// Project folders the user added; each has its own index, git and boundary.
+    public let workspaces: WorkspaceManager
+    public let workspacesModel: WorkspacesModel
     public let externalServersModel: ExternalServersModel
     private static let chatIdentity = ClientIdentity(key: "app:chat", name: "VibeCockpit")
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
@@ -71,13 +73,22 @@ public final class AppServices {
         self.inference = inference
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
+        let runnerBox = SharedBuildRunner()
+        let workspaces = WorkspaceManager { record in
+            try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get())
+        }
+        self.workspaces = workspaces
+        self.workspacesModel = WorkspacesModel(manager: workspaces)
         let toolGate = ToolGate(memory: memory, approver: approvals)
         self.toolGuard = ToolCallGuard(gate: toolGate)
         let host = MCPToolHost(inference: inference, gate: toolGate)
         self.mcpHost = host
         let externals = externalServers
         self.externalServersModel = ExternalServersModel(manager: externals)
-        Task { await host.setExternalTools { await externals.tools() } }
+        Task {
+            await host.setExternalTools { await externals.tools() }
+            await host.setProjectTools { await workspaces.tools() }
+        }
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
 
@@ -171,23 +182,10 @@ public final class AppServices {
             }
         }
 
-        // MCP: model tools are always offered; workspace tools join when a project is open.
-        if let workspaceURL = workspaceURL ?? detectWorkspaceURL(),
-           let pipeline = indexingPipeline,
-           let gitMgr = snapshotManager {
-            let runner = XPCBuildRunner()
-            await runner.connect()
-            buildRunner = runner
-            let ctx = WorkspaceContext(
-                root: workspaceURL,
-                workspaceID: WorkspaceID(rawValue: workspaceURL.lastPathComponent),
-                policy: .default
-            )
-            let boundary = WorkspaceBoundary(context: ctx)
-            let runtime = ToolRuntime(boundary: boundary, buildRunner: runner,
-                                      gitManager: gitMgr, pipeline: pipeline)
-            await mcpHost.attachWorkspace(runtime: runtime, pipeline: pipeline, gitManager: gitMgr)
-        }
+        // MCP: model tools are always offered; project tools join for every project the user opened
+        // (plus the folder the app was started in, when that is a git checkout).
+        if let url = workspaceURL ?? detectWorkspaceURL() { _ = try? await workspaces.add(url) }
+        await workspaces.openAll()
         let socketPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".vibecockpit/mcp.sock").path
         let service = MCPService(host: mcpHost)
@@ -261,6 +259,26 @@ public final class AppServices {
     public func unregisterModel(id: ProviderID, coordinator: AppCoordinator) async {
         await registry.unregister(id: id)
         await refreshModels(coordinator: coordinator)
+    }
+
+    /// Builds one project's tools: its own git snapshots, its own search index, and a boundary
+    /// that keeps file access and commands inside its folder.
+    nonisolated static func openWorkspace(
+        _ record: WorkspaceRecord, registry: ModelRegistry, runner: XPCBuildRunner
+    ) async throws -> [any AgentToolHandler] {
+        let url = record.url
+        let git = GitSnapshotManager(workspaceURL: url)
+        try? await git.open()   // not a git checkout: snapshot tools will say so when used
+        let indexDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VibeCockpit/indexes", isDirectory: true)
+        try FileManager.default.createDirectory(at: indexDir, withIntermediateDirectories: true)
+        let pipeline = IndexingPipeline(store: VectorStore(dbURL: indexDir.appendingPathComponent("\(record.id).db")), registry: registry)
+        try await pipeline.open()
+        Task.detached(priority: .background) { try? await pipeline.reindexWorkspace(url) }
+        let context = WorkspaceContext(root: url, workspaceID: WorkspaceID(rawValue: record.id), policy: .default)
+        let runtime = ToolRuntime(boundary: WorkspaceBoundary(context: context), buildRunner: runner,
+                                  gitManager: git, pipeline: pipeline)
+        return MCPToolHost.workspaceTools(runtime: runtime, pipeline: pipeline, gitManager: git)
     }
 
     /// Expose MCP tool names to the UI.
@@ -596,5 +614,17 @@ public final class AppServices {
             url = parent
         }
         return nil
+    }
+}
+
+/// One build helper connection shared by every project, connected on first use.
+actor SharedBuildRunner {
+    private var runner: XPCBuildRunner?
+    func get() async -> XPCBuildRunner {
+        if let runner { return runner }
+        let r = XPCBuildRunner()
+        await r.connect()
+        runner = r
+        return r
     }
 }
