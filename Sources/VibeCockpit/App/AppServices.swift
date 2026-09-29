@@ -52,6 +52,8 @@ public final class AppServices {
     public let workspaces: WorkspaceManager
     /// Saved prompts and the editable per-task guidance (recipes).
     public let promptLibrary: PromptLibrary
+    /// Save/insert/improve prompts from the chat box.
+    public let promptStudio: PromptStudioModel
     public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
     public let diagnostics: DiagnosticsModel
     public let workspacesModel: WorkspacesModel
@@ -66,7 +68,8 @@ public final class AppServices {
     public init(defaults: UserDefaults = .standard) {
         let registry = ModelRegistry()
         self.registry = registry
-        self.promptLibrary = PromptLibrary()
+        let promptLibrary = PromptLibrary()
+        self.promptLibrary = promptLibrary
         self.defaults = defaults
         let policy = defaults.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
         self.routingPolicy = policy
@@ -76,6 +79,11 @@ public final class AppServices {
         self.installer = ModelInstaller(gate: gate)
         let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate, governor: governor, requestLog: requestLog)
         self.inference = inference
+        self.promptStudio = PromptStudioModel(
+            library: promptLibrary, optimizer: PromptOptimizer(inference: inference),
+            plannedModel: { await inference.plannedModel() },
+            listModels: { await inference.availableModels() },
+            defaults: defaults)
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
         let runnerBox = SharedBuildRunner()
@@ -124,12 +132,15 @@ public final class AppServices {
         guard !startupComplete else { return }
         startupComplete = true
         DiagnosticsCollector.shared.start()
+        await promptStudio.reload()
+        await promptStudio.refreshModel()
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
             let mgr = GitSnapshotManager(workspaceURL: url)
             try? await mgr.open()
             snapshotManager = mgr
             workspaceName = url.lastPathComponent
+            promptStudio.workspaceName = url.lastPathComponent
         }
 
         let dbURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -334,9 +345,7 @@ public final class AppServices {
     public func processIntent(_ text: String, coordinator: AppCoordinator, intent intentOverride: PromptEngineer.Intent? = nil) async {
         coordinator.send(.generationStarted)
 
-        let ragContext = await retrieveContext(for: text)
-        let intent = intentOverride ?? PromptEngineer.classify(text)
-        let recipe = await promptLibrary.recipeText(for: intent.rawValue)
+        let composed = await composeUserTurn(text, intentOverride: intentOverride)
 
         let externalTools = await externalServers.tools()
         let agentTools: [AgentToolHandler] = externalTools + [
@@ -359,7 +368,7 @@ public final class AppServices {
         } else if ledger.isEmpty {
             ledger.begin(system: buildSystemPrompt())
         }
-        ledger.appendUserTurn(PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext, recipe: recipe))
+        ledger.appendUserTurn(composed.turn)
         // Budget: the smaller of ~80% of maxTokens and what this Mac can hold right now
         // (provider-reported, tokens → chars at a conservative 2.5 chars/token). Drops whole old
         // turns permanently so the prompt stays append-only afterwards.
@@ -416,6 +425,40 @@ public final class AppServices {
 
         coordinator.send(.generationFinished)
         await diagnostics.reload()
+    }
+
+    /// The full text of one user turn: task guidance (from the prompt library), framing, retrieved
+    /// code, then the request. `processIntent` and the "what the model sees" inspector both call this,
+    /// so what the inspector shows is what gets sent.
+    private func composeUserTurn(_ text: String, intentOverride: PromptEngineer.Intent?)
+        async -> (turn: String, intent: PromptEngineer.Intent, usedContext: Bool)
+    {
+        let ragContext = await retrieveContext(for: text)
+        let intent = intentOverride ?? PromptEngineer.classify(text)
+        let recipe = await promptLibrary.recipeText(for: intent.rawValue)
+        let turn = PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext, recipe: recipe)
+        return (turn, intent, ragContext != nil)
+    }
+
+    /// Exactly what the next message would send, for the inspector.
+    public struct PromptPreview: Sendable {
+        public let system: String
+        public let userTurn: String
+        public let intent: String
+        public let usedRetrievedCode: Bool
+        /// Messages already in this conversation's prompt (they are sent again as the prefix).
+        public let earlierMessages: Int
+        public let estimatedTokens: Int
+    }
+
+    public func previewNextTurn(_ text: String, intent: PromptEngineer.Intent? = nil) async -> PromptPreview {
+        let composed = await composeUserTurn(text, intentOverride: intent)
+        let system = ledger.messages.first(where: { $0.role == .system })?.content ?? buildSystemPrompt()
+        let earlier = max(0, ledger.messages.count - (ledger.isEmpty ? 0 : 1))
+        let tokens = InferenceService.estimateTokens(ledger.messages + [ChatMessage(role: .user, content: composed.turn)])
+            + (ledger.isEmpty ? PromptTokens.estimate(system) : 0)
+        return PromptPreview(system: system, userTurn: composed.turn, intent: composed.intent.rawValue,
+                             usedRetrievedCode: composed.usedContext, earlierMessages: earlier, estimatedTokens: tokens)
     }
 
     /// A line for the chat when the answer didn't come from the local model the way you'd expect.

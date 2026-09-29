@@ -5,6 +5,8 @@ public enum OptimizeMode: Sendable, Equatable {
     case improve
     /// Fill in what a good version of this request would specify. May be several times longer.
     case expand
+    /// Same request, restructured for the target model's preferred style (see `ModelPromptProfile`).
+    case adapt
 }
 
 public struct OptimizeContext: Sendable {
@@ -123,6 +125,8 @@ public struct PromptOptimizer: Sendable {
         switch mode {
         case .improve:
             lines.append("5. Keep it about as long as the original. Fix vagueness and order; do not pad.")
+        case .adapt:
+            lines.append("5. Keep the wording and length. Only restructure it for the target's preferred style; add nothing new.")
         case .expand:
             lines.append("5. You may add a short list of requirements and the desired output format, if the request implies them.")
         }
