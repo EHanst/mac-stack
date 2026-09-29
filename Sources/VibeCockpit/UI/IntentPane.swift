@@ -381,7 +381,6 @@ private struct IntentEventBubble: View {
         Text(event.content)
             .font(.mtBodyMedium)
             .foregroundStyle(Color.mtOnPrimary)
-            .textSelection(.enabled)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(Color.mtPrimary)
