@@ -79,6 +79,9 @@ public actor LocalMLXProvider: ModelProvider {
     /// Account for another resident model (the embedder) in the memory budget.
     public func reserveMemory(bytes: Int) { budget.reservedBytes = bytes }
 
+    /// Replace the memory model (benchmarks bypass it to measure beyond the current limit).
+    public func setBudget(_ b: ContextBudget) { budget = b }
+
     public func setTuning(_ t: Tuning) {
         tuning = t
         if model != nil { Memory.cacheLimit = t.bufferCacheLimit }

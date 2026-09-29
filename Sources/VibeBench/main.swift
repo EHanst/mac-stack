@@ -26,6 +26,7 @@ struct Options {
     var textTest = false
     var modelCheck = false
     var samplerCheck = false
+    var noGuard = false
     var chunks = [512]
     var timeout = 300.0
     var gen = 128
@@ -45,6 +46,7 @@ struct Options {
             case "--text-test": textTest = true
             case "--model-check": modelCheck = true
             case "--sampler-check": samplerCheck = true
+            case "--no-guard": noGuard = true
             case "--sweep": if let v = it.next() { sweep = v.split(separator: ",").compactMap { Int($0) } }
             case "--chunks": if let v = it.next() { chunks = v.split(separator: ",").compactMap { Int($0) } }
             case "--timeout": if let v = it.next(), let n = Double(v) { timeout = max(1, n) }
@@ -255,6 +257,10 @@ func run() async throws {
     }
 
     let provider = LocalMLXProvider(id: "local:bench", modelDirectory: opts.model)
+    if opts.noGuard {
+        // Measure beyond the pre-flight limit (the sweep stops itself if the working set is exceeded).
+        await provider.setBudget(ContextBudget(model: .init(fixedOverheadBytes: 0, bytesPerToken: 1), safetyFraction: 1, contextWindow: 262_144, minimumUsefulTokens: 0))
+    }
     print("loading model…")
     let loadStart = Date()
     try await provider.warmUp()

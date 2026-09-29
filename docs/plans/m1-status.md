@@ -33,6 +33,18 @@ Plan reference: `docs/plans/2026-09-28-next-phase-plan.md` §5–6 (M1: #1 hardw
 **Verified on the real model** (`VibeBench --model-check --text-test`): kernel vs reference ops max |Δy| 6e-5, chunked == single call; "The capital of France is" → " Paris" 83.2 %; "…jumps over the lazy" → " dog" 98.6 %; "Say hello in five words." → "Hello, how are you?" — identical at prefill chunk 128/512/8192. Regression tests for the config misreads (θ, partial rotary, shapes, KV bytes/token): 5 new, 196 total.
 **Still to do because of this:** re-measure *everything* (tok/s, TTFT, peak GPU, `ContextBudget` constants, 16 GB table) — the old figures were for the wrong computation; note the machine was in **Low Power Mode** during the first correct run; sampling per the model card (non-thinking T 0.7 / top-p 0.8 / top-k 20 / presence 1.5; we're greedy); re-verify the whole flow in the app and time-to-first-token.
 
+## Re-measurement on the corrected model (M3 Pro 18 GB, AC power, Low Power Mode off; chunk 128)
+| | old (wrong) model | **corrected model** |
+|---|---|---|
+| Cold prefill 527 tok | 8.4 s (687 tok), 83 tok/s | **6.58 s, 82.2 tok/s** |
+| Cold prefill ~4.2k tok | 51.4 s, 81 tok/s, peak 11.5 GB (86 %) | **49.5 s, 85.5 tok/s, peak 9.89 GB (74 %)** |
+| Decode | 10.5–11 tok/s | **10.7–11.3 tok/s** |
+| Warm: follow-up turn | 2.0 s | **1.25 s** (30 tokens prefilled) |
+| Warm: exact repeat | 0.22 s | **0.23 s** |
+| Warm: new session, same system prompt | 0.94 s | **0.91 s** |
+| Service test | serial ratio 2.01, cancel → 0.86 s | serial (1.9 s / 3.1 s), **cancel → 0.83 s** |
+Prefill speed is compute-bound and unchanged (82–85 tok/s vs ≈104 ceiling for 24.35 B params); peak GPU is ≈1.6 GB lower because the O(L²) matrices are gone. Memory sweep and ContextBudget re-fit: in progress.
+
 ## Known gaps carried over
 - Local→cloud fallback is silent to the user (M3 adds notice + egress log). No UI control for routing policy yet.
 - 16 GB budget assumes working set = 74% of RAM (measured on 18 GB only).
