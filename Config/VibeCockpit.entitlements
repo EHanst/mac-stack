@@ -2,22 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Allow unsigned memory (required by MLX for Metal compute buffers) -->
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-
-    <!-- JIT entitlement EXCLUDED: MLX uses Metal compute shaders, not CPU JIT.
-         Audit with: nm -U .build/.../VibeCockpitCore | grep -i jit
-         Add only if MLX explicitly requires it. -->
-
-    <!-- Keychain access for API credential storage -->
-    <key>keychain-access-groups</key>
-    <array>
-        <string>$(AppIdentifierPrefix)com.vibecockpit.credentials</string>
-    </array>
-
-    <!-- App Sandbox: disabled for developer tool (requires broad filesystem access).
-         BuildRunnerXPCService has its own sandboxed entitlements. -->
+    <!-- Hardened runtime, deliberately minimal. Nothing here is a blanket exception:
+         - no app sandbox: the app edits the user's project files and runs their build tools;
+         - no JIT, no library-validation opt-out, no DYLD variables: MLX uses Metal compute
+           shaders (a resource, not CPU JIT) and every dependency is statically linked;
+         - no keychain-access-groups: that is a restricted entitlement needing a provisioning
+           profile, and the app only uses its own default keychain items.
+         Add an entitlement only after a hardened-runtime run proves it is needed. -->
     <key>com.apple.security.app-sandbox</key>
     <false/>
 </dict>
