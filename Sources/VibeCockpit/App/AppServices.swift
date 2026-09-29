@@ -44,6 +44,10 @@ public final class AppServices {
     /// Exactly what has been sent to the model this session; append-only so the local model's
     /// prefix cache stays valid across tool-loop turns and follow-up messages.
     private var ledger = PromptLedger()
+    /// Outside content (web pages, search results) seen in this conversation; see `ToolCallGuard`.
+    private let untrusted = UntrustedContext()
+    private let toolGuard: ToolCallGuard
+    private static let chatIdentity = ClientIdentity(key: "app:chat", name: "VibeCockpit")
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
     /// Local only / Local first / Cloud allowed. Observable so the menu bar and Settings agree.
@@ -64,7 +68,9 @@ public final class AppServices {
         self.inference = inference
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
-        let host = MCPToolHost(inference: inference, gate: ToolGate(memory: memory, approver: approvals))
+        let toolGate = ToolGate(memory: memory, approver: approvals)
+        self.toolGuard = ToolCallGuard(gate: toolGate)
+        let host = MCPToolHost(inference: inference, gate: toolGate)
         self.mcpHost = host
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
@@ -276,6 +282,7 @@ public final class AppServices {
         if ledger.userTurns + 1 != promptCount {
             // New or cleared session (or out of sync): start fresh, seeding from visible history.
             ledger.reset()
+            untrusted.reset()
             var prior = historyMessages(coordinator.state)
             if prior.last?.role == .user { prior.removeLast() }   // the prompt being sent now
             ledger.begin(system: buildSystemPrompt(), prior: prior)
@@ -358,7 +365,10 @@ public final class AppServices {
         }
         do {
             let args = parseToolArguments(call.arguments)
-            let contents = try await handler.execute(arguments: args)
+            if let refusal = await toolGuard.refusal(for: handler, arguments: args, client: Self.chatIdentity, context: untrusted) {
+                return refusal
+            }
+            let contents = toolGuard.filter(try await handler.execute(arguments: args), from: handler, context: untrusted)
             return contents.compactMap { item -> String? in
                 if case .text(let t, _, _) = item { return t } else { return nil }
             }.joined(separator: "\n")
@@ -557,6 +567,7 @@ public final class AppServices {
         if snapshotManager != nil {
             lines.append("Git snapshots are available. Prefer small, focused edits.")
         }
+        lines.append(UntrustedContent.systemPromptRule)
         return lines.joined(separator: "\n")
     }
 

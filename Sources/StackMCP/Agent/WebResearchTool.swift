@@ -15,6 +15,7 @@ extension URLSession: WebSession {}
 // MARK: - Web Fetch
 
 public struct WebFetchTool: AgentToolHandler {
+    public var producesUntrustedContent: Bool { true }
     public let toolDefinition = Tool(
         name: "web_fetch",
         description: "Fetch a web page and return its plain-text content. Use for reading documentation, release notes, or any public URL.",
@@ -61,6 +62,7 @@ public struct WebFetchTool: AgentToolHandler {
 // MARK: - Web Search
 
 public struct WebSearchTool: AgentToolHandler {
+    public var producesUntrustedContent: Bool { true }
     public let toolDefinition = Tool(
         name: "web_search",
         description: "Search the web using Brave Search and return ranked results with titles, URLs, and descriptions. Requires a Brave Search API key stored under provider ID 'brave-search'.",

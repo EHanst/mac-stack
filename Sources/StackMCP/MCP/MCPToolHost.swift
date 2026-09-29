@@ -71,7 +71,8 @@ public actor MCPToolHost {
     public func makeServer(scopes: ScopeBox) async -> Server {
         let tools = allTools()
         let runtime = self.runtime
-        let gate = self.gate
+        let toolGuard = ToolCallGuard(gate: self.gate)
+        let untrusted = UntrustedContext()   // per connection: what this client has been handed from outside
         let log = self.log
         let server = Server(
             name: "vibecockpit",
@@ -95,15 +96,11 @@ public actor MCPToolHost {
                     content: [.text(text: "This app isn't allowed to \(handler.requiredScope.title.lowercased()). Change its permissions in VibeCockpit.", annotations: nil, _meta: nil)],
                     isError: true)
             }
-            if ApprovalPolicy.needsApproval(handler.requiredScope) {
-                let request = ApprovalRequest(
-                    client: scopes.identity, toolName: params.name, scope: handler.requiredScope,
-                    summary: handler.approvalSummary(arguments: params.arguments ?? [:]))
-                guard let gate, await gate.allows(request) else {
-                    return CallTool.Result(
-                        content: [.text(text: "The user didn't allow this action (\(request.summary)).", annotations: nil, _meta: nil)],
-                        isError: true)
-                }
+            // Write and exec always ask an outside app; after web/other-program content, "Always allow" no longer counts.
+            if let refusal = await toolGuard.refusal(
+                for: handler, arguments: params.arguments ?? [:], client: scopes.identity,
+                context: untrusted, alwaysAsk: true) {
+                return CallTool.Result(content: [.text(text: refusal, annotations: nil, _meta: nil)], isError: true)
             }
             let opID = OperationID()
             let task = Task<[Tool.Content], Error> { try await handler.execute(arguments: params.arguments ?? [:]) }
@@ -112,7 +109,7 @@ public actor MCPToolHost {
             }
             func finish() async { if let runtime { await runtime.removeTask(opID) } }
             do {
-                let content = try await task.value
+                let content = toolGuard.filter(try await task.value, from: handler, context: untrusted)
                 await finish()
                 return CallTool.Result(content: content)
             } catch is CancellationError {

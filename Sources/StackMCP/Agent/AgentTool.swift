@@ -14,10 +14,13 @@ public protocol AgentToolHandler: Sendable {
     var requiredScope: ClientScope { get }
     /// One plain-language line for the "Allow?" prompt.
     func approvalSummary(arguments: [String: Value]) -> String
+    /// True when the tool's output comes from outside (the web, another program).
+    var producesUntrustedContent: Bool { get }
 }
 
 extension AgentToolHandler {
     public var requiredScope: ClientScope { .toolsRead }
+    public var producesUntrustedContent: Bool { false }
     public func approvalSummary(arguments: [String: Value]) -> String { "Use \(toolDefinition.name)" }
 }
 

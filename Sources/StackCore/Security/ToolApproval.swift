@@ -18,8 +18,13 @@ public struct ApprovalRequest: Sendable, Equatable, Identifiable {
     public let scope: ClientScope
     /// Plain-language description, e.g. "Write /path/File.swift (2.1 KB)".
     public let summary: String
-    public init(client: ClientIdentity, toolName: String, scope: ClientScope, summary: String) {
+    /// Outside content (web pages, other tools) already in the conversation. Non-empty means the
+    /// request may have been steered by it, so "Always allow" is off the table.
+    public let untrustedSources: [String]
+    public init(client: ClientIdentity, toolName: String, scope: ClientScope, summary: String,
+                untrustedSources: [String] = []) {
         self.client = client; self.toolName = toolName; self.scope = scope; self.summary = summary
+        self.untrustedSources = untrustedSources
     }
 }
 
@@ -130,12 +135,14 @@ public struct ToolGate: Sendable {
 
     public func allows(_ request: ApprovalRequest) async -> Bool {
         guard ApprovalPolicy.needsApproval(request.scope) else { return true }
-        if await memory.isAllowed(request.client, request.scope) { return true }
+        let tainted = !request.untrustedSources.isEmpty
+        // A saved "always" was given for the user's own requests, not for whatever a web page asks.
+        if !tainted, await memory.isAllowed(request.client, request.scope) { return true }
         guard let approver else { return false }
         switch await approver.decide(request) {
         case .allowOnce: return true
         case .allowAlways:
-            await memory.remember(request.client, request.scope)
+            if !tainted { await memory.remember(request.client, request.scope) }
             return true
         case .deny: return false
         }

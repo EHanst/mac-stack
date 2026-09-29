@@ -29,9 +29,16 @@ struct ApprovalSheet: View {
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.mtSurfaceContainerLowest, in: RoundedRectangle(cornerRadius: 8))
-            Text("You can take back \"Always allow\" any time in Settings → Share with other apps.")
-                .font(.mtBodySmall)
-                .foregroundStyle(Color.mtOnSurfaceVariant)
+            if request.untrustedSources.isEmpty {
+                Text("You can take back \"Always allow\" any time in Settings → Share with other apps.")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+            } else {
+                Label("This conversation includes text from outside (\(request.untrustedSources.joined(separator: ", "))). It may be trying to steer this action, so check it before allowing.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtError)
+            }
             if waitingAfterThis > 0 {
                 Text("\(waitingAfterThis) more waiting after this one.")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
@@ -39,7 +46,9 @@ struct ApprovalSheet: View {
             HStack {
                 Button("Don't allow") { answer(.deny) }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Always allow this") { answer(.allowAlways) }
+                if request.untrustedSources.isEmpty {
+                    Button("Always allow this") { answer(.allowAlways) }
+                }
                 Button("Allow once") { answer(.allowOnce) }
                     .keyboardShortcut(.defaultAction)
             }
