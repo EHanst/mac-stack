@@ -16,6 +16,8 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.31.0"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "0.1.17"),
+        // Auxiliary (non-Bonsai) models: embeddings via MLXEmbedders. See docs/plans/m0-status.md item 4.
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.31.3"),
     ],
     targets: [
         // C module: sqlite-vec (compiled amalgamation)
@@ -109,6 +111,22 @@ let package = Package(
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ],
             path: "Sources/VibeBench",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete"]),
+            ]
+        ),
+
+        // Embedding-model bake-off (retrieval quality/speed on this repo's own code).
+        .executableTarget(
+            name: "VibeEmbedBench",
+            dependencies: [
+                "StackCore",
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "Transformers", package: "swift-transformers"),
+            ],
+            path: "Sources/VibeEmbedBench",
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=complete"]),
             ]

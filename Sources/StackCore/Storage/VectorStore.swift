@@ -243,7 +243,7 @@ public actor VectorStore {
     }
 
     private func sparseSearch(query: String, topK: Int) throws -> [SearchResult] {
-        guard let db = writeDB ?? readPool.first else { return [] }
+        guard let db = writeDB ?? readPool.first, FTSQuery.match(query) != nil else { return [] }
         let ftsSQL = """
             SELECT c.id, c.file_path, c.decl_kind, c.content,
                    bm25(chunk_fts) AS score
@@ -256,8 +256,8 @@ public actor VectorStore {
         var stmt: OpaquePointer?
         sqlite3_prepare_v2(db, ftsSQL, -1, &stmt, nil)
         defer { sqlite3_finalize(stmt) }
-        let escapedQuery = query.replacingOccurrences(of: "\"", with: "\"\"")
-        sqlite3_bind_text(stmt, 1, "\"\(escapedQuery)\"", -1, SQLITE_TRANSIENT)
+        guard let match = FTSQuery.match(query) else { return [] }
+        sqlite3_bind_text(stmt, 1, match, -1, SQLITE_TRANSIENT)
         sqlite3_bind_int(stmt, 2, Int32(topK))
         return rows(from: stmt)
     }
