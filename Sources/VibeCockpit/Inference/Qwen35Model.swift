@@ -72,9 +72,7 @@ private final class Qwen35RMSNorm: Module, UnaryLayer, @unchecked Sendable {
 // MARK: - Attention
 
 final class Qwen35Attention: Module, @unchecked Sendable {
-    private let qProj: PrismPackedLinear
-    private let kProj: PrismPackedLinear
-    private let vProj: PrismPackedLinear
+    private let qkvProj: PrismFusedLinear
     private let oProj: PrismPackedLinear
     private let qNorm: Qwen35RMSNorm?
     private let kNorm: Qwen35RMSNorm?
@@ -84,7 +82,7 @@ final class Qwen35Attention: Module, @unchecked Sendable {
     let headDim: Int
     let attnOutputGate: Bool
 
-    init(weights: [String: MLXArray], prefix: String,
+    init(weights: WeightStore, prefix: String,
          config: Qwen35Config, hadamard: HadamardMeta) {
         attnOutputGate = config.attnOutputGate
         // With attn_output_gate, q_proj outputs 2×(nHeads×headDim); use config values for heads
@@ -106,9 +104,10 @@ final class Qwen35Attention: Module, @unchecked Sendable {
             return Qwen35RMSNorm(weight: w, eps: config.rmsNormEps)
         }
 
-        qProj = proj("q_proj")
-        kProj = proj("k_proj")
-        vProj = proj("v_proj")
+        qkvProj = PrismFusedLinear(
+            store: weights,
+            prefixes: ["q_proj", "k_proj", "v_proj"].map { "\(prefix).\($0)" },
+            hadamard: hadamard)
         oProj = proj("o_proj")
         qNorm = rmsNorm("q_norm")
         kNorm = rmsNorm("k_norm")
@@ -124,8 +123,7 @@ final class Qwen35Attention: Module, @unchecked Sendable {
         let L = x.shape[1]
         let offset = cache.offset
 
-        // q/k/v read the same activations with the same rotation: rotate once.
-        let proj = PrismPackedLinear.project(x, qProj, kProj, vProj)
+        let proj = qkvProj(x)  // one fused matmul → [q, k, v]
         let qRaw = proj[0]  // [B, L, nHeads*headDim] or [B, L, 2*nHeads*headDim] if gated
         let qDim = nHeads * headDim
         let gate: MLXArray?
@@ -161,11 +159,10 @@ final class Qwen35Attention: Module, @unchecked Sendable {
 // MARK: - MLP
 
 final class Qwen35MLP: Module, @unchecked Sendable {
-    private let gateProj: PrismPackedLinear
-    private let upProj:   PrismPackedLinear
-    private let downProj: PrismPackedLinear
+    private let gateUpProj: PrismFusedLinear
+    private let downProj:   PrismPackedLinear
 
-    init(weights: [String: MLXArray], prefix: String, hadamard: HadamardMeta) {
+    init(weights: WeightStore, prefix: String, hadamard: HadamardMeta) {
         func proj(_ name: String) -> PrismPackedLinear {
             let p = "\(prefix).\(name)"
             let (b, s) = hadamard.rotation(for: p)
@@ -175,14 +172,16 @@ final class Qwen35MLP: Module, @unchecked Sendable {
                 biases: weights["\(p).biases"]!,
                 block: b, signs: s)
         }
-        gateProj = proj("gate_proj")
-        upProj   = proj("up_proj")
+        gateUpProj = PrismFusedLinear(
+            store: weights,
+            prefixes: ["gate_proj", "up_proj"].map { "\(prefix).\($0)" },
+            hadamard: hadamard)
         downProj = proj("down_proj")
         super.init()
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let gu = PrismPackedLinear.project(x, gateProj, upProj)
+        let gu = gateUpProj(x)
         return downProj(MLXNN.silu(gu[0]) * gu[1])
     }
 }
@@ -190,8 +189,7 @@ final class Qwen35MLP: Module, @unchecked Sendable {
 // MARK: - Bonsai Linear Attention (Mamba2-style SSM layer)
 
 final class BonsaiLinearAttn: Module, @unchecked Sendable {
-    private let inProjQKV: PrismPackedLinear
-    private let inProjZ:   PrismPackedLinear
+    private let inProjQKVZ: PrismFusedLinear
     private let outProj:   PrismPackedLinear
     private let inProjA:   MLXArray   // [nQH, hiddenSize] float dt projection
     private let inProjB:   MLXArray   // [nQH, hiddenSize] float (unused in fwd for now)
@@ -206,7 +204,7 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
     let dInner: Int   // nQH * headD = 6144
     let dQKV:   Int   // nQH*headD + 2*nKVH*headD = 10240
 
-    init(weights: [String: MLXArray], prefix: String,
+    init(weights: WeightStore, prefix: String,
          config: Qwen35Config, hadamard: HadamardMeta) {
         let aLogW   = weights["\(prefix).A_log"]!
         let zScales = weights["\(prefix).in_proj_z.scales"]!
@@ -230,8 +228,10 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
                 biases: weights["\(p).biases"]!,
                 block: b, signs: s)
         }
-        inProjQKV = qproj("in_proj_qkv")
-        inProjZ   = qproj("in_proj_z")
+        inProjQKVZ = PrismFusedLinear(
+            store: weights,
+            prefixes: ["in_proj_qkv", "in_proj_z"].map { "\(prefix).\($0)" },
+            hadamard: hadamard)
         outProj   = qproj("out_proj")
         inProjA   = weights["\(prefix).in_proj_a.weight"]!
         inProjB   = weights["\(prefix).in_proj_b.weight"]!
@@ -249,8 +249,8 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let Dm = x.shape[2]
         let xf = x.reshaped([B * L, Dm])
 
-        // Projections (one shared input rotation for qkv and z)
-        let proj = PrismPackedLinear.project(xf, inProjQKV, inProjZ)
+        // Projections (one fused matmul for qkv and z)
+        let proj = inProjQKVZ(xf)
         var qkv = proj[0].reshaped([B, L, dQKV])
         let z   = proj[1].reshaped([B, L, dInner])
 
@@ -383,7 +383,7 @@ final class Qwen35DecoderLayer: Module, @unchecked Sendable {
     private let inputLayerNorm:    Qwen35RMSNorm
     private let postAttnLayerNorm: Qwen35RMSNorm
 
-    init(weights: [String: MLXArray], prefix: String,
+    init(weights: WeightStore, prefix: String,
          config: Qwen35Config, hadamard: HadamardMeta,
          layerType: String = "full_attention") {
         if layerType == "linear_attention" {
@@ -438,7 +438,7 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
     private let lmHeadEmbed: PrismPackedEmbedding?
     let config: Qwen35Config
 
-    init(weights: [String: MLXArray], config: Qwen35Config, hadamard: HadamardMeta) {
+    init(weights: WeightStore, config: Qwen35Config, hadamard: HadamardMeta) {
         self.config = config
         let (eb, es) = hadamard.rotation(for: "model.embed_tokens")
         embedTokens = PrismPackedEmbedding(

@@ -255,11 +255,15 @@ public actor LocalMLXProvider: ModelProvider {
 
         logger.info("Loading model from \(self.modelDirectory.lastPathComponent, privacy: .public)")
 
-        let weights  = try loadWeights(from: modelDirectory)
+        var weights  = try loadWeights(from: modelDirectory)
         let config   = try loadConfig(from: modelDirectory)
         let hadamard = (try? loadHadamard(from: modelDirectory, weights: weights)) ?? .none
 
-        let mdl = Qwen35ForCausalLM(weights: weights, config: config, hadamard: hadamard)
+        // The store is the only owner from here on: fused projections consume their source
+        // tensors, so the unfused copies are freed layer by layer during construction.
+        let store = WeightStore(weights)
+        weights = [:]
+        let mdl = Qwen35ForCausalLM(weights: store, config: config, hadamard: hadamard)
         let allW = mdl.allArrays()
         MLX.eval(allW)
         logger.info("Weights eval'd (\(allW.count, privacy: .public) tensors)")

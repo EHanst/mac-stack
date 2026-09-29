@@ -52,41 +52,80 @@ final class PrismPackedLinear: Module, UnaryLayer, @unchecked Sendable {
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        apply(preRotated: rotate(x))
-    }
-
-    /// Apply the input-side Walsh-Hadamard rotation (identity when `block == 0`).
-    func rotate(_ x: MLXArray) -> MLXArray {
-        block > 0 ? prismFWHT(x, block: block, signs: signs) : x
-    }
-
-    /// Packed 2-bit matmul on an input that has already been rotated by `rotate(_:)`.
-    func apply(preRotated x: MLXArray) -> MLXArray {
-        quantizedMatmul(x, weight, scales: scales, biases: biases,
-                        transpose: true, groupSize: 128, bits: 2)
+        let inp = block > 0 ? prismFWHT(x, block: block, signs: signs) : x
+        return quantizedMatmul(inp, weight, scales: scales, biases: biases,
+                               transpose: true, groupSize: 128, bits: 2)
     }
 
     /// True when both layers rotate their input identically (same block size and the very
-    /// same sign vector), so a single rotated copy of `x` can feed both.
+    /// same sign vector), so they can share one rotated input.
     func sharesRotation(with other: PrismPackedLinear) -> Bool {
         block == other.block && signs === other.signs
     }
+}
 
-    /// Project `x` through several layers, computing each distinct input rotation only once.
-    ///
-    /// Q/K/V, gate/up and the linear-attention input projections all read the same
-    /// activations with the same rotation; without this the WHT (fp32 cast, sign multiply,
-    /// Hadamard, cast back) runs once per projection on every token of every layer.
-    static func project(_ x: MLXArray, _ layers: PrismPackedLinear...) -> [MLXArray] {
-        var rotated: [(layer: PrismPackedLinear, value: MLXArray)] = []
-        return layers.map { layer in
-            if let hit = rotated.first(where: { $0.layer.sharesRotation(with: layer) }) {
-                return layer.apply(preRotated: hit.value)
+// MARK: - WeightStore
+
+/// Loaded tensors that can be consumed. Fusing projections concatenates several tensors into
+/// one; `take` drops the originals as it goes so peak memory stays at ~one layer of overhead
+/// instead of holding both the fused and unfused copies of most of the model.
+final class WeightStore: @unchecked Sendable {
+    private var tensors: [String: MLXArray]
+
+    init(_ tensors: [String: MLXArray]) { self.tensors = tensors }
+
+    subscript(key: String) -> MLXArray? { tensors[key] }
+
+    func take(_ key: String) -> MLXArray? { tensors.removeValue(forKey: key) }
+}
+
+// MARK: - PrismFusedLinear
+
+/// Several packed projections that read the same input, run as one quantized matmul.
+///
+/// Packed weights, scales and biases are all laid out `[out, ...]` with quantization groups
+/// along the input dimension, so stacking projections along axis 0 is exact. One dispatch and
+/// one Hadamard rotation replace N of each (q/k/v, gate/up, linear-attn qkv/z), which matters
+/// for single-token decode where per-op overhead rivals the weight-streaming time.
+final class PrismFusedLinear: Module, @unchecked Sendable {
+    let linear: PrismPackedLinear
+    private let splitPoints: [Int]
+
+    /// `prefixes` name the projections (e.g. `model.layers.3.self_attn.q_proj`); their
+    /// tensors are consumed from `store`.
+    init(store: WeightStore, prefixes: [String], hadamard: HadamardMeta) {
+        var ws: [MLXArray] = [], ss: [MLXArray] = [], bs: [MLXArray] = []
+        var sizes: [Int] = []
+        var rotation: (block: Int, signs: MLXArray?)?
+        for p in prefixes {
+            let r = hadamard.rotation(for: p)
+            if let first = rotation {
+                precondition(first.block == r.block && first.signs === r.signs,
+                             "Fused projections must share an input rotation: \(p)")
+            } else {
+                rotation = r
             }
-            let r = layer.rotate(x)
-            rotated.append((layer, r))
-            return layer.apply(preRotated: r)
+            let w = store.take("\(p).weight")!
+            ws.append(w)
+            ss.append(store.take("\(p).scales")!)
+            bs.append(store.take("\(p).biases")!)
+            sizes.append(w.shape[0])
         }
+        let fw = concatenated(ws, axis: 0)
+        let fs = concatenated(ss, axis: 0)
+        let fb = concatenated(bs, axis: 0)
+        // Materialise now so the source tensors can be freed before the next layer loads.
+        MLX.eval(fw, fs, fb)
+        linear = PrismPackedLinear(weight: fw, scales: fs, biases: fb,
+                                   block: rotation?.block ?? 0, signs: rotation?.signs)
+        var acc = 0
+        splitPoints = sizes.dropLast().map { acc += $0; return acc }
+        super.init()
+    }
+
+    /// Outputs of each fused projection, in `prefixes` order.
+    func callAsFunction(_ x: MLXArray) -> [MLXArray] {
+        MLX.split(linear(x), indices: splitPoints, axis: -1)
     }
 }
 
