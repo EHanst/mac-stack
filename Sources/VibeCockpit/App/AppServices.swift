@@ -10,6 +10,7 @@ import os
 public final class AppServices {
 
     public let credentials = CredentialStore()
+    public private(set) var workspaceName: String?
     private let registry = ModelRegistry()
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
@@ -34,6 +35,7 @@ public final class AppServices {
             let mgr = GitSnapshotManager(workspaceURL: url)
             try? await mgr.open()
             snapshotManager = mgr
+            workspaceName = url.lastPathComponent
         }
 
         let dbURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)

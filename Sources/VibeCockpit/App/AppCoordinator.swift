@@ -106,6 +106,8 @@ public final class AppCoordinator {
         case indexingStatusUpdated(IndexingStatus)
         // MCP tools
         case mcpToolsUpdated([String])
+
+        case clearSession
     }
 
     public private(set) var state: AppState
@@ -200,6 +202,13 @@ public final class AppCoordinator {
 
         case .mcpToolsUpdated(let names):
             next.mcpToolNames = names
+
+        case .clearSession:
+            next.intentHistory = []
+            next.currentDiff = nil
+            next.previewHTML = nil
+            next.activeIntent = nil
+            next.correctionLoopState = .init(maxRetries: next.correctionLoopState.maxRetries)
         }
         return next
     }
