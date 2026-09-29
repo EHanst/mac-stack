@@ -213,6 +213,8 @@ public final class AppServices {
                     await self?.notifyHealth(provider.id, health, coordinator: coordinator)
                 }
             }
+            // The list the Models page and chat header read was built before the model loaded.
+            await self?.refreshModels(coordinator: coordinator)
         }
 
         // MCP: model tools are always offered; project tools join for every project the user opened
