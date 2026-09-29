@@ -16,9 +16,13 @@ public struct OptimizeContext: Sendable {
     public var profile: ModelPromptProfile
     /// Run on this model instead of whichever the router would pick for chat.
     public var pin: ProviderID?
+    /// Queue priority; outside apps use `.api` so they don't jump ahead of the chat.
+    public var priority: InferenceScheduler.Priority
 
     public init(workspaceName: String? = nil, intent: String? = nil,
-                profile: ModelPromptProfile = .generic, pin: ProviderID? = nil) {
+                profile: ModelPromptProfile = .generic, pin: ProviderID? = nil,
+                priority: InferenceScheduler.Priority = .interactive) {
+        self.priority = priority
         self.workspaceName = workspaceName
         self.intent = intent
         self.profile = profile
@@ -86,7 +90,7 @@ public struct PromptOptimizer: Sendable {
                 do {
                     let stream = try await inference.generate(
                         messages: messages, tools: [], options: GenerationOptions(maxTokens: budget),
-                        priority: .interactive, pin: context.pin,
+                        priority: context.priority, pin: context.pin,
                         onRoute: { notice in
                             switch notice.kind {
                             case .using(let id): route.set(id)

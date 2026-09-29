@@ -472,7 +472,7 @@ struct StackAPIServerTests {
         try await h.server.makeApplication().test(.live) { client in
             let port = try #require(client.port)
             let mcp = try await mcpClient(port: port, token: h.token)
-            #expect(Set(try await mcp.listTools().tools.map(\.name)) == ["list_models", "chat", "embed"])
+            #expect(Set(try await mcp.listTools().tools.map(\.name)) == ["list_models", "chat", "embed", "optimize_prompt"])
             let answer = try await mcp.callTool(name: "chat", arguments: ["prompt": "hi"])
             #expect(text(answer.content) == "Hello world")
             #expect(text(try await mcp.callTool(name: "list_models").content).contains("local:bonsai"))

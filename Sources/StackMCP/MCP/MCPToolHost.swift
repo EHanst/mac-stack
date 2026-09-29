@@ -34,6 +34,7 @@ public actor MCPToolHost {
     private var runtime: ToolRuntime?
     private var projectTools: (@Sendable () async -> [any AgentToolHandler])?
     private var externalTools: (@Sendable () async -> [any AgentToolHandler])?
+    private var promptProvider: (@Sendable () async -> [SavedPrompt])?
     private let log = Logger(subsystem: "com.vibecockpit", category: "MCPToolHost")
 
     /// `gate` decides whether an app may change files or run commands; without one those are refused.
@@ -73,12 +74,44 @@ public actor MCPToolHost {
 
     public func setExternalTools(_ provider: (@Sendable () async -> [any AgentToolHandler])?) { externalTools = provider }
 
+    /// The saved prompts offered to apps allowed to read them (MCP `prompts/list` and `prompts/get`).
+    public func setPromptProvider(_ provider: (@Sendable () async -> [SavedPrompt])?) { promptProvider = provider }
+
+    fileprivate func prompts() async -> [SavedPrompt] { await promptProvider?() ?? [] }
+
     public func allTools() async -> [any AgentToolHandler] {
         var tools: [any AgentToolHandler] = []
         if let inference {
-            tools += [ListModelsTool(inference: inference), ChatTool(inference: inference), EmbedTool(inference: inference)]
+            tools += [ListModelsTool(inference: inference), ChatTool(inference: inference), EmbedTool(inference: inference),
+                       OptimizePromptTool(inference: inference)]
         }
         return tools + workspaceTools + (await projectTools?() ?? []) + (await externalTools?() ?? [])
+    }
+
+    // MARK: Prompts
+
+    /// The name other apps use: the shortcut if there is one, else the id.
+    static func promptName(_ p: SavedPrompt) -> String { p.slash ?? p.id }
+
+    /// Every blank is an argument, except `date`, which is filled in here. `clipboard` is *not* read for
+    /// outside apps: they have to pass it, so a connected app can't quietly read what you copied.
+    static func mcpPrompt(_ p: SavedPrompt) -> Prompt {
+        let blanks = PromptTemplate.variables(in: p.body).filter { $0 != "date" }
+        let first = p.body.split(separator: "\n").first.map(String.init) ?? p.title
+        return Prompt(
+            name: promptName(p), title: p.title, description: first.count > 140 ? String(first.prefix(140)) + "…" : first,
+            arguments: blanks.map { Prompt.Argument(name: $0, required: false) })
+    }
+
+    static func renderPrompt(_ p: SavedPrompt, arguments: [String: String]) -> String {
+        var values = arguments
+        if PromptTemplate.variables(in: p.body).contains("date") {
+            let f = DateFormatter()
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "yyyy-MM-dd"
+            values["date"] = f.string(from: Date())
+        }
+        return PromptTemplate.render(p.body, values: values)
     }
 
     /// A server for one client. `scopes` is consulted on every list and call.
@@ -93,13 +126,29 @@ public actor MCPToolHost {
             version: "1.0.0",
             title: "VibeCockpit",
             instructions: "The AI model running in VibeCockpit on this Mac (chat, embeddings, model list), plus code search, files, builds and snapshots when a project is open.",
-            capabilities: Server.Capabilities(tools: .init())
+            capabilities: Server.Capabilities(prompts: .init(), tools: .init())
         )
 
         await server.withMethodHandler(ListTools.self) { _ in
             let tools = await host.allTools()
             let allowed = scopes.scopes
             return ListTools.Result(tools: tools.filter { allowed.contains($0.requiredScope) }.map { $0.toolDefinition.withValidSchema })
+        }
+
+        await server.withMethodHandler(ListPrompts.self) { _ in
+            guard scopes.scopes.contains(.prompts) else { return ListPrompts.Result(prompts: []) }
+            return ListPrompts.Result(prompts: await host.prompts().map(Self.mcpPrompt))
+        }
+
+        await server.withMethodHandler(GetPrompt.self) { params in
+            guard scopes.scopes.contains(.prompts) else {
+                throw MCPError.invalidParams("This app isn't allowed to read your saved prompts. Change its permissions in VibeCockpit.")
+            }
+            guard let prompt = await host.prompts().first(where: { Self.promptName($0) == params.name }) else {
+                throw MCPError.invalidParams("Unknown prompt: \(params.name)")
+            }
+            let text = Self.renderPrompt(prompt, arguments: params.arguments ?? [:])
+            return GetPrompt.Result(description: prompt.title, messages: [.user(.text(text: text))])
         }
 
         await server.withMethodHandler(CallTool.self) { params in

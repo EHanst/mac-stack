@@ -25,6 +25,8 @@ public final class PromptStudioModel {
     public private(set) var phase: Phase = .idle
     public private(set) var prompts: [SavedPrompt] = []
     public private(set) var recipes: [SavedPrompt] = []
+    /// Prompts found in project folders; each needs the user's approval before use.
+    public private(set) var projectPrompts: [WorkspacePromptStore.Entry] = []
     /// Model a chat message would go to right now, and how it likes to be prompted.
     public private(set) var modelID: ProviderID?
     public private(set) var profile: ModelPromptProfile = .generic
@@ -37,6 +39,7 @@ public final class PromptStudioModel {
     static let pinKey = "optimizerModelPin"
 
     private let library: PromptLibrary
+    private let projectStore: WorkspacePromptStore?
     private let optimizer: PromptOptimizer
     private let plannedModel: @Sendable () async -> ProviderID?
     private let listModels: @Sendable () async -> [InferenceService.ModelListing]
@@ -49,11 +52,13 @@ public final class PromptStudioModel {
         library: PromptLibrary, optimizer: PromptOptimizer,
         plannedModel: @escaping @Sendable () async -> ProviderID?,
         listModels: @escaping @Sendable () async -> [InferenceService.ModelListing],
+        projectPrompts: WorkspacePromptStore? = nil,
         defaults: UserDefaults = .standard,
         clipboard: @escaping @MainActor () -> String? = PromptStudioModel.systemClipboard,
         today: @escaping () -> Date = Date.init
     ) {
         self.library = library
+        self.projectStore = projectPrompts
         self.optimizer = optimizer
         self.plannedModel = plannedModel
         self.listModels = listModels
@@ -75,6 +80,7 @@ public final class PromptStudioModel {
     public func reload() async {
         prompts = await library.userPrompts()
         recipes = await library.recipes()
+        projectPrompts = await projectStore?.all() ?? []
     }
 
     public func search(_ query: String) -> [SavedPrompt] {
@@ -86,10 +92,22 @@ public final class PromptStudioModel {
         }
     }
 
+    /// Lets the user vouch for one project prompt (as it reads right now).
+    public func approve(_ entry: WorkspacePromptStore.Entry) async {
+        await projectStore?.approve(id: entry.id)
+        await reload()
+    }
+
+    /// The prompt behind `/name`: yours first, then approved project prompts.
+    public func prompt(slash typed: String) -> SavedPrompt? {
+        guard let key = SavedPrompt.cleanSlash(typed) else { return nil }
+        return prompts.first { $0.slash == key } ?? projectPrompts.first { $0.approved && $0.prompt.slash == key }?.prompt
+    }
+
     /// Prompts whose slash name starts with `typed` (what follows a `/` in the composer).
     public func slashMatches(_ typed: String) -> [SavedPrompt] {
         let key = typed.lowercased()
-        return prompts.filter { p in p.slash.map { $0.hasPrefix(key) } ?? false }
+        return (prompts + projectPrompts.filter(\.approved).map(\.prompt)).filter { p in p.slash.map { $0.hasPrefix(key) } ?? false }
     }
 
     @discardableResult

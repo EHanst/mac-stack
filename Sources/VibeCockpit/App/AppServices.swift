@@ -54,6 +54,8 @@ public final class AppServices {
     public let promptLibrary: PromptLibrary
     /// Save/insert/improve prompts from the chat box.
     public let promptStudio: PromptStudioModel
+    /// Prompts committed inside project folders (`.vibe/prompts`); usable only after the user approves each.
+    public let projectPrompts: WorkspacePromptStore
     public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
     public let diagnostics: DiagnosticsModel
     public let workspacesModel: WorkspacesModel
@@ -79,11 +81,6 @@ public final class AppServices {
         self.installer = ModelInstaller(gate: gate)
         let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate, governor: governor, requestLog: requestLog)
         self.inference = inference
-        self.promptStudio = PromptStudioModel(
-            library: promptLibrary, optimizer: PromptOptimizer(inference: inference),
-            plannedModel: { await inference.plannedModel() },
-            listModels: { await inference.availableModels() },
-            defaults: defaults)
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
         let runnerBox = SharedBuildRunner()
@@ -91,6 +88,14 @@ public final class AppServices {
             try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get())
         }
         self.workspaces = workspaces
+        let projectPrompts = WorkspacePromptStore(roots: { await workspaces.list.map { ($0.record.name, $0.record.url) } })
+        self.projectPrompts = projectPrompts
+        self.promptStudio = PromptStudioModel(
+            library: promptLibrary, optimizer: PromptOptimizer(inference: inference),
+            plannedModel: { await inference.plannedModel() },
+            listModels: { await inference.availableModels() },
+            projectPrompts: projectPrompts,
+            defaults: defaults)
         let externals = externalServers, requestLog = self.requestLog, governor = self.governor
         self.diagnostics = DiagnosticsModel(log: requestLog) {
             try await AppServices.makeSupportBundle(
@@ -106,6 +111,8 @@ public final class AppServices {
         Task {
             await host.setExternalTools { await externals.tools() }
             await host.setProjectTools { await workspaces.tools() }
+            // Other apps see your own prompts plus project prompts you approved; nothing else.
+            await host.setPromptProvider { await promptLibrary.userPrompts() + projectPrompts.approvedPrompts() }
         }
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }

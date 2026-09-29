@@ -19,12 +19,14 @@ struct IntentPane: View {
         case improve, inspect
         case save(String)
         case insert(SavedPrompt)
+        case reviewProject(WorkspacePromptStore.Entry)
         var id: String {
             switch self {
             case .improve: "improve"
             case .inspect: "inspect"
             case .save: "save"
             case .insert(let p): "insert-\(p.id)"
+            case .reviewProject(let e): "review-\(e.id)"
             }
         }
     }
@@ -68,6 +70,10 @@ struct IntentPane: View {
             InsertPromptSheet(studio: studio, prompt: prompt,
                               onInsert: { text in place(text, from: prompt); sheet = nil },
                               onCancel: { sheet = nil })
+        case .reviewProject(let entry):
+            ReviewProjectPromptSheet(studio: studio, entry: entry,
+                                     onApproved: { prompt in sheet = nil; beginInsert(prompt) },
+                                     onCancel: { sheet = nil })
         }
     }
 
@@ -266,6 +272,7 @@ struct IntentPane: View {
                     PromptPaletteView(
                         studio: studio, canSave: !draftIsEmpty,
                         onPick: { showPalette = false; beginInsert($0) },
+                        onPickProject: { showPalette = false; beginInsert(project: $0) },
                         onSaveCurrent: { showPalette = false; sheet = .save(intentText) },
                         onManage: { showPalette = false; onManagePrompts() })
                 }
@@ -323,6 +330,10 @@ struct IntentPane: View {
         }
     }
 
+    private func beginInsert(project entry: WorkspacePromptStore.Entry) {
+        if entry.approved { beginInsert(entry.prompt) } else { sheet = .reviewProject(entry) }
+    }
+
     private func place(_ text: String, from prompt: SavedPrompt) {
         intentText = text
         inputFocused = true
@@ -334,7 +345,7 @@ struct IntentPane: View {
         guard !trimmed.isEmpty, !coordinator.state.isGenerating else { return }
         // "/name" with a saved prompt of that name expands it instead of sending.
         if trimmed.hasPrefix("/"), !trimmed.contains(" "), !trimmed.contains("\n"),
-           let match = studio.prompts.first(where: { $0.slash == SavedPrompt.cleanSlash(trimmed) }) {
+           let match = studio.prompt(slash: trimmed) {
             beginInsert(match)
             return
         }

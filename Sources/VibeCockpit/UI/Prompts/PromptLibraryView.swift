@@ -12,6 +12,7 @@ struct PromptLibraryView: View {
     @State private var query = ""
     @State private var path: [String] = []
     @State private var message: String?
+    @State private var reviewing: WorkspacePromptStore.Entry?
 
     private var studio: PromptStudioModel { services.promptStudio }
 
@@ -31,6 +32,29 @@ struct PromptLibraryView: View {
                                 Button("Export…", systemImage: "square.and.arrow.up") { export(p) }
                                 Button("Delete", systemImage: "trash", role: .destructive) { delete(p) }
                             }
+                    }
+                }
+                if !studio.projectPrompts.isEmpty {
+                    Section {
+                        ForEach(studio.projectPrompts) { entry in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.prompt.title).font(.mtLabelLarge)
+                                    Text("\(entry.workspace) · \(entry.fileName)").font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                                }
+                                Spacer()
+                                if entry.approved {
+                                    Label("Approved", systemImage: "checkmark.seal").font(.mtLabelSmall).foregroundStyle(Color.mtHealthy)
+                                } else {
+                                    Button("Review") { reviewing = entry }.buttonStyle(MTTonalButtonStyle())
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("From your projects")
+                    } footer: {
+                        Text("Prompts committed in a project's .vibe/prompts folder. Read each one before using it.")
+                            .font(.mtBodySmall)
                     }
                 }
                 Section {
@@ -68,6 +92,9 @@ struct PromptLibraryView: View {
                         .padding(8).frame(maxWidth: .infinity).background(Color.mtSurfaceContainerHighest)
                 }
             }
+        }
+        .sheet(item: $reviewing) { entry in
+            ReviewProjectPromptSheet(studio: studio, entry: entry, onApproved: { _ in reviewing = nil }, onCancel: { reviewing = nil })
         }
         .task { await studio.reload() }
     }

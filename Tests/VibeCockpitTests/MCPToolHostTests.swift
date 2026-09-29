@@ -54,7 +54,7 @@ struct MCPToolHostTests {
     func workspaceless() async {
         let host = await makeHost()
         let names = await host.allTools().map { $0.toolDefinition.name }
-        #expect(Set(names) == ["list_models", "chat", "embed"])
+        #expect(Set(names) == ["list_models", "chat", "embed", "optimize_prompt"])
         #expect(await host.hasWorkspace == false)
     }
 
@@ -74,7 +74,7 @@ struct MCPToolHostTests {
         #expect(firstText(denied.content).contains("isn't allowed"))
 
         scopes.scopes = [.models, .chat]
-        #expect(Set(try await client.listTools().tools.map(\.name)) == ["list_models", "chat"])
+        #expect(Set(try await client.listTools().tools.map(\.name)) == ["list_models", "chat", "optimize_prompt"])
         let ok = try await client.callTool(name: "chat", arguments: ["prompt": "hi"])
         #expect(ok.isError != true)
         #expect(firstText(ok.content) == "echo: hi")
@@ -128,7 +128,7 @@ struct MCPSocketTests {
         let (b, _) = try await connectClient(path: path)
         #expect(infoA.serverInfo.name == "vibecockpit")
 
-        #expect(Set(try await a.listTools().tools.map(\.name)) == ["list_models", "chat", "embed"])
+        #expect(Set(try await a.listTools().tools.map(\.name)) == ["list_models", "chat", "embed", "optimize_prompt"])
         #expect(firstText(try await b.callTool(name: "chat", arguments: ["prompt": "from b"]).content) == "echo: from b")
 
         await a.disconnect()
@@ -136,7 +136,7 @@ struct MCPSocketTests {
         #expect(firstText(try await b.callTool(name: "chat", arguments: ["prompt": "still here"]).content) == "echo: still here")
 
         let (c, _) = try await connectClient(path: path)   // a later client is accepted too
-        #expect(try await c.listTools().tools.count == 3)
+        #expect(try await c.listTools().tools.count == 4)
 
         await b.disconnect(); await c.disconnect()
         await service.stop()
