@@ -81,6 +81,13 @@ public struct PromptOptimizer: Sendable {
     private let inference: InferenceService
     public init(inference: InferenceService) { self.inference = inference }
 
+    /// Tokens kept free for the model's own reply framing and estimate error.
+    static let safetyMargin = 256
+    /// Below this much room a rewrite isn't worth attempting.
+    static let minimumRoom = 128
+    /// Longest reply we wait for, so a runaway rewrite on a slow local model can be cancelled early.
+    static let maxOutputTokens = 2_048
+
     public func optimize(draft: String, context: OptimizeContext, mode: OptimizeMode = .improve)
         -> AsyncThrowingStream<OptimizerEvent, Error>
     {
@@ -104,7 +111,21 @@ public struct PromptOptimizer: Sendable {
                     // The conversation is too long to continue; rewrite from the draft alone.
                     messages = Self.requestMessages(draft: trimmed, context: context, mode: mode, useSharedPrefix: false)
                 }
-                let budget = mode == .expand ? 1_500 : min(1_024, max(200, PromptTokens.estimate(trimmed) * 3 + 150))
+                // What the rewrite may take is set by what the target can hold, not by how long the draft is:
+                // on this Mac that is the memory-aware context limit minus the request itself; for a cloud
+                // model it is the size the model is known to handle well.
+                var room = context.profile.maxUsefulTokens
+                if servedLocally, let limit = await inference.localContextLimit() {
+                    room = limit - InferenceService.estimateTokens(messages) - Self.safetyMargin
+                }
+                guard room >= Self.minimumRoom else {
+                    continuation.yield(.finished(Optimization(
+                        original: draft, improved: draft, changes: [], questions: [], model: nil,
+                        rejection: .init(reason: "There isn't enough free memory to rewrite this right now, so I kept your version. Close other apps or clear the chat and try again.", missing: []))))
+                    continuation.finish()
+                    return
+                }
+                let budget = min(room, Self.maxOutputTokens)
                 let route = RouteBox()
                 do {
                     let stream = try await inference.generate(
@@ -123,7 +144,7 @@ public struct PromptOptimizer: Sendable {
                             if let partial = Self.partialImproved(raw) { continuation.yield(.partial(partial)) }
                         }
                     }
-                    continuation.yield(.finished(Self.result(raw: raw, original: trimmed, mode: mode, model: route.value)))
+                    continuation.yield(.finished(Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -248,7 +269,9 @@ public struct PromptOptimizer: Sendable {
 
     private static let personaWords = ["senpai", "sugoi", "kawaii", "kokoro"]
 
-    static func result(raw: String, original: String, mode: OptimizeMode, model: ProviderID?) -> Optimization {
+    /// `ceiling` is the most tokens the rewrite may take (what the target can hold), not a multiple of the draft.
+    static func result(raw: String, original: String, mode: OptimizeMode, model: ProviderID?,
+                       ceiling: Int = .max) -> Optimization {
         let parsed = parse(raw)
         func reject(_ reason: String, missing: [String] = []) -> Optimization {
             Optimization(original: original, improved: original, changes: [], questions: parsed.questions,
@@ -269,13 +292,16 @@ public struct PromptOptimizer: Sendable {
         if !missing.isEmpty {
             return reject("The rewrite dropped something you wrote, so I kept your version.", missing: missing)
         }
-        let originalTokens = PromptTokens.estimate(original)
-        let cap = mode == .expand ? max(originalTokens * 4, 400) : max(Int(Double(originalTokens) * 1.5), 60)
-        if PromptTokens.estimate(parsed.improved) > cap {
-            return reject(mode == .expand ? "The rewrite grew far beyond your request, so I kept your version."
-                                          : "The rewrite is much longer than what you wrote, so I kept your version. Try Expand if you want more detail.")
+        let newTokens = PromptTokens.estimate(parsed.improved)
+        if newTokens > ceiling {
+            return reject("The rewrite is too big for what the model can hold right now, so I kept your version.")
         }
-        return Optimization(original: original, improved: parsed.improved, changes: parsed.changes,
+        var changes = parsed.changes
+        // Not a reason to refuse (the size limit is the model's, not the draft's), but worth a look.
+        if mode != .expand, newTokens > 150, newTokens > PromptTokens.estimate(original) * 4 {
+            changes.append("This is much longer than what you wrote. Check it still asks for the same thing.")
+        }
+        return Optimization(original: original, improved: parsed.improved, changes: changes,
                             questions: parsed.questions, model: model, rejection: nil)
     }
 }

@@ -49,7 +49,7 @@ Legend: **[F]** fact verified in the repo · **[R]** recommendation · **[G]** g
 
 1. **Never auto-send.** Result lands in a diff; user picks Accept, Edit, or Revert. Undo restores the original.
 2. **Literal preservation check (programmatic, not model-judged).** Extract code fences, file paths, quoted strings, numbers, identifiers from the original; if any is missing from the output, reject the rewrite and show "Kokoro dropped something, so I kept your version" + the missing item.
-3. **Length cap:** output ≤ 1.5× original tokens unless the user picks "Expand".
+3. **Length cap:** the rewrite must fit what the target can hold: on this Mac, the memory-aware context limit minus the request and a safety margin; for a cloud model, the profile's `maxUsefulTokens`. Not a multiple of the draft (changed after live testing showed a 1.5× cap rejected useful rewrites of short drafts). A rewrite over 4× the draft gets a "check it still asks for the same thing" note instead of a rejection. With under ~128 tokens of room nothing is sent.
 4. **Untrusted fencing:** any text the draft marks as pasted/attached is wrapped in `<untrusted>` for the optimizer call.
 5. **Egress:** if the chosen optimizer is cloud, the call goes through `EgressGate`; in Local-only mode the button falls back to the selected local model or is disabled with one sentence explaining why.
 6. **Optimizer output has no tool access.** Plain text in, plain text out.

@@ -110,11 +110,23 @@ struct PromptOptimizerTests {
         #expect(r.rejection != nil)
     }
 
-    @Test("a rewrite far longer than the original is rejected unless expanding")
+    @Test("the size limit is what the model can hold, not a multiple of the draft")
     func lengthCap() {
-        let long = String(repeating: "extra detail here. ", count: 40)
-        #expect(result("<improved>\(long)</improved>", original: "fix the crash in the loader code please").rejection != nil)
-        #expect(result("<improved>\(long)</improved>", original: "fix the crash in the loader code please", mode: .expand).rejection == nil)
+        let long = String(repeating: "extra detail here. ", count: 40)   // ~300 tokens
+        let draft = "fix the crash in the loader code please"
+        // Plenty of room: accepted even though it is far longer than the draft, with a nudge to check it.
+        let roomy = PromptOptimizer.result(raw: "<improved>\(long)</improved>", original: draft, mode: .improve,
+                                           model: nil, ceiling: 4_000)
+        #expect(roomy.rejection == nil)
+        #expect(roomy.changes.contains { $0.contains("much longer") })
+        // Not enough room: rejected whatever the draft length.
+        let tight = PromptOptimizer.result(raw: "<improved>\(long)</improved>", original: draft, mode: .improve,
+                                           model: nil, ceiling: 200)
+        #expect(tight.rejection != nil && tight.improved == draft)
+        // A long draft with a long rewrite is judged the same way.
+        let longDraft = String(repeating: "keep this detail. ", count: 200)
+        #expect(PromptOptimizer.result(raw: "<improved>\(longDraft)</improved>", original: longDraft, mode: .improve,
+                                       model: nil, ceiling: 4_000).rejection == nil)
     }
 
     @Test("an empty reply is rejected; questions alone are not a failure")
@@ -251,12 +263,28 @@ struct PromptOptimizerSharingTests {
     func tooLongFallsBack() async throws {
         let cap = Captured()
         let registry = ModelRegistry()
-        await registry.register(LimitedProvider(captured: cap, limit: 100))
+        await registry.register(LimitedProvider(captured: cap, limit: 1_000))
         let svc = InferenceService(registry: registry, policy: .localOnly)
         let long = prefix + [Message(role: .user, content: String(repeating: "word ", count: 400))]
         for try await _ in PromptOptimizer(inference: svc).optimize(
             draft: "fix the crash in the loader", context: OptimizeContext(sharedPrefix: long)) {}
         #expect(await cap.messages.count == 2)
+    }
+
+    @Test("with no memory room left, nothing is sent and the draft is kept")
+    func noRoom() async throws {
+        let cap = Captured()
+        let registry = ModelRegistry()
+        await registry.register(LimitedProvider(captured: cap, limit: 100))
+        let svc = InferenceService(registry: registry, policy: .localOnly)
+        var final: Optimization?
+        for try await event in PromptOptimizer(inference: svc).optimize(
+            draft: "fix the crash in the loader", context: OptimizeContext()) {
+            if case .finished(let o) = event { final = o }
+        }
+        #expect(await cap.messages.isEmpty)
+        #expect(final?.rejection?.reason.contains("memory") == true)
+        #expect(final?.improved == "fix the crash in the loader")
     }
 
     @Test("an empty conversation means a self-contained request")
