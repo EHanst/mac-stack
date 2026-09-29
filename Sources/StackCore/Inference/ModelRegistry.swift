@@ -100,6 +100,9 @@ public actor ModelRegistry {
         var bundleURLs: [URL] = []
         for item in enumerator {
             guard let url = item as? URL else { continue }
+            // Embedding models live under Models/Embedders and are registered separately as
+            // LocalEmbedder; scanning them here would register them as chat models.
+            if url.lastPathComponent == "Embedders" { enumerator.skipDescendants(); continue }
             let configURL = url.appendingPathComponent("config.json")
             let hasSafetensors = FileManager.default.fileExists(
                 atPath: url.appendingPathComponent("model.safetensors").path) ||

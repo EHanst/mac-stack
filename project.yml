@@ -22,6 +22,9 @@ packages:
   swift-transformers:
     url: https://github.com/huggingface/swift-transformers.git
     from: 0.1.17
+  mlx-swift-lm:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    from: 3.31.3
 
 targets:
   VibeCockpit:
@@ -49,6 +52,10 @@ targets:
         product: MLXRandom
       - package: swift-transformers
         product: Transformers
+      - package: mlx-swift-lm
+        product: MLXEmbedders
+      - package: mlx-swift-lm
+        product: MLXLMCommon
       - target: CSQLiteVec
     info:
       path: Sources/VibeCockpit/Info.plist

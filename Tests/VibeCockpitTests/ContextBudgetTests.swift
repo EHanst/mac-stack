@@ -65,4 +65,13 @@ struct ContextBudgetTests {
                           currentActiveBytes: 0, availableSystemBytes: 5 * gib)
         guard case .belowFloor = v else { Issue.record("expected .belowFloor"); return }
     }
+
+    @Test("memory reserved for other resident models lowers the limit")
+    func reservedBytes() {
+        var reserved = b
+        reserved.reservedBytes = 1 * gib
+        let ws = Int(13.32 * Double(gib))
+        #expect(tokens(reserved.verdict(workingSetBytes: ws, weightBytes: weights))
+                < tokens(b.verdict(workingSetBytes: ws, weightBytes: weights)))
+    }
 }

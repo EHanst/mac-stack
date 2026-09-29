@@ -20,6 +20,8 @@ public final class AppServices {
     private let registry: ModelRegistry
     /// All text generation goes through here: routing policy, GPU scheduling, fallback.
     private let inference: InferenceService
+    /// One GPU, one queue: chat generation and local embeddings both go through this.
+    private let gpuScheduler = InferenceScheduler()
     private var snapshotManager: GitSnapshotManager?
     private var indexingPipeline: IndexingPipeline?
     private var mcpService: MCPService?
@@ -34,7 +36,7 @@ public final class AppServices {
         let registry = ModelRegistry()
         self.registry = registry
         let policy = UserDefaults.standard.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
-        self.inference = InferenceService(registry: registry, policy: policy)
+        self.inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
     }
 
     private static let policyKey = "routingPolicy"
@@ -90,6 +92,15 @@ public final class AppServices {
             remoteConfigs: remoteConfigs,
             credentials: credentials
         )
+
+        // Offline embeddings (bge-small) if the model is installed; shares the GPU scheduler.
+        let embedder = LocalEmbedder(scheduler: gpuScheduler)
+        if await embedder.isInstalled {
+            await registry.register(embedder)
+            for provider in await registry.allProviders(with: .textGeneration) {
+                await (provider as? LocalMLXProvider)?.reserveMemory(bytes: LocalEmbedder.residentBytesEstimate)
+            }
+        }
 
         let providers = await registry.allProviders(with: .textGeneration)
         for provider in providers {

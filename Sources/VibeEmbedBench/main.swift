@@ -40,6 +40,7 @@ struct Options: Sendable {
     var wanted = Set(modelSpecs.map(\.key))
     var jsonOut: URL?
     var dumpCorpus: URL?
+    var selfTest = false
 
     static func parse(_ args: [String]) -> Options {
         var o = Options()
@@ -49,6 +50,7 @@ struct Options: Sendable {
             case "--source": if let v = it.next() { o.sourceDir = URL(fileURLWithPath: v) }
             case "--models": if let v = it.next() { o.wanted = Set(v.split(separator: ",").map(String.init)) }
             case "--json": if let v = it.next() { o.jsonOut = URL(fileURLWithPath: v) }
+            case "--self-test": o.selfTest = true
             case "--dump-corpus": if let v = it.next() { o.dumpCorpus = URL(fileURLWithPath: v) }
             default: FileHandle.standardError.write(Data("ignored argument: \(a)\n".utf8))
             }
@@ -174,6 +176,81 @@ func patchedCopy(of dir: URL, in tmp: URL) throws -> URL {
     return out
 }
 
+// MARK: - LocalEmbedder self-test (real model; cannot run under `swift test`, see LocalEmbedderTests)
+
+func selfTest(sourceDir: URL) async throws -> Bool {
+    var failures = 0
+    func check(_ ok: Bool, _ what: String) { print("  \(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+    func dot(_ a: [Float], _ b: [Float]) -> Float { zip(a, b).reduce(0) { $0 + $1.0 * $1.1 } }
+
+    print("[LocalEmbedder self-test] real bge-small through the production provider")
+    let scheduler = InferenceScheduler()
+    let e = LocalEmbedder(scheduler: scheduler)
+    check(await e.isInstalled, "model installed at \(LocalEmbedder.defaultDirectory().path)")
+    check(await e.healthCheck() == .degraded("Embedding model not yet loaded — will load on first use"), "health before load is degraded")
+
+    let docs = try await e.embed([
+        "actor InferenceScheduler serialises GPU work with priorities",
+        "func drawBackground(in rect: CGRect) fills the view with a gradient",
+    ])
+    check(docs.count == 2 && docs.allSatisfy { $0.count == 384 }, "two 384-dimensional vectors")
+    check(docs.allSatisfy { abs($0.reduce(0) { $0 + $1 * $1 }.squareRoot() - 1) < 1e-3 }, "vectors are unit length")
+    check(await e.healthCheck() == .healthy, "health after load is healthy")
+
+    let q = try await e.embedQuery("queue that orders GPU jobs by priority")
+    check(dot(q, docs[0]) > dot(q, docs[1]), "related document ranks above unrelated (\(String(format: "%.3f", dot(q, docs[0]))) vs \(String(format: "%.3f", dot(q, docs[1]))))")
+    let plain = try await e.embed(["queue that orders GPU jobs by priority"])
+    check(dot(q, plain[0]) < 0.9999, "query prefix changes the vector")
+    let again = try await e.embed(["actor InferenceScheduler serialises GPU work with priorities"])
+    check(dot(again[0], docs[0]) > 0.9999, "embedding is deterministic and batch-size independent")
+
+    // Ordering is preserved through length-sorted batching.
+    let mixed = ["short", String(repeating: "a much longer sentence about schedulers ", count: 30), "mid length text here"]
+    let together = try await e.embed(mixed)
+    var separate: [[Float]] = []
+    for t in mixed { separate.append(try await e.embed([t])[0]) }
+    check(zip(together, separate).allSatisfy { dot($0, $1) > 0.999 }, "results come back in input order")
+
+    // A held GPU slot must delay embedding (shared scheduler), not run alongside it.
+    let gate = AsyncStream<Void>.makeStream()
+    let holder = Task { try await scheduler.run(priority: .interactive) { for await _ in gate.stream { break } } }
+    for _ in 0..<200 where await scheduler.runningCount == 0 { try await Task.sleep(for: .milliseconds(2)) }
+    let pending = Task { try await e.embed(["hello"]) }
+    try await Task.sleep(for: .milliseconds(200))
+    check(await scheduler.queuedCount == 1, "embedding queues behind a held GPU slot")
+    gate.continuation.yield()
+    _ = try await pending.value
+    try await holder.value
+    // End to end, offline: index the repo through the real pipeline with ONLY the local embedder
+    // registered (no cloud provider anywhere), then answer the eval questions with `search`.
+    print("[offline code search end to end] IndexingPipeline + LocalEmbedder + VectorStore, no cloud provider")
+    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("selftest_\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+    let registry = ModelRegistry()
+    await registry.register(e)
+    let store = VectorStore(dbURL: tmp.appendingPathComponent("index.sqlite"), embeddingDimension: e.dimension)
+    let pipeline = IndexingPipeline(store: store, registry: registry)
+    try await pipeline.open()
+    let t0 = Date()
+    let files = swiftFiles(in: sourceDir)
+    for f in files { try await pipeline.index(fileURL: f) }
+    print("  indexed \(files.count) files in \(String(format: "%.1f", Date().timeIntervalSince(t0))) s")
+    var relevance: [[Bool]] = []
+    for q in evalSet {
+        let hits = try await pipeline.search(query: q.text, topK: 10)
+        relevance.append(hits.map { isRelevant(q, path: $0.filePath, content: $0.content) })
+    }
+    let m = metrics(relevance)
+    print(row("pipeline.search", m))
+    check(m.recall10 >= 0.85, "recall@10 ≥ 85% (\(pct(m.recall10)))")
+    check(m.mrr10 >= 0.60, "MRR@10 ≥ 0.60 (\(String(format: "%.3f", m.mrr10)))")
+    try await store.close()
+
+    print(failures == 0 ? "  all checks passed" : "  \(failures) FAILED")
+    return failures == 0
+}
+
 // MARK: - Run
 
 struct ModelResult: Codable {
@@ -188,6 +265,7 @@ struct ModelResult: Codable {
 
 func run(_ opts: Options) async throws {
     setvbuf(stdout, nil, _IOLBF, 0)
+    if opts.selfTest { exit(try await selfTest(sourceDir: opts.sourceDir) ? 0 : 1) }
     let chunks = try await loadCorpus(sourceDir: opts.sourceDir)
     print("corpus: \(chunks.count) chunks from \(Set(chunks.map(\.filePath)).count) files; \(evalSet.count) queries")
 

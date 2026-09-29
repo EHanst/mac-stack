@@ -90,6 +90,10 @@ public protocol ModelProvider: Actor {
 
     func embed(_ texts: [String]) async throws -> [[Float]]
 
+    /// Embed a search *query*. Some models want an instruction prefix on queries but not on the
+    /// documents they are matched against; the default treats a query like any other text.
+    func embedQuery(_ text: String) async throws -> [Float]
+
     func healthCheck() async -> ProviderHealth
 
     /// Largest prompt (in tokens) this provider can take right now, or nil if unbounded/unknown.
@@ -98,6 +102,9 @@ public protocol ModelProvider: Actor {
 
 extension ModelProvider {
     public func maxContextTokens() async -> Int? { nil }
+    public func embedQuery(_ text: String) async throws -> [Float] {
+        try await embed([text]).first ?? []
+    }
 }
 
 public enum InferenceTask: Sendable {

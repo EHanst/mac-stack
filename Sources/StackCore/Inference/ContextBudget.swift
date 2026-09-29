@@ -27,6 +27,8 @@ public struct ContextBudget: Sendable, Equatable {
     /// Below this the local model is not useful (system prompt + a short chat won't fit).
     public var minimumUsefulTokens: Int
     public var model: Model
+    /// Memory held by other always-loaded models (e.g. the embedder) that the model can't use.
+    public var reservedBytes = 0
 
     public init(model: Model, safetyFraction: Double = 0.85,
                 contextWindow: Int = 64_000, minimumUsefulTokens: Int = 2_048) {
@@ -52,7 +54,7 @@ public struct ContextBudget: Sendable, Equatable {
         workingSetBytes: Int, weightBytes: Int,
         currentActiveBytes: Int = 0, availableSystemBytes: Int? = nil
     ) -> Verdict {
-        let base = weightBytes + model.fixedOverheadBytes
+        let base = weightBytes + model.fixedOverheadBytes + reservedBytes
         var room = Int(Double(workingSetBytes) * safetyFraction) - base
         if let available = availableSystemBytes {
             // We may still take `available`; memory we already hold counts toward `base`.
@@ -67,7 +69,7 @@ public struct ContextBudget: Sendable, Equatable {
 
     /// Predicted peak for a prompt of `promptTokens`.
     public func predictedPeakBytes(weightBytes: Int, promptTokens: Int) -> Int {
-        weightBytes + model.fixedOverheadBytes + model.bytesPerToken * promptTokens
+        weightBytes + model.fixedOverheadBytes + reservedBytes + model.bytesPerToken * promptTokens
     }
 }
 

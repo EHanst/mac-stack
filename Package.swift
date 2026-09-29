@@ -53,6 +53,8 @@ let package = Package(
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
                 .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
             ],
             path: "Sources/StackCore",
             swiftSettings: [

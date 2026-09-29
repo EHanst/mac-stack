@@ -62,8 +62,7 @@ public actor IndexingPipeline {
             // No embedding provider: fall back to sparse-only search
             return try await store.hybridSearch(query: query, queryEmbedding: [], topK: topK)
         }
-        let embeddings = try await provider.embed([query])
-        let queryEmbedding = embeddings.first ?? []
+        let queryEmbedding = try await provider.embedQuery(query)
         return try await store.hybridSearch(query: query, queryEmbedding: queryEmbedding, topK: topK)
     }
 

@@ -76,6 +76,9 @@ public actor LocalMLXProvider: ModelProvider {
     /// Drop all cached prompt prefixes (frees their memory; the next request prefills in full).
     public func clearPromptCache() { snapshots.removeAll() }
 
+    /// Account for another resident model (the embedder) in the memory budget.
+    public func reserveMemory(bytes: Int) { budget.reservedBytes = bytes }
+
     public func setTuning(_ t: Tuning) {
         tuning = t
         if model != nil { Memory.cacheLimit = t.bufferCacheLimit }
