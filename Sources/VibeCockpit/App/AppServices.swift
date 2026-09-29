@@ -49,8 +49,9 @@ public final class AppServices {
         self.routingPolicy = policy
         let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
         self.inference = inference
-        self.mcpHost = MCPToolHost(inference: inference)
-        self.sharing = APISharingModel(inference: inference, defaults: defaults)
+        let host = MCPToolHost(inference: inference)
+        self.mcpHost = host
+        self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
 
     private static let policyKey = "routingPolicy"

@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "StackCore", targets: ["StackCore"]),
         .library(name: "StackMCP", targets: ["StackMCP"]),
         .library(name: "StackHTTP", targets: ["StackHTTP"]),
+        .executable(name: "vibe-mcp", targets: ["VibeMCP"]),
         .library(name: "VibeCockpitCore", targets: ["VibeCockpitCore"]),
         .executable(name: "VibeCockpit", targets: ["VibeCockpit"]),
     ],
@@ -83,6 +84,8 @@ let package = Package(
             name: "StackHTTP",
             dependencies: [
                 "StackCore",
+                "StackMCP",
+                .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "Hummingbird", package: "hummingbird"),
             ],
             path: "Sources/StackHTTP",
@@ -133,6 +136,12 @@ let package = Package(
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=complete"]),
             ]
+        ),
+
+        // stdio ↔ MCP socket bridge for clients that only speak stdio.
+        .executableTarget(
+            name: "VibeMCP",
+            path: "Sources/VibeMCP"
         ),
 
         // Embedding-model bake-off (retrieval quality/speed on this repo's own code).

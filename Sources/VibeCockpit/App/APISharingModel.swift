@@ -3,6 +3,7 @@ import Observation
 #if SWIFT_PACKAGE
 import StackCore
 import StackHTTP
+import StackMCP
 #endif
 
 /// "Share with other apps": runs the local API server and manages which apps may use it.
@@ -39,12 +40,14 @@ public final class APISharingModel {
     private let defaults: UserDefaults
     private let inference: InferenceService
     private let registry: ClientRegistry?
+    private let mcp: MCPHTTPSessions?
     private var serverTask: Task<Void, Never>?
     private var generation = 0
 
     public init(inference: InferenceService, store: ClientStore = FileClientStore(url: FileClientStore.defaultURL()),
-                defaults: UserDefaults = .standard, port: Int? = nil) {
+                defaults: UserDefaults = .standard, port: Int? = nil, mcp: MCPHTTPSessions? = nil) {
         self.inference = inference
+        self.mcp = mcp
         self.defaults = defaults
         self.isEnabled = defaults.bool(forKey: Self.enabledKey)
         let saved = defaults.integer(forKey: Self.portKey)
@@ -86,7 +89,7 @@ public final class APISharingModel {
         status = .starting
         generation += 1
         let mine = generation
-        let server = StackAPIServer(inference: inference, clients: registry, configuration: APIServerConfiguration(port: port))
+        let server = StackAPIServer(inference: inference, clients: registry, mcp: mcp, configuration: APIServerConfiguration(port: port))
         let port = self.port
         serverTask = Task { [weak self] in
             do {
@@ -111,6 +114,7 @@ public final class APISharingModel {
         serverTask = nil
         task?.cancel()
         await task?.value
+        await mcp?.closeAll()
         status = .off
     }
 

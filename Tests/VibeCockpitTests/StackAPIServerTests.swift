@@ -4,6 +4,8 @@ import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
 import NIOCore
+import MCP
+import StackMCP
 @testable import StackCore
 @testable import StackHTTP
 
@@ -12,8 +14,8 @@ import NIOCore
 private actor Probe {
     private(set) var started = 0
     private(set) var terminated = 0
-    private(set) var lastMessages: [Message] = []
-    func start(_ m: [Message]) { started += 1; lastMessages = m }
+    private(set) var lastMessages: [StackCore.Message] = []
+    func start(_ m: [StackCore.Message]) { started += 1; lastMessages = m }
     func end() { terminated += 1 }
 }
 
@@ -34,7 +36,7 @@ private actor StubModel: ModelProvider {
         self.id = id; self.behavior = behavior; self.probe = probe; self.capabilities = capabilities
     }
 
-    func generate(messages: [Message], tools: [ToolDefinition], options: GenerationOptions) -> AsyncThrowingStream<GenerationEvent, Error> {
+    func generate(messages: [StackCore.Message], tools: [ToolDefinition], options: GenerationOptions) -> AsyncThrowingStream<GenerationEvent, Error> {
         let behavior = self.behavior, probe = self.probe
         return AsyncThrowingStream { c in
             let task = Task {
@@ -85,7 +87,8 @@ private struct Harness {
         policy: RoutingPolicy = .localFirst,
         scopes: Set<ClientScope> = ClientScope.defaultForNewClient,
         origins: Set<String> = [],
-        keepAlive: Duration = .seconds(10)
+        keepAlive: Duration = .seconds(10),
+        mcp: Bool = false
     ) async throws -> Harness {
         let registry = ModelRegistry()
         for p in providers { await registry.register(p) }
@@ -96,7 +99,8 @@ private struct Harness {
         var config = APIServerConfiguration(port: 0)
         config.allowedOrigins = origins
         config.keepAlive = keepAlive
-        return Harness(server: StackAPIServer(inference: inference, clients: clients, configuration: config),
+        let sessions = mcp ? MCPHTTPSessions(host: MCPToolHost(inference: inference)) : nil
+        return Harness(server: StackAPIServer(inference: inference, clients: clients, mcp: sessions, configuration: config),
                        token: token, clients: clients)
     }
 
@@ -420,6 +424,73 @@ struct StackAPIServerTests {
             var waited = 0
             while await probe.terminated == 0, waited < 100 { try await Task.sleep(for: .milliseconds(50)); waited += 1 }
             #expect(await probe.terminated >= 1, "generation should stop when the client goes away")
+        }
+    }
+
+    // MARK: MCP over HTTP
+
+    private func mcpClient(port: Int, token: String) async throws -> Client {
+        let transport = HTTPClientTransport(
+            endpoint: URL(string: "http://localhost:\(port)/mcp")!, streaming: false,
+            requestModifier: { var r = $0; r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization"); return r })
+        let client = Client(name: "test", version: "1")
+        _ = try await client.connect(transport: transport)
+        return client
+    }
+
+    private func text(_ content: [Tool.Content]) -> String {
+        for item in content { if case .text(let t, _, _) = item { return t } }
+        return ""
+    }
+
+    @Test("an MCP client can connect over HTTP with its key, list tools and call chat")
+    func mcpHTTP() async throws {
+        let h = try await Harness.make(mcp: true)
+        try await h.server.makeApplication().test(.live) { client in
+            let port = try #require(client.port)
+            let mcp = try await mcpClient(port: port, token: h.token)
+            #expect(Set(try await mcp.listTools().tools.map(\.name)) == ["list_models", "chat", "embed"])
+            let answer = try await mcp.callTool(name: "chat", arguments: ["prompt": "hi"])
+            #expect(text(answer.content) == "Hello world")
+            #expect(text(try await mcp.callTool(name: "list_models").content).contains("local:bonsai"))
+            await mcp.disconnect()
+        }
+    }
+
+    @Test("over HTTP a key only gets the tools its permissions allow")
+    func mcpScopes() async throws {
+        let h = try await Harness.make(scopes: [.models], mcp: true)
+        try await h.server.makeApplication().test(.live) { client in
+            let port = try #require(client.port)
+            let mcp = try await mcpClient(port: port, token: h.token)
+            #expect(try await mcp.listTools().tools.map(\.name) == ["list_models"])
+            #expect(try await mcp.callTool(name: "chat", arguments: ["prompt": "hi"]).isError == true)
+            await mcp.disconnect()
+        }
+    }
+
+    @Test("/mcp needs a key, and one app can't use another app's session")
+    func mcpAuthAndIsolation() async throws {
+        let h = try await Harness.make(mcp: true)
+        let (_, otherToken) = try await h.clients.create(name: "Other")
+        let initialize = ByteBuffer(string: #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#)
+        let json: HTTPFields = [.contentType: "application/json", .accept: "application/json, text/event-stream"]
+        try await h.server.makeApplication().test(.live) { client in
+            try await client.execute(uri: "/mcp", method: .post, headers: json, body: initialize) { #expect($0.status == .unauthorized) }
+
+            var mine = json; mine[.authorization] = "Bearer \(h.token)"
+            var sessionID: String?
+            try await client.execute(uri: "/mcp", method: .post, headers: mine, body: initialize) { response in
+                #expect(response.status == .ok, "\(response.status) \(String(buffer: response.body))")
+                sessionID = response.headers[HTTPField.Name("MCP-Session-Id")!]
+            }
+            let id = try #require(sessionID)
+
+            var theirs = json; theirs[.authorization] = "Bearer \(otherToken)"; theirs[HTTPField.Name("MCP-Session-Id")!] = id
+            try await client.execute(uri: "/mcp", method: .post, headers: theirs,
+                                     body: ByteBuffer(string: #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)) { response in
+                #expect(response.status == .notFound)
+            }
         }
     }
 }

@@ -5,6 +5,7 @@ import Logging
 import NIOCore
 #if SWIFT_PACKAGE
 import StackCore
+import StackMCP
 #endif
 
 public struct APIServerConfiguration: Sendable {
@@ -29,12 +30,15 @@ public struct StackAPIServer: Sendable {
 
     let inference: InferenceService
     let clients: ClientRegistry
+    let mcpSessions: MCPHTTPSessions?
     let configuration: APIServerConfiguration
     let logger = Logger(label: "vibecockpit.api")
 
-    public init(inference: InferenceService, clients: ClientRegistry, configuration: APIServerConfiguration = .init()) {
+    public init(inference: InferenceService, clients: ClientRegistry, mcp: MCPHTTPSessions? = nil,
+                configuration: APIServerConfiguration = .init()) {
         self.inference = inference
         self.clients = clients
+        self.mcpSessions = mcp
         self.configuration = configuration
     }
 
@@ -52,6 +56,9 @@ public struct StackAPIServer: Sendable {
         router.get("v1/models") { _, context in try await self.models(context: context) }
         router.post("v1/chat/completions") { request, context in try await self.chat(request, context: context) }
         router.post("v1/embeddings") { request, context in try await self.embeddings(request, context: context) }
+        router.post("mcp") { request, context in try await self.mcp(request, context: context) }
+        router.get("mcp") { request, context in try await self.mcp(request, context: context) }
+        router.delete("mcp") { request, context in try await self.mcp(request, context: context) }
         // Unmatched paths raise HTTPError(.notFound), which ErrorMiddleware turns into an OpenAI-style 404.
         return router
     }
