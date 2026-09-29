@@ -219,6 +219,7 @@ public final class AppServices {
             }
             // The list the Models page and chat header read was built before the model loaded.
             await self?.refreshModels(coordinator: coordinator)
+            await self?.prereadSystemPrompt()
         }
 
         // MCP: model tools are always offered; project tools join for every project the user opened
@@ -460,6 +461,17 @@ public final class AppServices {
         await compactWhileIdle(coordinator: coordinator)
     }
 
+    /// Right after the model loads, read the system prompt once so the first message finds it cached
+    /// (the system entry of the prompt cache is never evicted). Skipped when the Mac is strained.
+    private func prereadSystemPrompt() async {
+        guard await !governor.current.isStrained, let localID = await inference.localTextProviderID() else { return }
+        let system = Message(role: .system, content: buildSystemPrompt())
+        guard let stream = try? await inference.generate(
+            messages: [system], tools: [], options: GenerationOptions(maxTokens: 1),
+            priority: .background, pin: localID) else { return }
+        do { for try await _ in stream {} } catch {}
+    }
+
     /// After a turn, while the chat is idle: if the prompt is getting near this Mac's ceiling, make
     /// the whole change now (clear old tool output and, if that isn't enough, summarize the oldest
     /// turns on the local model), then read the new prompt in the background so the next reply finds
@@ -470,7 +482,10 @@ public final class AppServices {
     private func compactWhileIdle(coordinator: AppCoordinator) async {
         guard let limit = await inference.localContextLimit(),
               let localID = await inference.localTextProviderID() else { return }
-        let planner = CompactionPlanner(allowSummarize: true)
+        // Hot, low on memory, or in Low Power Mode: keep to the cheap step (clearing tool output);
+        // no summary and no background re-read.
+        let strained = await governor.current.isStrained
+        let planner = CompactionPlanner(allowSummarize: !strained)
         let plan = planner.plan(items: ledger.compactionItems(calibration: calibration),
                                 maxPromptTokens: min(limit, Self.contextTokenBudget))
         guard plan.outcome != .none, !plan.elide.isEmpty || plan.summarize != nil else { return }
@@ -508,6 +523,7 @@ public final class AppServices {
             let sentence = parts.joined(separator: " and ")
             coordinator.send(.noticeShown("\(sentence.prefix(1).uppercased() + sentence.dropFirst()) to make room (about \(freed) tokens). The full text stays visible here.", symbol: "scissors"))
             // Read the new prompt now so the next reply doesn't have to.
+            guard !strained else { return }
             let warm = self.ledger.messages
             guard let stream = try? await inference.generate(
                 messages: warm, tools: [], options: GenerationOptions(maxTokens: 1),

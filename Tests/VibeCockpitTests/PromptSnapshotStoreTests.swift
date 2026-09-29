@@ -113,3 +113,30 @@ struct PrefillPlanTests {
         #expect(PrefillPlan.snapshotStops(boundaries: [50, 200, 400, 900], restoredUpTo: 200, prefillEnd: 600) == [400])
     }
 }
+
+@Suite("PromptSnapshotStore retain")
+struct PromptSnapshotStoreRetainTests {
+
+    private func toks(_ n: Int) -> [Int32] { (0..<n).map { Int32($0) } }
+
+    @Test("keeps the longest prefixes that fit and always the system entry")
+    func keepsLongestWithinLimit() {
+        var s = PromptSnapshotStore<String>()
+        s.insert(tokens: toks(10), payload: "system", bytes: 5, kind: .system)
+        s.insert(tokens: toks(30), payload: "turn1", bytes: 40, kind: .boundary)
+        s.insert(tokens: toks(50), payload: "turn2", bytes: 40, kind: .boundary)
+        s.insert(tokens: toks(70), payload: "turn3", bytes: 40, kind: .boundary)
+        s.retain(upToBytes: 100)
+        #expect(Set(s.entries.map(\.payload)) == ["system", "turn3", "turn2"])
+        #expect(s.bestMatch(for: toks(80), maxLength: 79)?.payload == "turn3")
+    }
+
+    @Test("an entry bigger than the limit is dropped, the system entry stays")
+    func dropsOversize() {
+        var s = PromptSnapshotStore<String>()
+        s.insert(tokens: toks(10), payload: "system", bytes: 5, kind: .system)
+        s.insert(tokens: toks(90), payload: "huge", bytes: 500, kind: .boundary)
+        s.retain(upToBytes: 100)
+        #expect(s.entries.map(\.payload) == ["system"])
+    }
+}

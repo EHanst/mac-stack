@@ -6,6 +6,7 @@ import StackCore
 import MLXNN
 
 // vibe-bench — performance harness for the local model.
+//   swift run -c release VibeBench --idle-cancel-test   (reply after a background re-read is cancelled part-way)
 //   swift run -c release VibeBench --long-chat-test [--ceiling 6000]   (real chat: cache hits, compaction, summaries)
 //   swift run -c release VibeBench --compaction-test [--timeout 900]   (next-turn TTFT: warm vs compacted vs trimmed)
 //   swift run -c release VibeBench [--model DIR] [--contexts 512,4096] [--gen 128] [--runs 3]
@@ -30,6 +31,7 @@ struct Options {
     var studioTest = false
     var compactionTest = false
     var longChatTest = false
+    var idleCancelTest = false
     var ceilingCap: Int?
     var modelCheck = false
     var samplerCheck = false
@@ -55,6 +57,7 @@ struct Options {
             case "--studio-test": studioTest = true
             case "--compaction-test": compactionTest = true
             case "--long-chat-test": longChatTest = true
+            case "--idle-cancel-test": idleCancelTest = true
             case "--ceiling": if let v = it.next(), let n = Int(v) { ceilingCap = n }
             case "--model-check": modelCheck = true
             case "--sampler-check": samplerCheck = true
@@ -554,6 +557,55 @@ func run() async throws {
             let a = await send(99, file: nil, question: q, gen: 120)
             print("  Q: \(q)\n  A: \(a.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ⏎ "))")
         }
+        print("")
+    }
+
+    if opts.idleCancelTest {
+        // Compaction has just changed the prompt and the app is re-reading it in the background. The user
+        // sends a message part-way through: the re-read is cancelled and the reply goes ahead. How long is the reply?
+        print("[idle cancel test] background re-read cancelled part-way, then the reply")
+        let files = ["Sources/StackCore/Inference/ContextBudget.swift", "Sources/StackCore/Inference/PromptSnapshotStore.swift",
+                     "Sources/StackCore/Inference/ChatPromptRenderer.swift", "Sources/StackCore/Inference/InferenceScheduler.swift",
+                     "Sources/StackCore/Prompts/PromptLint.swift", "Sources/StackCore/Prompts/WordDiff.swift"]
+        var convo = [Message(role: .system, content: "You are a coding assistant inside VibeCockpit. Answer briefly.")]
+        for f in files {
+            let text = ((try? String(contentsOfFile: f, encoding: .utf8)) ?? "").split(separator: "\n", omittingEmptySubsequences: false).prefix(38).joined(separator: "\n")
+            convo.append(Message(role: .user, content: "I just read \(f). What is the main type in it? Two sentences."))
+            convo.append(Message(role: .tool, content: "read_file \(f)\n\(text)", toolCallID: f))
+            convo.append(Message(role: .assistant, content: "The main type in \(f.split(separator: "/").last ?? "") is described at the top of the file."))
+        }
+        let history = convo
+        let question = Message(role: .user, content: "Which file did we read first?")
+        print("  conversation ≈ \(InferenceService.estimateTokens(convo)) estimated tokens")
+        print("  re-read ran before the reply | reply TTFT | cached / prefilled | total wait from the moment of sending")
+
+        func variant(_ label: String, cancelAfter: Double?) async {
+            await provider.clearPromptCache()
+            var ran = 0.0
+            if let cancelAfter {
+                let t0 = Date()
+                let warm = Task {
+                    for try await _ in await provider.generate(messages: history, tools: [], options: GenerationOptions(maxTokens: 1)) {}
+                }
+                if cancelAfter.isFinite {
+                    try? await Task.sleep(for: .seconds(cancelAfter))
+                    warm.cancel()
+                }
+                _ = try? await warm.value
+                ran = Date().timeIntervalSince(t0)
+            }
+            let t1 = Date()
+            let m = await measure(provider, history + [question], gen: 8, timeout: opts.timeout)
+            let waited = Date().timeIntervalSince(t1)
+            if let st = m.stats {
+                print("  \(label.padding(toLength: 34, withPad: " ", startingAt: 0)) \(fmt(ran, 1)) s | TTFT \(fmt(m.ttft, 1)) s | \(st.cachedTokens) / \(st.prefilledTokens) | \(fmt(waited, 1)) s")
+            } else { print("  \(label): reply refused or timed out") }
+        }
+        await variant("no re-read (before this change)", cancelAfter: nil)
+        await variant("cancelled after 8 s", cancelAfter: 8)
+        await variant("cancelled after 16 s", cancelAfter: 16)
+        await variant("cancelled after 24 s", cancelAfter: 24)
+        await variant("ran to the end", cancelAfter: .infinity)
         print("")
     }
 

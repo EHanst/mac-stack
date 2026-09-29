@@ -98,6 +98,9 @@ public actor LocalMLXProvider: ModelProvider {
         return r
     }
 
+    /// Prompt cache kept across an idle unload of the weights.
+    static let retainedSnapshotBytes = 1 << 30
+
     public init(id: ProviderID, modelDirectory: URL) {
         self.id = id
         self.modelDirectory = modelDirectory
@@ -110,9 +113,11 @@ public actor LocalMLXProvider: ModelProvider {
     private func _unloadModel() async {
         model = nil
         tokenizer = nil
-        snapshots.removeAll()
+        // The weights are the memory worth giving back; a small cache is kept so that returning to a
+        // long chat doesn't mean reading it all again (about 0.4 GiB per 4k tokens).
+        snapshots.retain(upToBytes: Self.retainedSnapshotBytes)
         Memory.clearCache()
-        logger.info("Model weights unloaded (idle eviction)")
+        logger.info("Model weights unloaded (idle eviction); kept \(self.snapshots.totalBytes / 1_048_576, privacy: .public) MiB of prompt cache")
     }
 
     // MARK: ModelProvider

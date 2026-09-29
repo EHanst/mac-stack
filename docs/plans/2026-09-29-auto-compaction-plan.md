@@ -118,4 +118,18 @@ Measured with `VibeBench --long-chat-test --ceiling 6000` (15 sends about this r
 
 What changed: token counts are calibrated from the model's own numbers (3.97 chars/token measured vs 2.5 assumed); the protected recent window shrinks when it can't reach the target; clearing and summarizing happen in one step after the turn; the new prompt is read in the background right afterwards; summaries are numbered ("Part 1 is the oldest") and ordered; summary requests don't touch the prefix cache.
 
-Not measured: sending a message *during* the idle work (cancellation path), battery/thermal cost of the idle work, and behavior on a machine with a much larger or smaller ceiling.
+**Sending during the idle work** (`VibeBench --idle-cancel-test`, ~2.8k-token prompt, cache cleared to simulate a fresh compaction):
+
+| Background re-read ran for | Wait from sending to first token | Prompt tokens already cached |
+|---|---|---|
+| never (before this change) | 35.4 s | 0 of 2,801 |
+| 8 s, then cancelled | 28.4 s | 581 |
+| 16 s, then cancelled | 19.4 s | 1,384 |
+| 24 s, then cancelled | 13.6 s | 1,841 |
+| ran to the end | 1.4 s | 2,782 |
+
+Cancelling is clean (about 0.5 s) and the partial work is kept, so the background re-read is never worse than not doing it.
+
+**Keeping the model warm** (added after these measurements): the system prompt is read once right after the model loads, so the first message finds it cached; when the weights are unloaded after 30 idle minutes, up to 1 GiB of the prompt cache is now kept (it used to be discarded, so coming back to a long chat meant re-reading all of it, ~12 s per 1,000 tokens); the background re-read and summary are skipped when the Mac is hot, low on memory or in Low Power Mode.
+
+Not measured: battery/thermal cost of the idle work, and behavior on a machine with a much larger or smaller ceiling.

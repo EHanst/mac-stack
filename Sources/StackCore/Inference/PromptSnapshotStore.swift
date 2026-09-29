@@ -59,6 +59,21 @@ struct PromptSnapshotStore<Payload> {
         entries.append(Entry(tokens: tokens, payload: payload, bytes: bytes, kind: kind))
     }
 
+    /// Keep the longest prefixes that fit in `limit` bytes (the `.system` entry is tiny and always
+    /// kept); drop the rest. Used when the model's weights are unloaded after sitting idle: a small
+    /// cache is worth keeping so coming back doesn't mean re-reading the whole conversation.
+    mutating func retain(upToBytes limit: Int) {
+        var used = 0
+        var keep: [Entry] = []
+        for entry in entries.sorted(by: { $0.tokens.count > $1.tokens.count }) {
+            if entry.kind == .system || used + entry.bytes <= limit {
+                keep.append(entry)
+                used += entry.bytes
+            }
+        }
+        entries = entries.filter { e in keep.contains { $0.tokens == e.tokens } }
+    }
+
     /// Drop stale entries, then enforce the count and byte caps.
     ///
     /// Conversations only grow, so an entry that is not a prefix of the prompt just served
