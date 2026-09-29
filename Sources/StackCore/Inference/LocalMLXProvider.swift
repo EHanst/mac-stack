@@ -138,6 +138,26 @@ public actor LocalMLXProvider: ModelProvider {
         throw LocalModelError.unsupportedOperation("embedding")
     }
 
+    /// Diagnostics: the model's most likely next tokens after plain `text` (no chat template).
+    /// Used to check the model computes sensibly — e.g. "The capital of France is" → " Paris".
+    public func debugTopTokens(after text: String, count: Int = 5) async throws -> [(token: String, probability: Float)] {
+        let (mdl, tok) = try await ensureLoaded()
+        let ids = tok.encode(text: text, addSpecialTokens: false).map { Int32($0) }
+        guard let last = ids.last else { return [] }
+        let cache = mdl.makeCache()
+        if ids.count > 1 {
+            mdl.prefill(MLXArray(Array(ids.dropLast()))[.newAxis], cache: cache)
+            MLX.eval(cache.stateArrays)
+        }
+        let logits = mdl(MLXArray([last])[.newAxis], cache: cache)          // [1, vocab]
+        let probs = softmax(logits.asType(.float32), axis: -1)[0]
+        let order = argSort(-probs)[0..<count]
+        MLX.eval(probs, order)
+        return order.asArray(Int32.self).map { id in
+            (tok.decode(tokens: [Int(id)]), probs[Int(id)].item(Float.self))
+        }
+    }
+
     public func warmUp() async throws {
         try await ensureLoaded()
     }

@@ -3,6 +3,7 @@ import Foundation
 import MLX
 import MLXRandom
 import StackCore
+import MLXNN
 
 // vibe-bench — performance harness for the local model.
 //   swift run -c release VibeBench [--model DIR] [--contexts 512,4096] [--gen 128] [--runs 3]
@@ -23,6 +24,7 @@ struct Options {
     var guardTest = false
     var serviceTest = false
     var textTest = false
+    var modelCheck = false
     var chunks = [512]
     var timeout = 300.0
     var gen = 128
@@ -40,6 +42,7 @@ struct Options {
             case "--guard-test": guardTest = true
             case "--service-test": serviceTest = true
             case "--text-test": textTest = true
+            case "--model-check": modelCheck = true
             case "--sweep": if let v = it.next() { sweep = v.split(separator: ",").compactMap { Int($0) } }
             case "--chunks": if let v = it.next() { chunks = v.split(separator: ",").compactMap { Int($0) } }
             case "--timeout": if let v = it.next(), let n = Double(v) { timeout = max(1, n) }
@@ -233,6 +236,40 @@ func run() async throws {
     func peakText(_ bytes: Int) -> String {
         guard let ws = workingSet, ws > 0 else { return gb(bytes) }
         return "\(gb(bytes)) (\(Int(Double(bytes) / Double(ws) * 100))% of working set)"
+    }
+
+    // ── Model correctness ───────────────────────────────────────────────────────────
+    if opts.modelCheck {
+        print("[model check]")
+        // 1. Delta-rule kernel vs reference ops on random data (incl. carrying state across calls).
+        let B = 1, T = 37, Hk = 4, Hv = 8, Dk = 128, Dv = 128
+        let q = MLXRandom.normal([B, T, Hk, Dk]).asType(.float16) * 0.1
+        let k = MLXRandom.normal([B, T, Hk, Dk]).asType(.float16) * 0.1
+        let v = MLXRandom.normal([B, T, Hv, Dv]).asType(.float16)
+        let a = MLXRandom.normal([B, T, Hv])
+        let b = MLXRandom.normal([B, T, Hv])
+        let g = GatedDelta.decay(aLog: MLXArray.zeros([Hv]), a: a, dtBias: MLXArray.zeros([Hv]))
+        let beta = sigmoid(b)
+        let s0 = MLXArray.zeros([B, Hv, Dv, Dk], dtype: .float32)
+        let (yK, sK) = GatedDelta.update(q: q, k: k, v: v, g: g, beta: beta, state: s0)
+        let (yO, sO) = GatedDelta.updateOps(q: q, k: k, v: v, g: g, beta: beta, state: s0)
+        // Split in two calls: state must carry over.
+        let h = 20
+        let (y1, s1) = GatedDelta.update(q: q[0..., 0..<h], k: k[0..., 0..<h], v: v[0..., 0..<h], g: g[0..., 0..<h], beta: beta[0..., 0..<h], state: s0)
+        let (y2, s2) = GatedDelta.update(q: q[0..., h...], k: k[0..., h...], v: v[0..., h...], g: g[0..., h...], beta: beta[0..., h...], state: s1)
+        let yChunked = concatenated([y1, y2], axis: 1)
+        func maxDiff(_ x: MLXArray, _ y: MLXArray) -> Float { abs(x.asType(.float32) - y.asType(.float32)).max().item(Float.self) }
+        let dy = maxDiff(yK, yO), ds = maxDiff(sK, sO), dc = maxDiff(yK, yChunked), dcs = maxDiff(sK, s2)
+        print("  delta kernel vs ops:      max |Δy| \(dy)  max |Δstate| \(ds)   \(dy < 2e-2 && ds < 1e-3 ? "PASS" : "FAIL")")
+        print("  chunked vs single call:   max |Δy| \(dc)  max |Δstate| \(dcs)   \(dc < 1e-3 && dcs < 1e-4 ? "PASS" : "FAIL")")
+        print("  state dtype: \(sK.dtype)")
+
+        // 2. Does the real model predict sensible next tokens?
+        for prompt in ["The capital of France is", "The quick brown fox jumps over the lazy", "1, 2, 3, 4, 5,"] {
+            let top = try await provider.debugTopTokens(after: prompt, count: 5)
+            print("  \"\(prompt)\" → " + top.map { "\($0.token.debugDescription) \(String(format: "%.1f%%", $0.probability * 100))" }.joined(separator: "  "))
+        }
+        print("")
     }
 
     // ── Text correctness: does the model still say sensible things? ─────────────────
