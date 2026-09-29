@@ -1,4 +1,7 @@
 import Foundation
+#if SWIFT_PACKAGE
+import StackCore
+#endif
 
 /// Classifies a user prompt and transforms the message array before LLM delivery.
 /// Pure value type — no I/O, no LLM calls, fully unit-testable.

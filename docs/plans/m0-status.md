@@ -79,7 +79,7 @@ On this Mac *right now* the live check gives 8,019 because other apps hold memor
 
 ## Queue (user-ordered 2026-09-28; do in this order, mark each as it lands)
 1. [x] **Long-context memory caps by RAM tier** — DONE. Default prefill chunk 512→**128** (−2 GiB peak, no speed loss). `ContextBudget` (fixed 1.6 GiB + 165 KB/token, 85% of working set, also limited by *currently available* system memory so Ollama etc. count). Provider pre-flight guard refuses oversize prompts with a plain message (verified on the real model: 11.3k-token prompt refused in 0.16 s, no crash); `maxContextTokens()` on `ModelProvider`; `AppServices` trims the ledger to it; local health goes `.unavailable` below the floor.
-2. [ ] **`StackCore` module split** (core vs adapters)
+2. [x] **`StackCore` module split** — DONE: SwiftPM (136 tests pass, `swift build` clean) **and Xcode app target (`xcodebuild` BUILD SUCCEEDED**; `project.yml` lists all three source dirs). Layout: `Sources/StackCore` (Inference, Credentials, Security, Storage, Indexing, Git, Execution, Agent core; **no MCP/SwiftUI/AppKit**; MLX confined here) → `Sources/StackMCP` (MCP server/transport, AgentTool, WebResearchTool, schema bridge) → `Sources/VibeCockpit/App` (= `VibeCockpitCore`: reducer, services, prompt engineering; `@_exported import`s the stack) → `Sources/VibeCockpit/UI` (exe). Notes: `MCP.Message` clashed with our `Message` in AppServices → `ChatMessage` typealias; cross-module imports wrapped in `#if SWIFT_PACKAGE` because the Xcode target is one module.
 3. [ ] **Wire `InferenceScheduler` + `Router` into `AppServices`**
 4. [ ] **Embedder bake-off via `mlx-swift-lm`** (needs downloads — ask first)
 

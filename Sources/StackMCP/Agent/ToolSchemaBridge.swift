@@ -1,9 +1,12 @@
 import Foundation
 import MCP
+#if SWIFT_PACKAGE
+import StackCore
+#endif
 
 /// Bridges MCP tool schemas to the protocol-neutral `ToolDefinition` used by model providers.
 extension JSONValue {
-    init(_ value: Value) {
+    public init(_ value: Value) {
         switch value {
         case .null: self = .null
         case .bool(let v): self = .bool(v)
@@ -18,7 +21,7 @@ extension JSONValue {
 }
 
 extension ToolDefinition {
-    init(_ tool: Tool) {
+    public init(_ tool: Tool) {
         self.init(name: tool.name, description: tool.description ?? "", inputSchema: JSONValue(tool.inputSchema))
     }
 }

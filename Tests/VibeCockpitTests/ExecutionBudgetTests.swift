@@ -1,5 +1,7 @@
 import Testing
 @testable import VibeCockpitCore
+@testable import StackCore
+@testable import StackMCP
 
 @Suite("ExecutionBudget")
 struct ExecutionBudgetTests {

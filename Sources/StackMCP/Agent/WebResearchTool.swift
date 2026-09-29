@@ -1,5 +1,8 @@
 import Foundation
 import MCP
+#if SWIFT_PACKAGE
+import StackCore
+#endif
 
 // MARK: - WebSession (injectable for testing)
 

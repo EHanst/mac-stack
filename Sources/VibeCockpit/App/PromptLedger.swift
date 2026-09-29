@@ -1,4 +1,10 @@
 import Foundation
+#if SWIFT_PACKAGE
+import StackCore
+#endif
+
+/// `MCP` also defines `Message`; AppServices imports both, so it uses this unambiguous name.
+typealias ChatMessage = Message
 
 /// The exact messages sent to the model, kept append-only.
 ///

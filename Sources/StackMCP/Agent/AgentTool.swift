@@ -1,5 +1,8 @@
 import Foundation
 import MCP
+#if SWIFT_PACKAGE
+import StackCore
+#endif
 
 /// Protocol for tools that the agent can call.
 /// `toolDefinition` provides the MCP schema for registration.

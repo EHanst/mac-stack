@@ -30,6 +30,8 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - Sources/VibeCockpit
+      - Sources/StackCore
+      - Sources/StackMCP
     dependencies:
       - package: swift-syntax
         product: SwiftSyntax

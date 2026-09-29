@@ -2,6 +2,12 @@ import Foundation
 import MCP
 import Observation
 import os
+#if SWIFT_PACKAGE
+import StackCore
+#if SWIFT_PACKAGE
+import StackMCP
+#endif
+#endif
 
 /// Owns all async service actors and drives side-effectful operations
 /// that AppCoordinator's pure reducer cannot perform directly.
@@ -366,8 +372,8 @@ public final class AppServices {
 
     /// Conversation so far as plain messages, reconstructed from UI events. Only used to seed
     /// the ledger when a session is rebuilt; earlier turns lose their RAG/framing here.
-    private func historyMessages(_ state: AppState) -> [Message] {
-        var candidates: [Message] = []
+    private func historyMessages(_ state: AppState) -> [ChatMessage] {
+        var candidates: [ChatMessage] = []
         var pendingAssistant = ""
         for event in state.intentHistory.reversed() {
             switch event.kind {
@@ -375,17 +381,17 @@ public final class AppServices {
                 pendingAssistant = event.content + pendingAssistant
             case .userPrompt:
                 if !pendingAssistant.isEmpty {
-                    candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
+                    candidates.insert(ChatMessage(role: .assistant, content: pendingAssistant), at: 0)
                     pendingAssistant = ""
                 }
-                candidates.insert(Message(role: .user, content: event.content), at: 0)
+                candidates.insert(ChatMessage(role: .user, content: event.content), at: 0)
             case .toolResult:
                 if !pendingAssistant.isEmpty {
-                    candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
+                    candidates.insert(ChatMessage(role: .assistant, content: pendingAssistant), at: 0)
                     pendingAssistant = ""
                 }
                 candidates.insert(
-                    Message(role: .tool, content: event.content, toolCallID: event.toolCallID),
+                    ChatMessage(role: .tool, content: event.content, toolCallID: event.toolCallID),
                     at: 0
                 )
             case .toolCall, .error:
@@ -393,7 +399,7 @@ public final class AppServices {
             }
         }
         if !pendingAssistant.isEmpty {
-            candidates.insert(Message(role: .assistant, content: pendingAssistant), at: 0)
+            candidates.insert(ChatMessage(role: .assistant, content: pendingAssistant), at: 0)
         }
 
         return candidates

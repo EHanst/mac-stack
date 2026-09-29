@@ -5,6 +5,8 @@ let package = Package(
     name: "VibeCockpit",
     platforms: [.macOS("26.0")],
     products: [
+        .library(name: "StackCore", targets: ["StackCore"]),
+        .library(name: "StackMCP", targets: ["StackMCP"]),
         .library(name: "VibeCockpitCore", targets: ["VibeCockpitCore"]),
         .executable(name: "VibeCockpit", targets: ["VibeCockpit"]),
     ],
@@ -36,20 +38,44 @@ let package = Package(
             providers: [.brew(["libgit2"])]
         ),
 
+        // Engine: inference, routing, scheduling, storage, indexing, git, execution. No MCP, no UI.
         .target(
-            name: "VibeCockpitCore",
+            name: "StackCore",
             dependencies: [
                 "CSQLiteVec",
                 "CLibGit2",
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftParser", package: "swift-syntax"),
-                .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
                 .product(name: "Transformers", package: "swift-transformers"),
             ],
+            path: "Sources/StackCore",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete"]),
+            ]
+        ),
+
+        // MCP adapter: exposes StackCore's tools over the Model Context Protocol.
+        .target(
+            name: "StackMCP",
+            dependencies: [
+                "StackCore",
+                .product(name: "MCP", package: "swift-sdk"),
+            ],
+            path: "Sources/StackMCP",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete"]),
+            ]
+        ),
+
+        // App logic: state reducer, service wiring, prompt engineering. Re-exports the stack
+        // so UI and tests can keep a single `import VibeCockpitCore`.
+        .target(
+            name: "VibeCockpitCore",
+            dependencies: ["StackCore", "StackMCP"],
             path: "Sources/VibeCockpit",
             exclude: [
                 "UI/",
@@ -78,7 +104,7 @@ let package = Package(
         .executableTarget(
             name: "VibeBench",
             dependencies: [
-                "VibeCockpitCore",
+                "StackCore",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ],
@@ -90,7 +116,7 @@ let package = Package(
 
         .testTarget(
             name: "VibeCockpitTests",
-            dependencies: ["VibeCockpitCore"],
+            dependencies: ["VibeCockpitCore", "StackCore", "StackMCP"],
             path: "Tests/VibeCockpitTests"
         ),
     ]
