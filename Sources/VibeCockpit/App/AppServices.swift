@@ -41,6 +41,8 @@ public final class AppServices {
     }
 
     private static let policyKey = "routingPolicy"
+    /// Our own cap on conversation size (the model's native window is 262,144; see docs/plans/model-facts.md).
+    private static let contextTokenBudget = 64_000
 
     /// Local only / Local first / Cloud allowed. Persisted; takes effect on the next request.
     public func setRoutingPolicy(_ policy: RoutingPolicy) async {
@@ -231,7 +233,7 @@ public final class AppServices {
         // Budget: the smaller of ~80% of maxTokens and what this Mac can hold right now
         // (provider-reported, tokens → chars at a conservative 2.5 chars/token). Drops whole old
         // turns permanently so the prompt stays append-only afterwards.
-        var charBudget = (GenerationOptions().maxTokens * 4 * 4) / 5
+        var charBudget = (Self.contextTokenBudget * 4 * 4) / 5
         if let limit = await inference.localContextLimit() {
             charBudget = min(charBudget, Int(Double(limit) * 2.5 * 0.9))
         }

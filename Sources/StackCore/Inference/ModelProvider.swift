@@ -61,14 +61,24 @@ public enum GenerationEvent: Sendable {
 }
 
 public struct GenerationOptions: Sendable {
+    /// Maximum number of *new* tokens (not the context window). At local speeds (~10 tok/s) the old
+    /// default of 64,000 would be a 1.8-hour reply, and it exceeds e.g. gpt-4o's 16,384-token output cap.
     public var maxTokens: Int
+    /// Used by cloud providers. The local model uses `sampling`.
     public var temperature: Double
     public var stopSequences: [String]
+    /// Local sampling. `nil` means the provider's own default (for Bonsai: the model card's
+    /// non-thinking settings).
+    public var sampling: SamplingParameters?
 
-    public init(maxTokens: Int = 64000, temperature: Double = 0.0, stopSequences: [String] = []) {
+    public static let defaultMaxTokens = 8192
+
+    public init(maxTokens: Int = GenerationOptions.defaultMaxTokens, temperature: Double = 0.0,
+                stopSequences: [String] = [], sampling: SamplingParameters? = nil) {
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.stopSequences = stopSequences
+        self.sampling = sampling
     }
 }
 

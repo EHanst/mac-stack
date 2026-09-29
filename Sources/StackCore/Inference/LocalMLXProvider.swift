@@ -229,8 +229,8 @@ public actor LocalMLXProvider: ModelProvider {
     ) throws {
         // 248044 = <|endoftext|>, 248046 = <|im_end|> (Bonsai/Qwen3 tokenizer)
         let eosIds: Set<Int> = [tok.eosTokenId ?? 248044, 248046]
-        let maxTokens = options.maxTokens > 0 ? options.maxTokens : 64000
-        let temperature = Float(max(options.temperature, 0))
+        let maxTokens = options.maxTokens > 0 ? options.maxTokens : GenerationOptions.defaultMaxTokens
+        let sampling = options.sampling ?? .bonsaiInstruct
 
         // ── Prefill ────────────────────────────────────────────────────────────────
         // The last prompt token is held back and fed through the normal decode step, so the
@@ -278,8 +278,17 @@ public actor LocalMLXProvider: ModelProvider {
         // Sampling stays on the GPU: step n+1 is enqueued from the *lazy* token of step n
         // before we block to read token n, so graph construction and dispatch overlap GPU
         // execution instead of serialising with it.
+        // Presence penalty needs to know which tokens this reply already contains; that mask is
+        // updated lazily on the GPU like everything else in the loop.
+        let usesPenalty = sampling.presencePenalty != 0
+        var seen: MLXArray? = usesPenalty ? MLXArray.zeros([1, mdl.config.vocabSize]) : nil
         func step(_ token: MLXArray) -> MLXArray {
-            Self.sample(mdl(token, cache: cache), temperature: temperature)
+            let logits = mdl(token, cache: cache)
+            let next = TokenSampler.sample(logits, sampling, seen: seen)
+            if let current = seen {
+                seen = maximum(current, TokenSampler.oneHot(next, vocab: logits.dim(-1)))
+            }
+            return next
         }
 
         let decodeStart = Date()
@@ -468,13 +477,6 @@ public actor LocalMLXProvider: ModelProvider {
     // MARK: - Sampling
 
     /// Lazily sample a token id `[1]` from `[1, vocab]` logits without leaving the GPU.
-    private static func sample(_ logits: MLXArray, temperature: Float) -> MLXArray {
-        if temperature <= 0 {
-            return argMax(logits, axis: -1)
-        }
-        return MLXRandom.categorical(logits * (1 / temperature))
-    }
-
     // MARK: - Chat template
 
     /// Token ids for the prompt plus the token offset at the end of each message.

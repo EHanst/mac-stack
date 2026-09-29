@@ -25,6 +25,7 @@ struct Options {
     var serviceTest = false
     var textTest = false
     var modelCheck = false
+    var samplerCheck = false
     var chunks = [512]
     var timeout = 300.0
     var gen = 128
@@ -43,6 +44,7 @@ struct Options {
             case "--service-test": serviceTest = true
             case "--text-test": textTest = true
             case "--model-check": modelCheck = true
+            case "--sampler-check": samplerCheck = true
             case "--sweep": if let v = it.next() { sweep = v.split(separator: ",").compactMap { Int($0) } }
             case "--chunks": if let v = it.next() { chunks = v.split(separator: ",").compactMap { Int($0) } }
             case "--timeout": if let v = it.next(), let n = Double(v) { timeout = max(1, n) }
@@ -147,7 +149,7 @@ func measure(
         var text = ""
         for try await event in await provider.generate(
             messages: messages, tools: [],
-            options: GenerationOptions(maxTokens: gen, temperature: 0)) {
+            options: GenerationOptions(maxTokens: gen, temperature: 0, sampling: .greedy)) {
             if case .token(let t) = event {
                 if ttft.isNaN { ttft = Date().timeIntervalSince(start) }
                 text += t
@@ -209,7 +211,7 @@ func modelDims(_ dir: URL) -> (hidden: Int, intermediate: Int, bits: Int, group:
 }
 
 func userMessage(_ text: String) -> Message { Message(role: .user, content: text) }
-func generationOptions(_ maxTokens: Int) -> GenerationOptions { GenerationOptions(maxTokens: maxTokens, temperature: 0) }
+func generationOptions(_ maxTokens: Int) -> GenerationOptions { GenerationOptions(maxTokens: maxTokens, temperature: 0, sampling: .greedy) }
 
 func run() async throws {
     setvbuf(stdout, nil, _IOLBF, 0)   // line-buffered so `> log` shows progress live
@@ -220,6 +222,37 @@ func run() async throws {
     print("model: \(opts.model.path)")
     print("GPU recommended working set: \(workingSet.map(gb) ?? "n/a")")
     print("thermal: \(info.thermalState.rawValue)  lowPower: \(info.isLowPowerModeEnabled)  watchdog: \(Int(opts.timeout)) s\n")
+
+    if opts.samplerCheck {
+        // Synthetic logits, no model: does each sampling control do what it says?
+        print("[sampler check]")
+        var failures = 0
+        func check(_ ok: Bool, _ what: String) { print("  \(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+        let vocab = 1000
+        // Token 7 is best, then 3, then 500, everything else far below.
+        var base = [Float](repeating: -10, count: vocab)
+        base[7] = 5; base[3] = 4.5; base[500] = 4.0
+        let logits = MLXArray(base)[.newAxis]
+        func draw(_ p: SamplingParameters, _ n: Int, seen: MLXArray? = nil) -> [Int] {
+            (0..<n).map { _ in TokenSampler.sample(logits, p, seen: seen).item(Int.self) }
+        }
+        check(draw(.greedy, 20).allSatisfy { $0 == 7 }, "greedy always picks the highest logit")
+        check(draw(SamplingParameters(temperature: 1, topK: 1), 40).allSatisfy { $0 == 7 }, "top-k 1 behaves like greedy")
+        let k2 = draw(SamplingParameters(temperature: 1, topK: 2), 300)
+        check(Set(k2) == [7, 3], "top-k 2 samples only the two best tokens, and both appear (saw \(Set(k2).sorted()))")
+        let p = draw(SamplingParameters(temperature: 1, topP: 0.5), 300)
+        check(p.allSatisfy { $0 == 7 || $0 == 3 } && p.contains(7), "top-p 0.5 keeps only the head of the distribution (saw \(Set(p).sorted()))")
+        let wide = draw(SamplingParameters(temperature: 1, topK: 3), 400)
+        check(wide.filter { $0 == 7 }.count > wide.filter { $0 == 500 }.count, "sampling follows the probabilities (7 more often than 500)")
+        let hot = draw(SamplingParameters(temperature: 5, topK: 3), 400)
+        check(Set(hot).count == 3, "high temperature spreads over all kept tokens")
+        var seen = [Float](repeating: 0, count: vocab); seen[7] = 1
+        let flipped = draw(SamplingParameters(temperature: 0, presencePenalty: 1.0), 10, seen: MLXArray(seen)[.newAxis])
+        check(flipped.allSatisfy { $0 == 3 }, "presence penalty 1.0 pushes a seen best token (5.0→4.0) below the runner-up (4.5)")
+        let oh = TokenSampler.oneHot(MLXArray([Int32(42)]), vocab: vocab)
+        check(oh.sum().item(Float.self) == 1 && oh[0, 42].item(Float.self) == 1, "one-hot marks exactly the generated token")
+        exit(failures == 0 ? 0 : 1)
+    }
 
     let provider = LocalMLXProvider(id: "local:bench", modelDirectory: opts.model)
     print("loading model…")
@@ -288,7 +321,7 @@ func run() async throws {
             for (name, messages) in cases {
                 await provider.clearPromptCache()
                 var text = ""
-                for try await event in await provider.generate(messages: messages, tools: [], options: GenerationOptions(maxTokens: 40, temperature: 0)) {
+                for try await event in await provider.generate(messages: messages, tools: [], options: GenerationOptions(maxTokens: 40, temperature: 0, sampling: .greedy)) {
                     if case .token(let x) = event { text += x }
                 }
                 let stats = await provider.lastStats
