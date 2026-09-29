@@ -16,7 +16,7 @@ Plan reference: `docs/plans/2026-09-28-next-phase-plan.md` §5–6 (M1: #1 hardw
 ## Queue
 1. [x] **`ModelInstaller`** — DONE (`StackCore/Inference/ModelInstaller.swift`) — resumable, verified, in-app download (no Python, no shell): HF tree API → file list/sizes/sha256; include-list per catalog entry; `.partial` staging + Range resume; SHA-256 verify; atomic rename; disk-space pre-flight; retries; cancellation-safe; progress stream. Tested with a stubbed `URLSession`.
 2. [x] **`ModelCatalog`** — DONE (`ModelCatalog.swift`; Bonsai `Models/Bonsai-27B` + bge-small `Models/Embedders/BAAI--bge-small-en-v1.5`, same layout `ModelRegistry`/`LocalEmbedder` already scan) — Bonsai-27B + bge-small entries (repo, install dir matching today's layout, include list, min RAM 16 GiB, licence/attribution).
-3. [ ] **`HardwareProfile` + `SetupPlan`** — chip, RAM, free disk → "local + cloud" vs "cloud-only" with plain-language reason (uses `ContextBudget` floor).
+3. [x] **`HardwareProfile` + `SetupPlan`** — DONE (`StackCore/Inference/SetupPlan.swift`, 8 tests: 18 GB / 16 GB floor / 8 GB / Intel / already-installed / low disk / ETA / current machine) — chip, RAM, free disk → "local + cloud" vs "cloud-only" with plain-language reason (uses `ContextBudget` floor).
 4. [ ] **Onboarding wiring** — first-run screen: detected hardware, one button, progress, licence line; local-model path installs Bonsai + embedder; cloud-only path goes to provider setup.
 5. [ ] **Run the app and verify** (screenshot) the first-run flow.
 6. [ ] **Menu-bar agent + login item** (`MenuBarExtra`, `SMAppService`).
