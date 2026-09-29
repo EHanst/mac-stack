@@ -25,6 +25,9 @@ packages:
   mlx-swift-lm:
     url: https://github.com/ml-explore/mlx-swift-lm
     from: 3.31.3
+  hummingbird:
+    url: https://github.com/hummingbird-project/hummingbird.git
+    from: 2.27.0
 
 targets:
   VibeCockpit:
@@ -35,6 +38,7 @@ targets:
       - Sources/VibeCockpit
       - Sources/StackCore
       - Sources/StackMCP
+      - Sources/StackHTTP
     dependencies:
       - package: swift-syntax
         product: SwiftSyntax
@@ -56,6 +60,8 @@ targets:
         product: MLXEmbedders
       - package: mlx-swift-lm
         product: MLXLMCommon
+      - package: hummingbird
+        product: Hummingbird
       - target: CSQLiteVec
     info:
       path: Sources/VibeCockpit/Info.plist

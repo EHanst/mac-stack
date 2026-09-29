@@ -36,6 +36,9 @@ struct MenuBarContent: View {
     var body: some View {
         Text(status.title)
         if let detail = status.detail { Text(detail) }
+        if case .running(let port) = services.sharing.status {
+            Text("Shared with other apps · port \(port)")
+        }
         Divider()
 
         Button("Open VibeCockpit") {

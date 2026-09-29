@@ -267,6 +267,7 @@ struct SettingsView: View {
                 pageHeader
                 generationSection
                 startupSection
+                SharingCard()
                 indexingSection
                 aboutSection
             }

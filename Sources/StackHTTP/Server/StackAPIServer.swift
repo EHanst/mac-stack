@@ -3,7 +3,9 @@ import HTTPTypes
 import Hummingbird
 import Logging
 import NIOCore
+#if SWIFT_PACKAGE
 import StackCore
+#endif
 
 public struct APIServerConfiguration: Sendable {
     /// Loopback only. Never `0.0.0.0`.
@@ -54,15 +56,19 @@ public struct StackAPIServer: Sendable {
         return router
     }
 
-    public func makeApplication() -> some ApplicationProtocol {
+    public func makeApplication(onListening: @escaping @Sendable (Int) async -> Void = { _ in }) -> some ApplicationProtocol {
         Application(
             router: router(),
             configuration: .init(address: .hostname(configuration.host, port: configuration.port), serverName: "VibeCockpit"),
+            onServerRunning: { channel in await onListening(channel.localAddress?.port ?? 0) },
             logger: logger)
     }
 
-    /// Runs until cancelled.
-    public func run() async throws { try await makeApplication().runService() }
+    /// Runs until cancelled. `onListening` reports the port once the socket is bound (useful with port 0).
+    /// Signal handling is left to the host app.
+    public func run(onListening: @escaping @Sendable (Int) async -> Void = { _ in }) async throws {
+        try await makeApplication(onListening: onListening).runService(gracefulShutdownSignals: [])
+    }
 
     // MARK: Helpers
 
@@ -119,10 +125,10 @@ public struct StackAPIServer: Sendable {
         let events = try await inference.generate(
             messages: gen.messages, tools: [], options: gen.options, priority: .api, pin: pin)
         let builder = ChatCompletionBuilder(model: gen.requestedModel ?? "vibecockpit")
-        let promptEstimate = InferenceService.estimateTokens(gen.messages)
+        let promptEstimate = max(1, InferenceService.estimateTokens(gen.messages))
 
         if gen.stream {
-            return streamingResponse(events: events, builder: builder, includeUsage: gen.includeUsage)
+            return streamingResponse(events: events, builder: builder, includeUsage: gen.includeUsage, promptEstimate: promptEstimate)
         }
 
         // Non-streaming: collect the whole answer.
@@ -151,7 +157,7 @@ public struct StackAPIServer: Sendable {
     }
 
     private func streamingResponse(
-        events: AsyncThrowingStream<GenerationEvent, Error>, builder: ChatCompletionBuilder, includeUsage: Bool
+        events: AsyncThrowingStream<GenerationEvent, Error>, builder: ChatCompletionBuilder, includeUsage: Bool, promptEstimate: Int
     ) -> Response {
         let keepAlive = configuration.keepAlive
         let headers: HTTPFields = [
@@ -205,7 +211,7 @@ public struct StackAPIServer: Sendable {
                     try await writer.finish(nil)
                     return
                 case .end:
-                    try await send(builder.streamEnd(finish: finish, usage: usage ?? GenerationUsage(promptTokens: 0, completionTokens: max(1, text.count / 3)), includeUsage: includeUsage))
+                    try await send(builder.streamEnd(finish: finish, usage: usage ?? GenerationUsage(promptTokens: promptEstimate, completionTokens: max(1, text.count / 3)), includeUsage: includeUsage))
                     try await writer.finish(nil)
                     return
                 }

@@ -1,5 +1,7 @@
 import Foundation
+#if SWIFT_PACKAGE
 import StackCore
+#endif
 
 // MARK: - /v1/models
 

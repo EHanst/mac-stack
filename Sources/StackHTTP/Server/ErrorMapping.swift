@@ -1,7 +1,9 @@
 import Foundation
 import HTTPTypes
 import Hummingbird
+#if SWIFT_PACKAGE
 import StackCore
+#endif
 
 extension OpenAIError {
 

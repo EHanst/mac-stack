@@ -1,8 +1,10 @@
 import Foundation
+#if SWIFT_PACKAGE
 import StackCore
+#endif
 
 /// StackCore's chat message (the OpenAI request type has its own nested `Message`).
-private typealias CoreMessage = StackCore.Message
+private typealias CoreMessage = Message
 
 // OpenAI Chat Completions request/response types and their mapping to StackCore's own types.
 // No HTTP framework is imported here, so all of this is unit-tested without a server.
@@ -77,7 +79,7 @@ public struct OpenAIChatRequest: Decodable, Sendable {
 /// A chat request after validation, in StackCore's terms.
 public struct ChatGeneration: Sendable {
     public let requestedModel: String?
-    public let messages: [StackCore.Message]
+    public let messages: [Message]
     public let options: GenerationOptions
     public let stream: Bool
     public let includeUsage: Bool

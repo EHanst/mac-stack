@@ -16,6 +16,8 @@ import StackMCP
 public final class AppServices {
 
     public let credentials = CredentialStore()
+    /// The local OpenAI-compatible API and the apps allowed to use it (off by default).
+    public let sharing: APISharingModel
     public private(set) var workspaceName: String?
     private let registry: ModelRegistry
     /// All text generation goes through here: routing policy, GPU scheduling, fallback.
@@ -43,7 +45,9 @@ public final class AppServices {
         self.defaults = defaults
         let policy = defaults.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
         self.routingPolicy = policy
-        self.inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
+        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
+        self.inference = inference
+        self.sharing = APISharingModel(inference: inference, defaults: defaults)
     }
 
     private static let policyKey = "routingPolicy"
@@ -104,6 +108,9 @@ public final class AppServices {
         )
 
         await registerEmbedderIfInstalled()
+
+        // Other apps may ask for models as soon as the server is up, so start it once they're registered.
+        await sharing.startIfEnabled()
 
         let providers = await registry.allProviders(with: .textGeneration)
         for provider in providers {
