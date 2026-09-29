@@ -51,8 +51,10 @@ public struct CompactionPlanner: Sendable, Equatable {
     public var triggerFraction: Double
     /// Compact down to this fraction, so the next compaction is many turns away.
     public var targetFraction: Double
-    /// The last N user turns (and everything after) are left verbatim.
+    /// The last N user turns (and everything after) are left verbatim, unless that alone would keep
+    /// the prompt above the target; then the window shrinks, down to `minKeepRecentTurns`.
     public var keepRecentTurns: Int
+    public var minKeepRecentTurns: Int
     /// Tool output smaller than this is not worth a stub.
     public var minElideTokens: Int
     /// What a stub costs.
@@ -65,11 +67,12 @@ public struct CompactionPlanner: Sendable, Equatable {
     public var stablePrefixCount: Int
 
     public init(triggerFraction: Double = 0.78, targetFraction: Double = 0.35, keepRecentTurns: Int = 4,
-                minElideTokens: Int = 400, stubTokens: Int = 30, summaryTokens: Int = 600,
+                minKeepRecentTurns: Int = 2, minElideTokens: Int = 400, stubTokens: Int = 30, summaryTokens: Int = 600,
                 allowSummarize: Bool = false, stablePrefixCount: Int = 1) {
         self.triggerFraction = triggerFraction
         self.targetFraction = targetFraction
         self.keepRecentTurns = keepRecentTurns
+        self.minKeepRecentTurns = min(minKeepRecentTurns, keepRecentTurns)
         self.minElideTokens = minElideTokens
         self.stubTokens = stubTokens
         self.summaryTokens = summaryTokens
@@ -89,15 +92,14 @@ public struct CompactionPlanner: Sendable, Equatable {
         guard before > trigger else { return plan(.none, after: before) }
 
         let start = min(stablePrefixCount, items.count)
-        let end = recentBoundary(items, from: start)   // items[start..<end] may be shrunk
+        let end = protectedBoundary(items, from: start, target: target)   // items[start..<end] may be shrunk
         var total = before
 
         // Step 1: stub old bulky tool output, oldest first, until the target is met.
         var elide: [Int] = []
         for i in start..<end where total > target {
             let item = items[i]
-            guard item.role == .tool, !item.isPinned, item.tokens >= minElideTokens,
-                  item.tokens > stubTokens else { continue }
+            guard canElide(item) else { continue }
             elide.append(i)
             total -= item.tokens - stubTokens
         }
@@ -119,15 +121,35 @@ public struct CompactionPlanner: Sendable, Equatable {
         return plan(.insufficient(hardFit: total <= maxPromptTokens), elide: elide, after: total)
     }
 
-    /// Index of the first message in the protected recent window (the `keepRecentTurns`-th user
-    /// message from the end). Everything before it, after the stable prefix, may be shrunk.
-    private func recentBoundary(_ items: [Item], from start: Int) -> Int {
+    /// Index of the first message in the protected recent window: the largest window (down to
+    /// `minKeepRecentTurns` turns) for which clearing every older tool result would reach the
+    /// target. A window that can't reach it would make compaction fire again a turn or two later.
+    /// Everything before the returned index, after the stable prefix, may be shrunk.
+    private func protectedBoundary(_ items: [Item], from start: Int, target: Int) -> Int {
+        var boundary = start
+        for turns in stride(from: keepRecentTurns, through: minKeepRecentTurns, by: -1) {
+            boundary = firstIndex(ofRecentTurns: turns, items, from: start)
+            var reachable = 0
+            for (i, item) in items.enumerated() {
+                reachable += i >= start && i < boundary && canElide(item) ? stubTokens : item.tokens
+            }
+            if reachable <= target { return boundary }
+        }
+        return boundary
+    }
+
+    private func canElide(_ item: Item) -> Bool {
+        item.role == .tool && !item.isPinned && item.tokens >= minElideTokens && item.tokens > stubTokens
+    }
+
+    /// Index of the `turns`-th user message from the end (or `start` if there are fewer).
+    private func firstIndex(ofRecentTurns turns: Int, _ items: [Item], from start: Int) -> Int {
         var seen = 0
         for i in stride(from: items.count - 1, through: start, by: -1) where items[i].role == .user {
             seen += 1
-            if seen == keepRecentTurns { return i }
+            if seen == turns { return i }
         }
-        return start   // fewer turns than the window: nothing is old enough to shrink
+        return start
     }
 
     /// Oldest contiguous run of unpinned messages, starting at a user turn and ending just before

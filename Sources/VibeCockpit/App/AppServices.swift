@@ -45,6 +45,8 @@ public final class AppServices {
     private var ledger = PromptLedger()
     /// A summary being written in the background after a turn; cancelled when the next send starts.
     private var compactionTask: Task<Void, Never>?
+    /// Characters per token learned from the model's own token counts (starts at the pessimistic 2.5).
+    private var calibration = TokenCalibration()
     /// Outside content (web pages, search results) seen in this conversation; see `ToolCallGuard`.
     private let untrusted = UntrustedContext()
     private let toolGuard: ToolCallGuard
@@ -391,15 +393,15 @@ public final class AppServices {
         // turns permanently so the prompt stays append-only afterwards.
         var charBudget = (Self.contextTokenBudget * 4 * 4) / 5
         if let limit = await inference.localContextLimit() {
-            charBudget = min(charBudget, Int(Double(limit) * 2.5 * 0.9))
+            charBudget = min(charBudget, Int(Double(limit) * calibration.charsPerToken * 0.9))
         }
         // Before dropping whole turns, clear old bulky tool output in one batch (cheaper, reversible,
         // and keeps the conversation). Only when this Mac's memory ceiling is what limits us.
         if let limit = await inference.localContextLimit() {
-            let plan = CompactionPlanner().plan(items: ledger.compactionItems(),
+            let plan = CompactionPlanner().plan(items: ledger.compactionItems(calibration: calibration),
                                                 maxPromptTokens: min(limit, Self.contextTokenBudget))
             if !plan.elide.isEmpty {
-                let freed = ledger.elide(plan.elide)
+                let freed = ledger.elide(plan.elide, calibration: calibration)
                 coordinator.send(.noticeShown("Cleared \(plan.elide.count) old tool result\(plan.elide.count == 1 ? "" : "s") from the model's view to make room (about \(freed) tokens). They stay visible here.", symbol: "scissors"))
             }
         }
@@ -409,6 +411,7 @@ public final class AppServices {
             var continueLoop = true
             while continueLoop {
                 let load = await governor.current
+                let sentChars = ledger.messages.reduce(0) { $0 + $1.content.count }
                 let stream = try await inference.generate(
                     messages: ledger.messages, tools: toolDefs, options: GenerationOptions(),
                     priority: .interactive,
@@ -427,7 +430,9 @@ public final class AppServices {
                         case .toolCall(let call):
                             coordinator.send(.toolCallMade(call.name, call.arguments, call.id))
                             pendingToolCalls.append(call)
-                        case .usage, .finished:
+                        case .usage(let usage):
+                            calibration.observe(chars: sentChars, promptTokens: usage.promptTokens)
+                        case .finished:
                             break
                         }
                     }
@@ -452,36 +457,62 @@ public final class AppServices {
 
         coordinator.send(.generationFinished)
         await diagnostics.reload()
-        await scheduleSummaryCompaction(coordinator: coordinator)
+        await compactWhileIdle(coordinator: coordinator)
     }
 
-    /// If clearing tool output wasn't enough, summarize the oldest turns on the local model while
-    /// the chat is idle. The next send cancels it, so it never delays a message. Runs only on this
-    /// Mac (nothing leaves it) and only when the local memory ceiling is what limits the chat.
-    private func scheduleSummaryCompaction(coordinator: AppCoordinator) async {
+    /// After a turn, while the chat is idle: if the prompt is getting near this Mac's ceiling, make
+    /// the whole change now (clear old tool output and, if that isn't enough, summarize the oldest
+    /// turns on the local model), then read the new prompt in the background so the next reply finds
+    /// it cached instead of paying the re-read. One change means one cache rebuild, and it happens
+    /// off the reply's critical path. The next send cancels all of it, so it never delays a message,
+    /// and the send path still clears tool output itself if this didn't finish. Local model only:
+    /// nothing leaves the Mac.
+    private func compactWhileIdle(coordinator: AppCoordinator) async {
         guard let limit = await inference.localContextLimit(),
               let localID = await inference.localTextProviderID() else { return }
         let planner = CompactionPlanner(allowSummarize: true)
-        let plan = planner.plan(items: ledger.compactionItems(), maxPromptTokens: min(limit, Self.contextTokenBudget))
-        guard let range = plan.summarize else { return }
-        let run = Array(ledger.messages[range])
-        let keep = CompactionSummarizer.mustKeep(in: run)
+        let plan = planner.plan(items: ledger.compactionItems(calibration: calibration),
+                                maxPromptTokens: min(limit, Self.contextTokenBudget))
+        guard plan.outcome != .none, !plan.elide.isEmpty || plan.summarize != nil else { return }
+        let run = plan.summarize.map { Array(ledger.messages[$0]) }
+        let keep = run.map { CompactionSummarizer.mustKeep(in: $0) } ?? []
+        let part = CompactionSummarizer.partCount(in: ledger.messages) + 1
         let inference = self.inference
         let budget = planner.summaryTokens
         compactionTask = Task { [weak self] in
-            var text = ""
-            do {
-                let stream = try await inference.generate(
-                    messages: CompactionSummarizer.requestMessages(for: run), tools: [],
-                    options: GenerationOptions(maxTokens: 700), priority: .background, pin: localID)
-                for try await event in stream {
-                    if case .token(let t) = event { text += t }
-                }
-            } catch { return }   // cancelled or failed: leave the chat as it is
-            guard !Task.isCancelled, let self,
-                  let summary = CompactionSummarizer.finalize(summary: text, mustKeep: keep, maxTokens: budget),
-                  let freed = self.ledger.summarize(range, expecting: run, text: summary) else { return }
-            coordinator.send(.noticeShown("Summarized \(run.count) earlier messages to make room (about \(freed) tokens). The full text stays visible here.", symbol: "text.append"))
+            var summary: String?
+            if let run {
+                var text = ""
+                do {
+                    // cacheSnapshots: false, so writing the summary can't evict the chat's cached prefix.
+                    let stream = try await inference.generate(
+                        messages: CompactionSummarizer.requestMessages(for: run), tools: [],
+                        options: GenerationOptions(maxTokens: 700, cacheSnapshots: false),
+                        priority: .background, pin: localID)
+                    for try await event in stream { if case .token(let t) = event { text += t } }
+                } catch { return }   // cancelled or failed: leave the chat as it is
+                summary = CompactionSummarizer.finalize(summary: text, mustKeep: keep, maxTokens: budget, part: part)
+            }
+            guard !Task.isCancelled, let self else { return }
+            // Apply everything in one step. Elision indices lie outside the summarized run.
+            let cleared = self.ledger.elide(plan.elide, calibration: self.calibration)
+            var summarized: Int?
+            if let range = plan.summarize, let run, let summary {
+                summarized = self.ledger.summarize(range, expecting: run, text: summary, calibration: self.calibration)
+            }
+            var parts: [String] = []
+            if !plan.elide.isEmpty { parts.append("cleared \(plan.elide.count) old tool result\(plan.elide.count == 1 ? "" : "s")") }
+            if summarized != nil, let run { parts.append("summarized \(run.count) earlier messages") }
+            guard !parts.isEmpty else { return }
+            let freed = cleared + (summarized ?? 0)
+            let sentence = parts.joined(separator: " and ")
+            coordinator.send(.noticeShown("\(sentence.prefix(1).uppercased() + sentence.dropFirst()) to make room (about \(freed) tokens). The full text stays visible here.", symbol: "scissors"))
+            // Read the new prompt now so the next reply doesn't have to.
+            let warm = self.ledger.messages
+            guard let stream = try? await inference.generate(
+                messages: warm, tools: [], options: GenerationOptions(maxTokens: 1),
+                priority: .background, pin: localID) else { return }
+            do { for try await _ in stream {} } catch { return }
         }
     }
 

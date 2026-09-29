@@ -42,7 +42,7 @@ struct CompactionPlannerTests {
     func protectedMessages() {
         var items = chat(turns: 14)
         items[2].isPinned = true                          // first turn's tool output
-        let plan = CompactionPlanner(keepRecentTurns: 4).plan(items: items, maxPromptTokens: 38_000)
+        let plan = CompactionPlanner(keepRecentTurns: 4, minKeepRecentTurns: 4).plan(items: items, maxPromptTokens: 38_000)
         #expect(!plan.elide.contains(0))
         #expect(!plan.elide.contains(2))
         // Turn 11 starts at index 1 + 10×3 = 31 and is the protected window's first message.
@@ -110,5 +110,70 @@ struct CompactionPlannerTests {
         let p = CompactionPlanner()
         #expect(p.plan(items: items, maxPromptTokens: 60_000).outcome == .none)
         #expect(p.plan(items: items, maxPromptTokens: 38_000).outcome == .compact)
+    }
+}
+
+@Suite("CompactionPlanner adaptive window")
+struct CompactionPlannerWindowTests {
+
+    private func chat(turns: Int, tool: Int) -> [CompactionPlanner.Item] {
+        [.init(role: .system, tokens: 500)] + (0..<turns).flatMap { _ in
+            [CompactionPlanner.Item(role: .user, tokens: 100), .init(role: .tool, tokens: tool), .init(role: .assistant, tokens: 100)]
+        }
+    }
+
+    @Test("a window that can't reach the target shrinks until it can")
+    func windowShrinks() {
+        // 9 turns × 1,200 + 500 = 11,300; ceiling 13,700 → trigger 10,686, target 4,795.
+        // After clearing old tool output: 4 recent turns → 6,450, 3 → 5,480, 2 → 4,510.
+        let items = chat(turns: 9, tool: 1_000)
+        let wide = CompactionPlanner(minKeepRecentTurns: 4).plan(items: items, maxPromptTokens: 13_700)
+        let adaptive = CompactionPlanner().plan(items: items, maxPromptTokens: 13_700)
+        #expect(wide.outcome != .compact)
+        #expect(adaptive.outcome == .compact)
+        #expect(adaptive.tokensAfter <= 4_795)
+        // The two most recent turns (from index 1 + 7×3 = 22) stay untouched.
+        #expect(adaptive.elide.allSatisfy { $0 < 22 })
+    }
+
+    @Test("with room to spare the full window is kept")
+    func fullWindowKept() {
+        let items = chat(turns: 8, tool: 200)               // 500 + 8 × 400 = 3,700
+        let plan = CompactionPlanner().plan(items: items, maxPromptTokens: 4_400)   // trigger 3,432, target 1,540
+        #expect(plan.elide.isEmpty)                          // 200-token results are below minElideTokens
+    }
+}
+
+@Suite("TokenCalibration")
+struct TokenCalibrationTests {
+
+    @Test("starts at the pessimistic 2.5 and learns from the model's counts")
+    func learns() {
+        var c = TokenCalibration()
+        #expect(c.charsPerToken == 2.5)
+        c.observe(chars: 24_000, promptTokens: 6_000)     // 4.0
+        c.observe(chars: 24_000, promptTokens: 6_000)
+        #expect(c.charsPerToken == 4.0)
+        #expect(c.tokens(chars: 8_000) == 2_000)
+    }
+
+    @Test("never above 4.0 or below 2.5, and tiny prompts are ignored")
+    func clamps() {
+        var c = TokenCalibration()
+        c.observe(chars: 100_000, promptTokens: 1_000)    // 100 chars/token → clamped to 4.0
+        c.observe(chars: 100_000, promptTokens: 1_000)
+        #expect(c.charsPerToken == 4.0)
+        c.observe(chars: 10, promptTokens: 5)              // below the minimum sample
+        #expect(c.charsPerToken == 4.0)
+        c.observe(chars: 1_000, promptTokens: 1_000)       // 1.0 → clamped to 2.5
+        #expect(c.charsPerToken == 2.5)
+    }
+
+    @Test("one prose-heavy turn can't make a code-heavy stretch look cheap")
+    func usesLowerOfLastTwo() {
+        var c = TokenCalibration()
+        c.observe(chars: 8_000, promptTokens: 2_500)       // 3.2
+        c.observe(chars: 16_000, promptTokens: 4_000)      // 4.0
+        #expect(c.charsPerToken == 3.2)
     }
 }

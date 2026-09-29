@@ -262,7 +262,7 @@ public actor LocalMLXProvider: ModelProvider {
             let chunk = MLXArray(Array(promptIds[range]))[.newAxis]
             mdl.prefill(chunk, cache: cache)
             MLX.eval(cache.stateArrays)
-            if stops.contains(range.upperBound) {
+            if options.cacheSnapshots, stops.contains(range.upperBound) {
                 let isBoundary = boundaries.contains(range.upperBound)
                 let isSystemEnd = startsWithSystem && range.upperBound == boundaries.first
                 let kind: PromptSnapshotStore<Qwen35Cache>.Kind =
@@ -273,7 +273,7 @@ public actor LocalMLXProvider: ModelProvider {
                     bytes: snap.stateArrays.reduce(0) { $0 + $1.nbytes }, kind: kind)
             }
         }
-        snapshots.prune(keepingPrefixesOf: promptIds)
+        if options.cacheSnapshots { snapshots.prune(keepingPrefixesOf: promptIds) }
         let prefilled = lastIndex - consumed
         let prefillSecs = Date().timeIntervalSince(prefillStart)
 

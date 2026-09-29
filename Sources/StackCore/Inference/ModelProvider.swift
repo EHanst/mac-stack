@@ -82,11 +82,16 @@ public struct GenerationOptions: Sendable {
     /// Local sampling. `nil` means the provider's own default (for Bonsai: the model card's
     /// non-thinking settings).
     public var sampling: SamplingParameters?
+    /// Local only: whether this request may store its own prompt in the prefix cache. Utility
+    /// requests (summaries) turn this off so they can't evict the chat's cached prefix.
+    public var cacheSnapshots: Bool
 
     public static let defaultMaxTokens = 8192
 
     public init(maxTokens: Int = GenerationOptions.defaultMaxTokens, temperature: Double = 0.0,
-                stopSequences: [String] = [], sampling: SamplingParameters? = nil) {
+                stopSequences: [String] = [], sampling: SamplingParameters? = nil,
+                cacheSnapshots: Bool = true) {
+        self.cacheSnapshots = cacheSnapshots
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.stopSequences = stopSequences

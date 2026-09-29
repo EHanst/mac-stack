@@ -81,3 +81,33 @@ struct PromptLedgerSummaryTests {
         #expect(m.summarize(1..<5, expecting: other, text: "x") == nil)
     }
 }
+
+@Suite("CompactionSummarizer parts")
+struct CompactionSummarizerPartTests {
+
+    @Test("summaries are numbered and say part 1 is the oldest")
+    func numbered() throws {
+        let one = try #require(CompactionSummarizer.finalize(summary: String(repeating: "a real sentence here. ", count: 4), mustKeep: [], maxTokens: 600, part: 1))
+        let two = try #require(CompactionSummarizer.finalize(summary: String(repeating: "a real sentence here. ", count: 4), mustKeep: [], maxTokens: 600, part: 2))
+        #expect(one.hasPrefix("[Earlier part 1 of this conversation"))
+        #expect(two.hasPrefix("[Earlier part 2 of this conversation"))
+        #expect(one.contains("Part 1 is the oldest"))
+    }
+
+    @Test("existing summaries are counted so the next one is numbered after them")
+    func counts() {
+        let history: [Message] = [
+            Message(role: .system, content: "SYS"),
+            Message(role: .assistant, content: "\(CompactionSummarizer.marker)1 of this conversation, …]\nx"),
+            Message(role: .user, content: "q"),
+            Message(role: .assistant, content: "an ordinary reply"),
+            Message(role: .assistant, content: "\(CompactionSummarizer.marker)2 of this conversation, …]\ny"),
+        ]
+        #expect(CompactionSummarizer.partCount(in: history) == 2)
+    }
+
+    @Test("the instruction asks for chronological order")
+    func ordered() {
+        #expect(CompactionSummarizer.instruction.contains("order they happened"))
+    }
+}

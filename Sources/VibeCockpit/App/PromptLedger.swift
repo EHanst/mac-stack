@@ -69,10 +69,9 @@ public struct PromptLedger: Sendable {
 
     /// The ledger as the compaction planner sees it. Tool output is always untrusted (web pages,
     /// MCP results, file reads), so a stub or summary of it stays untrusted too.
-    public func compactionItems() -> [CompactionPlanner.Item] {
+    public func compactionItems(calibration: TokenCalibration = TokenCalibration()) -> [CompactionPlanner.Item] {
         messages.map {
-            CompactionPlanner.Item(role: $0.role, tokens: InferenceService.estimateTokens([$0]),
-                                   isUntrusted: $0.role == .tool)
+            CompactionPlanner.Item(role: $0.role, tokens: calibration.tokens(of: [$0]), isUntrusted: $0.role == .tool)
         }
     }
 
@@ -80,14 +79,14 @@ public struct PromptLedger: Sendable {
     /// This is a deliberate one-time rewrite of earlier text: the cached prefix is lost from the
     /// first stub onward, so callers batch it (see `CompactionPlanner`) instead of doing it per turn.
     @discardableResult
-    public mutating func elide(_ indices: [Int]) -> Int {
+    public mutating func elide(_ indices: [Int], calibration: TokenCalibration = TokenCalibration()) -> Int {
         var freed = 0
         for i in indices where messages.indices.contains(i) && messages[i].role == .tool {
             let old = messages[i]
             let stub = Message(role: .tool,
-                               content: "[tool output cleared to save context: about \(InferenceService.estimateTokens([old])) tokens]",
+                               content: "[tool output cleared to save context: about \(calibration.tokens(of: [old])) tokens]",
                                toolCallID: old.toolCallID)
-            freed += InferenceService.estimateTokens([old]) - InferenceService.estimateTokens([stub])
+            freed += calibration.tokens(of: [old]) - calibration.tokens(of: [stub])
             messages[i] = stub
         }
         return freed
@@ -98,12 +97,13 @@ public struct PromptLedger: Sendable {
     /// assistant message so the system message stays first and `userTurns` stays in step with the
     /// visible chat. Returns the tokens freed, or nil if the ledger changed.
     @discardableResult
-    public mutating func summarize(_ range: Range<Int>, expecting expected: [Message], text: String) -> Int? {
+    public mutating func summarize(_ range: Range<Int>, expecting expected: [Message], text: String,
+                                   calibration: TokenCalibration = TokenCalibration()) -> Int? {
         guard range.lowerBound >= 1, range.upperBound <= messages.count, range.count == expected.count,
               zip(messages[range], expected).allSatisfy({ $0.role == $1.role && $0.content == $1.content && $0.toolCallID == $1.toolCallID })
         else { return nil }
         let summary = Message(role: .assistant, content: text)
-        let freed = InferenceService.estimateTokens(Array(messages[range])) - InferenceService.estimateTokens([summary])
+        let freed = calibration.tokens(of: Array(messages[range])) - calibration.tokens(of: [summary])
         messages.replaceSubrange(range, with: [summary])
         return freed
     }
