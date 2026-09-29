@@ -281,6 +281,7 @@ struct SettingsView: View {
                 startupSection
                 CloudUsageCard()
                 SharingCard()
+                DiagnosticsCard()
                 WorkspacesCard()
                 ExternalServersCard()
                 ConnectCard()

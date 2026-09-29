@@ -50,6 +50,8 @@ public final class AppServices {
     public let externalServers = MCPClientManager()
     /// Project folders the user added; each has its own index, git and boundary.
     public let workspaces: WorkspaceManager
+    public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
+    public let diagnostics: DiagnosticsModel
     public let workspacesModel: WorkspacesModel
     public let externalServersModel: ExternalServersModel
     private static let chatIdentity = ClientIdentity(key: "app:chat", name: "VibeCockpit")
@@ -69,7 +71,7 @@ public final class AppServices {
         self.egress = gate
         self.cloudUsage = CloudUsageModel(gate: gate)
         self.installer = ModelInstaller(gate: gate)
-        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate, governor: governor)
+        let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy, gate: gate, governor: governor, requestLog: requestLog)
         self.inference = inference
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
@@ -78,12 +80,17 @@ public final class AppServices {
             try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get())
         }
         self.workspaces = workspaces
+        let externals = externalServers, requestLog = self.requestLog, governor = self.governor
+        self.diagnostics = DiagnosticsModel(log: requestLog) {
+            try await AppServices.makeSupportBundle(
+                registry: registry, egress: gate, governor: governor, inference: inference,
+                externals: externals, workspaces: workspaces, requestLog: requestLog)
+        }
         self.workspacesModel = WorkspacesModel(manager: workspaces)
         let toolGate = ToolGate(memory: memory, approver: approvals)
         self.toolGuard = ToolCallGuard(gate: toolGate)
         let host = MCPToolHost(inference: inference, gate: toolGate)
         self.mcpHost = host
-        let externals = externalServers
         self.externalServersModel = ExternalServersModel(manager: externals)
         Task {
             await host.setExternalTools { await externals.tools() }
@@ -113,6 +120,7 @@ public final class AppServices {
     public func startup(coordinator: AppCoordinator, workspaceURL: URL? = nil) async {
         guard !startupComplete else { return }
         startupComplete = true
+        DiagnosticsCollector.shared.start()
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
             let mgr = GitSnapshotManager(workspaceURL: url)
@@ -261,6 +269,38 @@ public final class AppServices {
         await refreshModels(coordinator: coordinator)
     }
 
+    /// The support bundle: facts and timings only (see `SupportBundleInput`).
+    nonisolated static func makeSupportBundle(
+        registry: ModelRegistry, egress: EgressGate, governor: SystemGovernor, inference: InferenceService,
+        externals: MCPClientManager, workspaces: WorkspaceManager, requestLog: RequestLog
+    ) async throws -> Data {
+        let info = Bundle.main.infoDictionary ?? [:]
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        var brand = [CChar](repeating: 0, count: max(size, 1))
+        sysctlbyname("machdep.cpu.brand_string", &brand, &size, nil, 0)
+        let providers = await registry.allProviders
+        let reports = DiagnosticsCollector.savedReports().map { SupportBundleInput.CrashReport(file: $0.file, json: $0.json) }
+        let input = SupportBundleInput(
+            appVersion: info["CFBundleShortVersionString"] as? String ?? "dev",
+            build: info["CFBundleVersion"] as? String ?? "0",
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            chip: String(cString: brand),
+            memoryGB: Int(ProcessInfo.processInfo.physicalMemory / 1_073_741_824),
+            routingPolicy: await inference.policy.rawValue,
+            systemLoad: await governor.current,
+            installedModels: providers.filter(\.isLocal).map(\.id).sorted(),
+            providers: providers.map { .init(id: $0.id, isLocal: $0.isLocal) }.sorted { $0.id < $1.id },
+            requests: await requestLog.recent,
+            egress: await egress.entries,
+            tokensThisMonth: await egress.tokensThisMonth,
+            monthlyTokenCap: await egress.monthlyTokenCap,
+            externalServers: await externals.list.map { .init(name: $0.server.name, status: ExternalServersModel.statusText($0.status)) },
+            projectCount: await workspaces.list.count,
+            crashReports: reports)
+        return try SupportBundle.make(input)
+    }
+
     /// Builds one project's tools: its own git snapshots, its own search index, and a boundary
     /// that keeps file access and commands inside its folder.
     nonisolated static func openWorkspace(
@@ -371,6 +411,7 @@ public final class AppServices {
         }
 
         coordinator.send(.generationFinished)
+        await diagnostics.reload()
     }
 
     /// A line for the chat when the answer didn't come from the local model the way you'd expect.
