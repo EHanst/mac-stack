@@ -70,24 +70,42 @@ public struct PromptLedger: Sendable {
     /// The ledger as the compaction planner sees it. Tool output is always untrusted (web pages,
     /// MCP results, file reads), so a stub or summary of it stays untrusted too.
     public func compactionItems(calibration: TokenCalibration = TokenCalibration()) -> [CompactionPlanner.Item] {
-        messages.map {
-            CompactionPlanner.Item(role: $0.role, tokens: calibration.tokens(of: [$0]), isUntrusted: $0.role == .tool)
+        messages.map { m in
+            var bulk: Int?
+            if m.role == .user, let span = RetrievalBudget.span(in: m.content) {
+                bulk = calibration.tokens(chars: m.content[span].count)   // retrieved code inside a user turn
+            }
+            return CompactionPlanner.Item(role: m.role, tokens: calibration.tokens(of: [m]),
+                                          isUntrusted: m.role == .tool, bulkTokens: bulk)
         }
     }
 
-    /// Replace the tool messages at `indices` with short stubs, once. Returns the tokens freed.
+    /// Replace the bulky part of the messages at `indices` with short stubs, once: a tool result, or the
+    /// retrieved code inside a user turn. Returns the tokens freed.
     /// This is a deliberate one-time rewrite of earlier text: the cached prefix is lost from the
     /// first stub onward, so callers batch it (see `CompactionPlanner`) instead of doing it per turn.
     @discardableResult
     public mutating func elide(_ indices: [Int], calibration: TokenCalibration = TokenCalibration()) -> Int {
         var freed = 0
-        for i in indices where messages.indices.contains(i) && messages[i].role == .tool {
+        for i in indices where messages.indices.contains(i) {
             let old = messages[i]
-            let stub = Message(role: .tool,
-                               content: "[tool output cleared to save context: about \(calibration.tokens(of: [old])) tokens]",
-                               toolCallID: old.toolCallID)
-            freed += calibration.tokens(of: [old]) - calibration.tokens(of: [stub])
-            messages[i] = stub
+            let replacement: Message
+            switch old.role {
+            case .tool:
+                replacement = Message(role: .tool,
+                                      content: "[tool output cleared to save context: about \(calibration.tokens(of: [old])) tokens]",
+                                      toolCallID: old.toolCallID)
+            case .user:
+                // Retrieved code that was useful for one answer; the request and any guidance stay.
+                guard let span = RetrievalBudget.span(in: old.content) else { continue }
+                var text = old.content
+                text.replaceSubrange(span, with: RetrievalBudget.stub)
+                replacement = Message(role: .user, content: text, toolCallID: old.toolCallID)
+            default:
+                continue
+            }
+            freed += calibration.tokens(of: [old]) - calibration.tokens(of: [replacement])
+            messages[i] = replacement
         }
         return freed
     }

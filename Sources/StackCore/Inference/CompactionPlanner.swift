@@ -16,13 +16,19 @@ public struct CompactionPlanner: Sendable, Equatable {
         public var isPinned: Bool
         /// Came from web/MCP/cloud text; carried onto whatever replaces it.
         public var isUntrusted: Bool
+        /// The part of this message that can be replaced by a stub: all of a tool result, or the
+        /// retrieved-code block inside a user turn. Nil means the default (tool: everything, else none).
+        public var bulkTokens: Int?
 
-        public init(role: Message.Role, tokens: Int, isPinned: Bool = false, isUntrusted: Bool = false) {
+        public init(role: Message.Role, tokens: Int, isPinned: Bool = false, isUntrusted: Bool = false, bulkTokens: Int? = nil) {
             self.role = role
             self.tokens = tokens
             self.isPinned = isPinned
             self.isUntrusted = isUntrusted
+            self.bulkTokens = bulkTokens
         }
+
+        var elidableTokens: Int { bulkTokens ?? (role == .tool ? tokens : 0) }
     }
 
     public enum Outcome: Sendable, Equatable {
@@ -101,14 +107,15 @@ public struct CompactionPlanner: Sendable, Equatable {
             let item = items[i]
             guard canElide(item) else { continue }
             elide.append(i)
-            total -= item.tokens - stubTokens
+            total -= item.elidableTokens - stubTokens
         }
         if total <= target { return plan(.compact, elide: elide, after: total) }
 
         // Step 2: summarize the oldest shrinkable run, if allowed.
         if allowSummarize, let run = summarizableRun(items, in: start..<end, skipping: Set(elide)) {
             let saved = items[run].enumerated().reduce(0) { sum, pair in
-                sum + (elide.contains(run.lowerBound + pair.offset) ? stubTokens : pair.element.tokens)
+                sum + (elide.contains(run.lowerBound + pair.offset)
+                       ? pair.element.tokens - pair.element.elidableTokens + stubTokens : pair.element.tokens)
             }
             let after = total - saved + summaryTokens
             if saved > summaryTokens {
@@ -131,7 +138,7 @@ public struct CompactionPlanner: Sendable, Equatable {
             boundary = firstIndex(ofRecentTurns: turns, items, from: start)
             var reachable = 0
             for (i, item) in items.enumerated() {
-                reachable += i >= start && i < boundary && canElide(item) ? stubTokens : item.tokens
+                reachable += i >= start && i < boundary && canElide(item) ? item.tokens - item.elidableTokens + stubTokens : item.tokens
             }
             if reachable <= target { return boundary }
         }
@@ -139,7 +146,7 @@ public struct CompactionPlanner: Sendable, Equatable {
     }
 
     private func canElide(_ item: Item) -> Bool {
-        item.role == .tool && !item.isPinned && item.tokens >= minElideTokens && item.tokens > stubTokens
+        !item.isPinned && item.elidableTokens >= minElideTokens && item.elidableTokens > stubTokens
     }
 
     /// Index of the `turns`-th user message from the end (or `start` if there are fewer).

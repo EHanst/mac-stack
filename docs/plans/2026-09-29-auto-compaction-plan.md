@@ -133,3 +133,11 @@ Cancelling is clean (about 0.5 s) and the partial work is kept, so the backgroun
 **Keeping the model warm** (added after these measurements): the system prompt is read once right after the model loads, so the first message finds it cached; when the weights are unloaded after 30 idle minutes, up to 1 GiB of the prompt cache is now kept (it used to be discarded, so coming back to a long chat meant re-reading all of it, ~12 s per 1,000 tokens); the background re-read and summary are skipped when the Mac is hot, low on memory or in Low Power Mode.
 
 Not measured: battery/thermal cost of the idle work, and behavior on a machine with a much larger or smaller ceiling.
+
+## 12. Retrieved code (trimming what each turn carries)
+
+Measured on this repo (2,989 declaration chunks, tokens ≈ chars/4): median **25**, p75 101, p90 302, p99 **1,562**, max **11,091**. The chunker has no size limit, so a typical turn's five hits are small, but one unlucky hit can exceed a 16 GB Mac's whole prompt limit (10,876 tokens), and every later request re-reads what a turn retrieved.
+
+- `RetrievalBudget` caps retrieval at a quarter of the local ceiling and at the room left under the compaction trigger (cloud-only: 8,000 tokens). A chunk that doesn't fit is cut at a line boundary; if under 150 tokens of room remain, nothing is added.
+- The planner now also treats the retrieved block inside an *old* user turn as clearable (replaced with `[retrieved code cleared to save context]`; the request, guidance and turn count stay), on the same footing as old tool output.
+- Not built: persisting the prompt cache to disk. Chat history itself is not saved across launches, so a saved cache would have nothing to match, and it would put conversation-derived data on disk. Revisit only if chat history is ever persisted.

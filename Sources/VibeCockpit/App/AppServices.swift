@@ -730,14 +730,15 @@ public final class AppServices {
         do {
             let results = try await pipeline.search(query: query, topK: 5)
             guard !results.isEmpty else { return nil }
-            var lines = ["Relevant code from the workspace:"]
-            for result in results {
-                let fileName = URL(fileURLWithPath: result.filePath).lastPathComponent
-                lines.append("// \(fileName) — \(result.declarationKind)")
-                lines.append(result.content)
-                lines.append("")
+            let chunks = results.map {
+                RetrievalBudget.Chunk(fileName: URL(fileURLWithPath: $0.filePath).lastPathComponent,
+                                      kind: $0.declarationKind, content: $0.content)
             }
-            return lines.joined(separator: "\n")
+            // Only as much as this turn has room for; the chunker has no size limit of its own.
+            let room = RetrievalBudget.maxTokens(
+                ceiling: (await inference.localContextLimit()).map { min($0, Self.contextTokenBudget) },
+                currentPromptTokens: calibration.tokens(of: ledger.messages))
+            return RetrievalBudget.render(chunks, maxTokens: room, calibration: calibration)
         } catch {
             logger.debug("RAG search failed: \(error.localizedDescription, privacy: .public)")
             return nil
