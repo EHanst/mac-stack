@@ -9,7 +9,7 @@ Exit criteria: notarized DMG passes `spctl`; 24 h soak with 3 clients: no leak >
 
 ## Queue
 1. [x] **M5.1 Diagnostics (#15)** — DONE (`StackCore/Diagnostics/{RequestLog,SupportBundle}.swift`, `DiagnosticsCollector/Model/Card`; 15 tests). Request log, "Why this speed?", support bundle, MetricKit crash reports kept on-device.
-2. [ ] **M5.2 Soak harness** — script driving 3 clients (chat, streaming API, MCP) against the app, sampling RSS/FDs; short run now, 24 h run for the user.
+2. [x] **M5.2 Soak harness** — DONE: `scripts/soak.py` (isolated home, stub cloud, throwaway token; chat + streaming API + MCP clients; RSS/FD sampling; pass = ≤5 % RSS growth first→last quarter, FDs flat, ≤1 % errors, app alive). 1-min pilot passed (61/61 streams, 0 errors). **24 h run is yours:** `python3 scripts/soak.py --hours 24 --out ~/soak` (needs the Debug app and `.build/debug/vibe-mcp` built; keep the Mac awake).
 3. [ ] **M5.3 Vendor libgit2** — Homebrew path in `project.yml` breaks any machine without it (and notarization); bundle it or switch.
 4. [ ] **M5.4 Release script dry-run** — check `scripts/release.sh` and `Config/ExportOptions.plist` end to end up to the signing step; hardened runtime + entitlements review.
 5. [ ] **M5.5 Launch-hidden-at-login** (open item from M1).
