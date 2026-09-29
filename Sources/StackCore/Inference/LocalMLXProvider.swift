@@ -79,6 +79,9 @@ public actor LocalMLXProvider: ModelProvider {
     /// Account for another resident model (the embedder) in the memory budget.
     public func reserveMemory(bytes: Int) { budget.reservedBytes = bytes }
 
+    /// Replace the memory model (benchmarks bypass it to measure beyond the current limit).
+    public func setBudget(_ b: ContextBudget) { budget = b }
+
     public func setTuning(_ t: Tuning) {
         tuning = t
         if model != nil { Memory.cacheLimit = t.bufferCacheLimit }
@@ -136,6 +139,26 @@ public actor LocalMLXProvider: ModelProvider {
 
     public func embed(_ texts: [String]) async throws -> [[Float]] {
         throw LocalModelError.unsupportedOperation("embedding")
+    }
+
+    /// Diagnostics: the model's most likely next tokens after plain `text` (no chat template).
+    /// Used to check the model computes sensibly — e.g. "The capital of France is" → " Paris".
+    public func debugTopTokens(after text: String, count: Int = 5) async throws -> [(token: String, probability: Float)] {
+        let (mdl, tok) = try await ensureLoaded()
+        let ids = tok.encode(text: text, addSpecialTokens: false).map { Int32($0) }
+        guard let last = ids.last else { return [] }
+        let cache = mdl.makeCache()
+        if ids.count > 1 {
+            mdl.prefill(MLXArray(Array(ids.dropLast()))[.newAxis], cache: cache)
+            MLX.eval(cache.stateArrays)
+        }
+        let logits = mdl(MLXArray([last])[.newAxis], cache: cache)          // [1, vocab]
+        let probs = softmax(logits.asType(.float32), axis: -1)[0]
+        let order = argSort(-probs)[0..<count]
+        MLX.eval(probs, order)
+        return order.asArray(Int32.self).map { id in
+            (tok.decode(tokens: [Int(id)]), probs[Int(id)].item(Float.self))
+        }
     }
 
     public func warmUp() async throws {
@@ -209,8 +232,8 @@ public actor LocalMLXProvider: ModelProvider {
     ) throws {
         // 248044 = <|endoftext|>, 248046 = <|im_end|> (Bonsai/Qwen3 tokenizer)
         let eosIds: Set<Int> = [tok.eosTokenId ?? 248044, 248046]
-        let maxTokens = options.maxTokens > 0 ? options.maxTokens : 64000
-        let temperature = Float(max(options.temperature, 0))
+        let maxTokens = options.maxTokens > 0 ? options.maxTokens : GenerationOptions.defaultMaxTokens
+        let sampling = options.sampling ?? .bonsaiInstruct
 
         // ── Prefill ────────────────────────────────────────────────────────────────
         // The last prompt token is held back and fed through the normal decode step, so the
@@ -258,8 +281,17 @@ public actor LocalMLXProvider: ModelProvider {
         // Sampling stays on the GPU: step n+1 is enqueued from the *lazy* token of step n
         // before we block to read token n, so graph construction and dispatch overlap GPU
         // execution instead of serialising with it.
+        // Presence penalty needs to know which tokens this reply already contains; that mask is
+        // updated lazily on the GPU like everything else in the loop.
+        let usesPenalty = sampling.presencePenalty != 0
+        var seen: MLXArray? = usesPenalty ? MLXArray.zeros([1, mdl.config.vocabSize]) : nil
         func step(_ token: MLXArray) -> MLXArray {
-            Self.sample(mdl(token, cache: cache), temperature: temperature)
+            let logits = mdl(token, cache: cache)
+            let next = TokenSampler.sample(logits, sampling, seen: seen)
+            if let current = seen {
+                seen = maximum(current, TokenSampler.oneHot(next, vocab: logits.dim(-1)))
+            }
+            return next
         }
 
         let decodeStart = Date()
@@ -448,13 +480,6 @@ public actor LocalMLXProvider: ModelProvider {
     // MARK: - Sampling
 
     /// Lazily sample a token id `[1]` from `[1, vocab]` logits without leaving the GPU.
-    private static func sample(_ logits: MLXArray, temperature: Float) -> MLXArray {
-        if temperature <= 0 {
-            return argMax(logits, axis: -1)
-        }
-        return MLXRandom.categorical(logits * (1 / temperature))
-    }
-
     // MARK: - Chat template
 
     /// Token ids for the prompt plus the token offset at the end of each message.

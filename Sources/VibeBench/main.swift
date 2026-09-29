@@ -3,6 +3,7 @@ import Foundation
 import MLX
 import MLXRandom
 import StackCore
+import MLXNN
 
 // vibe-bench — performance harness for the local model.
 //   swift run -c release VibeBench [--model DIR] [--contexts 512,4096] [--gen 128] [--runs 3]
@@ -22,6 +23,10 @@ struct Options {
     var sweep: [Int] = []
     var guardTest = false
     var serviceTest = false
+    var textTest = false
+    var modelCheck = false
+    var samplerCheck = false
+    var noGuard = false
     var chunks = [512]
     var timeout = 300.0
     var gen = 128
@@ -38,6 +43,10 @@ struct Options {
             case "--no-matmul": matmul = false
             case "--guard-test": guardTest = true
             case "--service-test": serviceTest = true
+            case "--text-test": textTest = true
+            case "--model-check": modelCheck = true
+            case "--sampler-check": samplerCheck = true
+            case "--no-guard": noGuard = true
             case "--sweep": if let v = it.next() { sweep = v.split(separator: ",").compactMap { Int($0) } }
             case "--chunks": if let v = it.next() { chunks = v.split(separator: ",").compactMap { Int($0) } }
             case "--timeout": if let v = it.next(), let n = Double(v) { timeout = max(1, n) }
@@ -142,7 +151,7 @@ func measure(
         var text = ""
         for try await event in await provider.generate(
             messages: messages, tools: [],
-            options: GenerationOptions(maxTokens: gen, temperature: 0)) {
+            options: GenerationOptions(maxTokens: gen, temperature: 0, sampling: .greedy)) {
             if case .token(let t) = event {
                 if ttft.isNaN { ttft = Date().timeIntervalSince(start) }
                 text += t
@@ -204,7 +213,7 @@ func modelDims(_ dir: URL) -> (hidden: Int, intermediate: Int, bits: Int, group:
 }
 
 func userMessage(_ text: String) -> Message { Message(role: .user, content: text) }
-func generationOptions(_ maxTokens: Int) -> GenerationOptions { GenerationOptions(maxTokens: maxTokens, temperature: 0) }
+func generationOptions(_ maxTokens: Int) -> GenerationOptions { GenerationOptions(maxTokens: maxTokens, temperature: 0, sampling: .greedy) }
 
 func run() async throws {
     setvbuf(stdout, nil, _IOLBF, 0)   // line-buffered so `> log` shows progress live
@@ -216,7 +225,42 @@ func run() async throws {
     print("GPU recommended working set: \(workingSet.map(gb) ?? "n/a")")
     print("thermal: \(info.thermalState.rawValue)  lowPower: \(info.isLowPowerModeEnabled)  watchdog: \(Int(opts.timeout)) s\n")
 
+    if opts.samplerCheck {
+        // Synthetic logits, no model: does each sampling control do what it says?
+        print("[sampler check]")
+        var failures = 0
+        func check(_ ok: Bool, _ what: String) { print("  \(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+        let vocab = 1000
+        // Token 7 is best, then 3, then 500, everything else far below.
+        var base = [Float](repeating: -10, count: vocab)
+        base[7] = 5; base[3] = 4.5; base[500] = 4.0
+        let logits = MLXArray(base)[.newAxis]
+        func draw(_ p: SamplingParameters, _ n: Int, seen: MLXArray? = nil) -> [Int] {
+            (0..<n).map { _ in TokenSampler.sample(logits, p, seen: seen).item(Int.self) }
+        }
+        check(draw(.greedy, 20).allSatisfy { $0 == 7 }, "greedy always picks the highest logit")
+        check(draw(SamplingParameters(temperature: 1, topK: 1), 40).allSatisfy { $0 == 7 }, "top-k 1 behaves like greedy")
+        let k2 = draw(SamplingParameters(temperature: 1, topK: 2), 300)
+        check(Set(k2) == [7, 3], "top-k 2 samples only the two best tokens, and both appear (saw \(Set(k2).sorted()))")
+        let p = draw(SamplingParameters(temperature: 1, topP: 0.5), 300)
+        check(p.allSatisfy { $0 == 7 || $0 == 3 } && p.contains(7), "top-p 0.5 keeps only the head of the distribution (saw \(Set(p).sorted()))")
+        let wide = draw(SamplingParameters(temperature: 1, topK: 3), 400)
+        check(wide.filter { $0 == 7 }.count > wide.filter { $0 == 500 }.count, "sampling follows the probabilities (7 more often than 500)")
+        let hot = draw(SamplingParameters(temperature: 5, topK: 3), 400)
+        check(Set(hot).count == 3, "high temperature spreads over all kept tokens")
+        var seen = [Float](repeating: 0, count: vocab); seen[7] = 1
+        let flipped = draw(SamplingParameters(temperature: 0, presencePenalty: 1.0), 10, seen: MLXArray(seen)[.newAxis])
+        check(flipped.allSatisfy { $0 == 3 }, "presence penalty 1.0 pushes a seen best token (5.0→4.0) below the runner-up (4.5)")
+        let oh = TokenSampler.oneHot(MLXArray([Int32(42)]), vocab: vocab)
+        check(oh.sum().item(Float.self) == 1 && oh[0, 42].item(Float.self) == 1, "one-hot marks exactly the generated token")
+        exit(failures == 0 ? 0 : 1)
+    }
+
     let provider = LocalMLXProvider(id: "local:bench", modelDirectory: opts.model)
+    if opts.noGuard {
+        // Measure beyond the pre-flight limit (the sweep stops itself if the working set is exceeded).
+        await provider.setBudget(ContextBudget(model: .init(fixedOverheadBytes: 0, bytesPerToken: 1), safetyFraction: 1, contextWindow: 262_144, minimumUsefulTokens: 0))
+    }
     print("loading model…")
     let loadStart = Date()
     try await provider.warmUp()
@@ -231,6 +275,66 @@ func run() async throws {
     func peakText(_ bytes: Int) -> String {
         guard let ws = workingSet, ws > 0 else { return gb(bytes) }
         return "\(gb(bytes)) (\(Int(Double(bytes) / Double(ws) * 100))% of working set)"
+    }
+
+    // ── Model correctness ───────────────────────────────────────────────────────────
+    if opts.modelCheck {
+        print("[model check]")
+        // 1. Delta-rule kernel vs reference ops on random data (incl. carrying state across calls).
+        let B = 1, T = 37, Hk = 4, Hv = 8, Dk = 128, Dv = 128
+        let q = MLXRandom.normal([B, T, Hk, Dk]).asType(.float16) * 0.1
+        let k = MLXRandom.normal([B, T, Hk, Dk]).asType(.float16) * 0.1
+        let v = MLXRandom.normal([B, T, Hv, Dv]).asType(.float16)
+        let a = MLXRandom.normal([B, T, Hv])
+        let b = MLXRandom.normal([B, T, Hv])
+        let g = GatedDelta.decay(aLog: MLXArray.zeros([Hv]), a: a, dtBias: MLXArray.zeros([Hv]))
+        let beta = sigmoid(b)
+        let s0 = MLXArray.zeros([B, Hv, Dv, Dk], dtype: .float32)
+        let (yK, sK) = GatedDelta.update(q: q, k: k, v: v, g: g, beta: beta, state: s0)
+        let (yO, sO) = GatedDelta.updateOps(q: q, k: k, v: v, g: g, beta: beta, state: s0)
+        // Split in two calls: state must carry over.
+        let h = 20
+        let (y1, s1) = GatedDelta.update(q: q[0..., 0..<h], k: k[0..., 0..<h], v: v[0..., 0..<h], g: g[0..., 0..<h], beta: beta[0..., 0..<h], state: s0)
+        let (y2, s2) = GatedDelta.update(q: q[0..., h...], k: k[0..., h...], v: v[0..., h...], g: g[0..., h...], beta: beta[0..., h...], state: s1)
+        let yChunked = concatenated([y1, y2], axis: 1)
+        func maxDiff(_ x: MLXArray, _ y: MLXArray) -> Float { abs(x.asType(.float32) - y.asType(.float32)).max().item(Float.self) }
+        let dy = maxDiff(yK, yO), ds = maxDiff(sK, sO), dc = maxDiff(yK, yChunked), dcs = maxDiff(sK, s2)
+        print("  delta kernel vs ops:      max |Δy| \(dy)  max |Δstate| \(ds)   \(dy < 2e-2 && ds < 1e-3 ? "PASS" : "FAIL")")
+        print("  chunked vs single call:   max |Δy| \(dc)  max |Δstate| \(dcs)   \(dc < 1e-3 && dcs < 1e-4 ? "PASS" : "FAIL")")
+        print("  state dtype: \(sK.dtype)")
+
+        // 2. Does the real model predict sensible next tokens?
+        for prompt in ["The capital of France is", "The quick brown fox jumps over the lazy", "1, 2, 3, 4, 5,"] {
+            let top = try await provider.debugTopTokens(after: prompt, count: 5)
+            print("  \"\(prompt)\" → " + top.map { "\($0.token.debugDescription) \(String(format: "%.1f%%", $0.probability * 100))" }.joined(separator: "  "))
+        }
+        print("")
+    }
+
+    // ── Text correctness: does the model still say sensible things? ─────────────────
+    if opts.textTest {
+        print("[text test] greedy output, 40 tokens, per prefill chunk size")
+        let guidance = String(repeating: "When generating code: produce complete, compilable Swift. Follow the Swift API Design Guidelines. Prefer value types. ", count: 5)
+        let cases: [(String, [Message])] = [
+            ("short", [Message(role: .user, content: "Say hello in five words.")]),
+            ("app-like (~400 tok)", [Message(role: .system, content: "You are VibeCockpit, an AI coding assistant. " + guidance),
+                                     Message(role: .user, content: "[Task: general]\nThink step by step. Say hello in five words.")]),
+        ]
+        for chunk in [128, 512, 8192] {
+            var t = await provider.tuning
+            t.prefillChunkSize = chunk
+            await provider.setTuning(t)
+            for (name, messages) in cases {
+                await provider.clearPromptCache()
+                var text = ""
+                for try await event in await provider.generate(messages: messages, tools: [], options: GenerationOptions(maxTokens: 40, temperature: 0, sampling: .greedy)) {
+                    if case .token(let x) = event { text += x }
+                }
+                let stats = await provider.lastStats
+                print("  chunk \(chunk) · \(name) (\(stats?.promptTokens ?? 0) tok): \(text.replacingOccurrences(of: "\n", with: "⏎").prefix(150))")
+            }
+        }
+        print("")
     }
 
     // ── Context budget: this machine, and what other RAM tiers would get ─────────────

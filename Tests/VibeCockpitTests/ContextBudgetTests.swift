@@ -15,9 +15,9 @@ struct ContextBudgetTests {
         switch v { case .ok(let n), .belowFloor(let n): n }
     }
 
-    @Test("predictions are never below what VibeBench measured (chunk 128, M3 Pro 18 GB)")
+    @Test("predictions are never below what VibeBench measured on the corrected model (chunk 128, M3 Pro 18 GB)")
     func conservativeAgainstMeasurements() {
-        let measured: [(tokens: Int, overGiB: Double)] = [(1042, 1.72), (2088, 1.88), (4175, 2.12), (8421, 2.72)]
+        let measured: [(tokens: Int, overGiB: Double)] = [(1042, 1.45), (2087, 1.57), (4175, 1.92), (8419, 2.46)]
         for m in measured {
             let predicted = b.predictedPeakBytes(weightBytes: weights, promptTokens: m.tokens) - weights
             #expect(Double(predicted) >= m.overGiB * Double(gib), "\(m.tokens) tokens")

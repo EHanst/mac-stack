@@ -10,6 +10,7 @@ struct CredentialEntryView: View {
     @State private var providerID = ""
     @State private var apiToken = ""
     @State private var baseURL = "https://api.openai.com/v1"
+    @State private var modelID = "gpt-4o"
     @State private var isSaving = false
     @State private var saveError: String?
 
@@ -25,6 +26,10 @@ struct CredentialEntryView: View {
 
             fieldGroup("Base URL", hint: "OpenAI-compatible v1 endpoint") {
                 MTTextField("https://api.openai.com/v1", text: $baseURL)
+            }
+
+            fieldGroup("Model", hint: "e.g. gpt-4o, or claude-sonnet-5-5 with https://api.anthropic.com") {
+                MTTextField("model-name", text: $modelID)
             }
 
             fieldGroup("API Token", hint: "Stored securely in Keychain") {
@@ -49,7 +54,7 @@ struct CredentialEntryView: View {
                 saveCredential()
             }
             .buttonStyle(MTFilledButtonStyle())
-            .disabled(providerID.isEmpty || apiToken.isEmpty || baseURL.isEmpty || isSaving)
+            .disabled(providerID.isEmpty || apiToken.isEmpty || baseURL.isEmpty || modelID.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
@@ -75,6 +80,7 @@ struct CredentialEntryView: View {
                     token: apiToken,
                     providerID: providerID,
                     baseURL: url,
+                    modelIdentifier: modelID.trimmingCharacters(in: .whitespaces),
                     coordinator: coordinator
                 )
             } catch {

@@ -49,12 +49,37 @@ public actor RemoteAPIProvider: ModelProvider {
     private let session: URLSession
     private let logger = Logger(subsystem: "com.vibecockpit", category: "RemoteAPIProvider")
 
-    public init(config: Config, credentials: CredentialStore) {
+    public init(config: Config, credentials: CredentialStore,
+                session: URLSession = URLSession(configuration: .default)) {
         self.config = config
         self.credentials = credentials
         self.id = config.id
         self.capabilities = config.capabilities
-        self.session = URLSession(configuration: .default)
+        self.session = session
+    }
+
+    // MARK: Request building (pure, unit-tested)
+
+    /// Provider docs give base URLs both with a version segment (`https://api.openai.com/v1`) and
+    /// without one (`https://api.anthropic.com`). Add `v1/` only when the base doesn't have one,
+    /// otherwise the default OpenAI URL we show would become `/v1/v1/chat/completions` (404).
+    static func endpoint(base: URL, path: String) -> URL {
+        // Any version segment in the base (v1, v2, v1beta, …) means the docs' base already has it,
+        // e.g. https://generativelanguage.googleapis.com/v1beta/openai/.
+        let versioned = base.pathComponents.contains { $0.range(of: #"^v[0-9]+(alpha|beta)?$"#, options: .regularExpression) != nil }
+        return base.appendingPathComponent(versioned ? path : "v1/\(path)")
+    }
+
+    /// OpenAI's Chat Completions deprecated `max_tokens` for `max_completion_tokens` (gpt-5 and
+    /// o-series reject the old name); other OpenAI-compatible servers still expect `max_tokens`.
+    static func tokenLimitKey(for base: URL) -> String {
+        base.host == "api.openai.com" ? "max_completion_tokens" : "max_tokens"
+    }
+
+    private func requireModel() throws {
+        if config.apiStyle != .ollamaGenerate, config.modelIdentifier.trimmingCharacters(in: .whitespaces).isEmpty {
+            throw ProviderError.missingModel
+        }
     }
 
     public func generate(
@@ -65,6 +90,7 @@ public actor RemoteAPIProvider: ModelProvider {
         AsyncThrowingStream { continuation in
             Task {
                 do {
+                    try requireModel()
                     let token = try await credentials.token(for: config.id)
                     switch config.apiStyle {
                     case .openAIChat:
@@ -91,7 +117,7 @@ public actor RemoteAPIProvider: ModelProvider {
             throw ProviderError.capabilityUnavailable(.embedding)
         }
         let token = try await credentials.token(for: config.id)
-        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/embeddings"))
+        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "embeddings"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -127,7 +153,8 @@ public actor RemoteAPIProvider: ModelProvider {
     }
 
     private func probeOpenAI(token: String) async throws {
-        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/chat/completions"))
+        try requireModel()
+        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "chat/completions"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -135,7 +162,7 @@ public actor RemoteAPIProvider: ModelProvider {
         let body: [String: Any] = [
             "model": config.modelIdentifier,
             "messages": [["role": "user", "content": "hi"]],
-            "max_tokens": 1,
+            Self.tokenLimitKey(for: config.baseURL): 1,
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (_, response) = try await session.data(for: request)
@@ -143,7 +170,7 @@ public actor RemoteAPIProvider: ModelProvider {
     }
 
     private func probeAnthropic(token: String) async throws {
-        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/messages"))
+        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "messages"))
         request.httpMethod = "POST"
         request.setValue(token, forHTTPHeaderField: "x-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -175,14 +202,14 @@ public actor RemoteAPIProvider: ModelProvider {
         token: String,
         continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     ) async throws {
-        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/chat/completions"))
+        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "chat/completions"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         var body: [String: Any] = [
             "model": config.modelIdentifier,
             "messages": messages.map { ["role": $0.role.rawValue, "content": $0.content] },
-            "max_tokens": options.maxTokens,
+            Self.tokenLimitKey(for: config.baseURL): options.maxTokens,
             "temperature": options.temperature,
             "stream": true,
         ]
@@ -211,7 +238,7 @@ public actor RemoteAPIProvider: ModelProvider {
         token: String,
         continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     ) async throws {
-        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/messages"))
+        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "messages"))
         request.httpMethod = "POST"
         request.setValue(token, forHTTPHeaderField: "x-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -312,6 +339,7 @@ public enum ProviderError: LocalizedError {
     case httpError(Int)
     case malformedResponse
     case notAvailable(String)
+    case missingModel
 
     public var errorDescription: String? {
         switch self {
@@ -319,6 +347,7 @@ public enum ProviderError: LocalizedError {
         case .httpError(let code): "HTTP error \(code)."
         case .malformedResponse: "Malformed response from provider."
         case .notAvailable(let reason): "Provider unavailable: \(reason)."
+        case .missingModel: "No model name is set for this provider. Add one (for example gpt-4o or claude-sonnet-5-5) in the model settings."
         }
     }
 }

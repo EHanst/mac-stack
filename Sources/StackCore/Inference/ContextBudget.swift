@@ -75,9 +75,10 @@ public struct ContextBudget: Sendable, Equatable {
 
 extension ContextBudget {
     /// Ternary-Bonsai-2-27B (2-bit MLX) with 128-token prefill chunks, M3 Pro 18 GB.
-    /// Fit to `VibeBench --sweep` (docs/plans/m0-status.md): measured peak over weights was
-    /// 1.72 / 1.88 / 2.12 / 2.72 GiB at 1,042 / 2,088 / 4,175 / 8,421 prompt tokens; this
-    /// model predicts each of those slightly high (conservative).
+    /// Fit to `VibeBench --sweep` on the *corrected* model (Gated DeltaNet fix): measured peak over
+    /// weights was 1.45 / 1.57 / 1.92 / 2.46 GiB at 1,042 / 2,087 / 4,175 / 8,419 prompt tokens.
+    /// This model predicts each slightly high (conservative). The slope matches the config:
+    /// KV is 64 KiB/token, and a live cache plus a prefix snapshot copy is 2–3× that.
     public static let bonsai27B2bit = ContextBudget(
-        model: Model(fixedOverheadBytes: 1_717_986_918 /* 1.6 GiB */, bytesPerToken: 165_000))
+        model: Model(fixedOverheadBytes: 1_449_551_462 /* 1.35 GiB */, bytesPerToken: 155_000))
 }
