@@ -29,14 +29,15 @@ public actor ModelRegistry {
     public func discover(
         localDirectory: URL? = nil,
         remoteConfigs: [RemoteAPIProvider.Config] = [],
-        credentials: CredentialStore
+        credentials: CredentialStore,
+        gate: EgressGate? = nil
     ) async throws {
         if let dir = localDirectory {
             await discoverLocalModels(in: dir)
         }
         for config in remoteConfigs {
             await credentials.registerEnvVarKey(config.envVarKey, for: config.id)
-            let provider = RemoteAPIProvider(config: config, credentials: credentials)
+            let provider = RemoteAPIProvider(config: config, credentials: credentials, gate: gate)
             let providerID = config.id
             providers[providerID] = provider
             logger.info("Registered remote provider: \(providerID, privacy: .public)")

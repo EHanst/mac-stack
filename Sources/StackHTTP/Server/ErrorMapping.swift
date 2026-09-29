@@ -22,6 +22,13 @@ extension OpenAIError {
             case .noProvider:
                 return OpenAIError(status: 503, message: e.localizedDescription, type: "server_error", code: "no_model_available")
             }
+        case let e as EgressError:
+            switch e {
+            case .blockedByPrivacy:
+                return OpenAIError(status: 403, message: e.localizedDescription, type: "permission_error", code: "blocked_by_privacy_setting")
+            case .budgetExhausted:
+                return OpenAIError(status: 429, message: e.localizedDescription, type: "insufficient_quota", code: "monthly_limit_reached")
+            }
         case let e as LocalModelError:
             if case .contextTooLarge = e {
                 return .invalidRequest(e.localizedDescription, param: "messages", code: "context_length_exceeded")

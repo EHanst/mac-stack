@@ -47,10 +47,12 @@ public actor RemoteAPIProvider: ModelProvider {
     private let config: Config
     private let credentials: CredentialStore
     private let session: URLSession
+    private let gate: EgressGate?
     private let logger = Logger(subsystem: "com.vibecockpit", category: "RemoteAPIProvider")
 
     public init(config: Config, credentials: CredentialStore,
-                session: URLSession = URLSession(configuration: .default)) {
+                session: URLSession = URLSession(configuration: .default), gate: EgressGate? = nil) {
+        self.gate = gate
         self.config = config
         self.credentials = credentials
         self.id = config.id
@@ -74,6 +76,17 @@ public actor RemoteAPIProvider: ModelProvider {
     /// o-series reject the old name); other OpenAI-compatible servers still expect `max_tokens`.
     static func tokenLimitKey(for base: URL) -> String {
         base.host == "api.openai.com" ? "max_completion_tokens" : "max_tokens"
+    }
+
+    // Every request goes through the egress gate first ("Only on this Mac", monthly limit, ledger).
+    private func gatedData(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        if let gate, let url = request.url { try await gate.authorize(.cloudInference, url: url, provider: id) }
+        return try await session.data(for: request)
+    }
+
+    private func gatedBytes(_ request: URLRequest) async throws -> (URLSession.AsyncBytes, URLResponse) {
+        if let gate, let url = request.url { try await gate.authorize(.cloudInference, url: url, provider: id) }
+        return try await session.bytes(for: request)
     }
 
     private func requireModel() throws {
@@ -123,7 +136,7 @@ public actor RemoteAPIProvider: ModelProvider {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = ["input": texts, "model": embeddingModel]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await gatedData(request)
         try validate(response: response)
         return try parseEmbeddingResponse(data)
     }
@@ -152,44 +165,36 @@ public actor RemoteAPIProvider: ModelProvider {
         }
     }
 
+    /// Health checks list models (free) instead of generating text: a "hi" completion on every
+    /// status refresh would cost tokens and send a prompt nobody asked for.
     private func probeOpenAI(token: String) async throws {
         try requireModel()
-        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "chat/completions"))
-        request.httpMethod = "POST"
+        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "models"))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 10
-        let body: [String: Any] = [
-            "model": config.modelIdentifier,
-            "messages": [["role": "user", "content": "hi"]],
-            Self.tokenLimitKey(for: config.baseURL): 1,
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await gatedData(request)
+        try validateProbe(response)
+    }
+
+    /// Servers that don't implement the model list (404/405) are taken as reachable.
+    private func validateProbe(_ response: URLResponse) throws {
+        if let http = response as? HTTPURLResponse, http.statusCode == 404 || http.statusCode == 405 { return }
         try validate(response: response)
     }
 
     private func probeAnthropic(token: String) async throws {
-        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "messages"))
-        request.httpMethod = "POST"
+        var request = URLRequest(url: Self.endpoint(base: config.baseURL, path: "models"))
         request.setValue(token, forHTTPHeaderField: "x-api-key")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 10
-        let body: [String: Any] = [
-            "model": config.modelIdentifier,
-            "messages": [["role": "user", "content": "hi"]],
-            "max_tokens": 1,
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (_, response) = try await session.data(for: request)
-        try validate(response: response)
+        let (_, response) = try await gatedData(request)
+        try validateProbe(response)
     }
 
     private func probeOllama() async throws {
         var request = URLRequest(url: config.baseURL.appendingPathComponent("api/tags"))
         request.timeoutInterval = 5
-        let (_, response) = try await session.data(for: request)
+        let (_, response) = try await gatedData(request)
         try validate(response: response)
     }
 
@@ -221,7 +226,7 @@ public actor RemoteAPIProvider: ModelProvider {
         }
         if !options.stopSequences.isEmpty { body["stop"] = options.stopSequences }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (stream, response) = try await session.bytes(for: request)
+        let (stream, response) = try await gatedBytes(request)
         try validate(response: response)
         for try await line in stream.lines {
             guard line.hasPrefix("data: "), !line.hasSuffix("[DONE]") else { continue }
@@ -253,7 +258,7 @@ public actor RemoteAPIProvider: ModelProvider {
             "stream": true,
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (stream, response) = try await session.bytes(for: request)
+        let (stream, response) = try await gatedBytes(request)
         try validate(response: response)
         for try await line in stream.lines {
             guard line.hasPrefix("data: ") else { continue }
@@ -286,7 +291,7 @@ public actor RemoteAPIProvider: ModelProvider {
             "stream": true,
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (stream, response) = try await session.bytes(for: request)
+        let (stream, response) = try await gatedBytes(request)
         try validate(response: response)
         for try await line in stream.lines {
             if let data = line.data(using: .utf8),

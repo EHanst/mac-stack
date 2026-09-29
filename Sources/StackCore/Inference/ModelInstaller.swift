@@ -56,6 +56,7 @@ public actor ModelInstaller {
 
     private let root: URL
     private let session: URLSession
+    private let gate: EgressGate?
     private let hub: URL
     private let chunkBytes: Int64
     private let maxRetries: Int
@@ -70,6 +71,7 @@ public actor ModelInstaller {
     public init(
         root: URL = ModelInstaller.defaultRoot(),
         session: URLSession = ModelInstaller.makeSession(),
+        gate: EgressGate? = nil,
         hub: URL = ModelInstaller.defaultHub(),
         chunkBytes: Int64 = 64 << 20,
         maxRetries: Int = 4,
@@ -78,6 +80,7 @@ public actor ModelInstaller {
     ) {
         self.root = root
         self.session = session
+        self.gate = gate
         self.hub = hub
         self.chunkBytes = max(1, chunkBytes)
         self.maxRetries = maxRetries
@@ -272,6 +275,7 @@ public actor ModelInstaller {
         var attempt = 0
         while true {
             do {
+                if let gate, let url = request.url { try await gate.authorize(.modelDownload, url: url) }
                 let (data, response) = try await session.data(for: request)
                 if let http = response as? HTTPURLResponse, http.statusCode >= 500 || http.statusCode == 429,
                    attempt < maxRetries {

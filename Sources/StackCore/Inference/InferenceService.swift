@@ -43,6 +43,7 @@ public actor InferenceService {
 
     private let registry: ModelRegistry
     private let scheduler: InferenceScheduler
+    private let gate: EgressGate?
     public private(set) var policy: RoutingPolicy
     private var noticeHandler: (@Sendable (RouteNotice) -> Void)?
     private let logger = Logger(subsystem: "com.vibecockpit", category: "InferenceService")
@@ -50,14 +51,19 @@ public actor InferenceService {
     public init(
         registry: ModelRegistry,
         scheduler: InferenceScheduler = InferenceScheduler(),
-        policy: RoutingPolicy = .localFirst
+        policy: RoutingPolicy = .localFirst,
+        gate: EgressGate? = nil
     ) {
+        self.gate = gate
         self.registry = registry
         self.scheduler = scheduler
         self.policy = policy
     }
 
-    public func setPolicy(_ policy: RoutingPolicy) { self.policy = policy }
+    public func setPolicy(_ policy: RoutingPolicy) {
+        self.policy = policy
+        if let gate { Task { await gate.setPolicy(policy) } }
+    }
 
     public func setNoticeHandler(_ handler: (@Sendable (RouteNotice) -> Void)?) {
         noticeHandler = handler
@@ -167,7 +173,11 @@ public actor InferenceService {
         for id in plan {
             if let provider = await registry.provider(id: id) { candidates.append(provider) }
         }
-        guard !candidates.isEmpty else { throw InferenceError.noProvider(policy) }
+        guard !candidates.isEmpty else {
+            // Say *why* the cloud fallback wasn't used when the only thing in the way is the monthly limit.
+            if policy != .localOnly, let gate, let refusal = await gate.cloudAllowed() { throw refusal }
+            throw InferenceError.noProvider(policy)
+        }
         return candidates
     }
 
@@ -176,6 +186,7 @@ public actor InferenceService {
         options: GenerationOptions, priority: InferenceScheduler.Priority
     ) -> AsyncThrowingStream<GenerationEvent, Error> {
         let scheduler = self.scheduler
+        let gate = self.gate
         let notify = noticeHandler
         let logger = self.logger
 
@@ -193,6 +204,8 @@ public actor InferenceService {
 
                     var produced = false
                     do {
+                        // A cloud provider is skipped (with the reason) when the monthly limit is used up.
+                        if !provider.isLocal, let gate, let refusal = await gate.cloudAllowed() { throw refusal }
                         let inner: AsyncThrowingStream<GenerationEvent, Error>
                         if provider.isLocal {
                             inner = scheduler.stream(priority: priority) {
@@ -201,9 +214,18 @@ public actor InferenceService {
                         } else {
                             inner = await provider.generate(messages: messages, tools: tools, options: options)
                         }
+                        var completionChars = 0
+                        var reported: GenerationUsage?
                         for try await event in inner {
                             produced = true
+                            if case .token(let t) = event { completionChars += t.count }
+                            if case .usage(let u) = event { reported = u }
                             continuation.yield(event)
+                        }
+                        if !provider.isLocal, let gate {
+                            let used = reported.map { $0.promptTokens + $0.completionTokens }
+                                ?? Self.estimateTokens(messages) + max(1, completionChars / 3)
+                            await gate.recordCloudTokens(used)
                         }
                         continuation.finish()
                         return

@@ -25,7 +25,8 @@ public struct WebFetchTool: AgentToolHandler {
     )
 
     private let session: any WebSession
-    public init(session: any WebSession = URLSession.shared) { self.session = session }
+    private let gate: EgressGate?
+    public init(session: any WebSession = URLSession.shared, gate: EgressGate? = nil) { self.session = session; self.gate = gate }
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let rawURL) = arguments["url"],
@@ -42,6 +43,7 @@ public struct WebFetchTool: AgentToolHandler {
             forHTTPHeaderField: "User-Agent"
         )
 
+        if let gate, let url = request.url { try await gate.authorize(.webFetch, url: url) }
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode) else {
@@ -70,9 +72,11 @@ public struct WebSearchTool: AgentToolHandler {
 
     private let credentials: CredentialStore
     private let session: any WebSession
-    public init(credentials: CredentialStore, session: any WebSession = URLSession.shared) {
+    private let gate: EgressGate?
+    public init(credentials: CredentialStore, session: any WebSession = URLSession.shared, gate: EgressGate? = nil) {
         self.credentials = credentials
         self.session = session
+        self.gate = gate
     }
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
@@ -97,6 +101,7 @@ public struct WebSearchTool: AgentToolHandler {
         request.setValue(apiKey, forHTTPHeaderField: "X-Subscription-Token")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
+        if let gate, let url = request.url { try await gate.authorize(.webSearch, url: url) }
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode) else {
