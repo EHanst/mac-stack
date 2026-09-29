@@ -14,6 +14,12 @@ struct SharingCard: View {
     private var sharing: APISharingModel { services.sharing }
 
     var body: some View {
+        card
+            .task { await services.savedApprovals.reload() }
+            .onChange(of: services.approvals.pending.count) { Task { await services.savedApprovals.reload() } }
+    }
+
+    private var card: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
                 Label("Share with other apps", systemImage: "point.3.connected.trianglepath.dotted")
@@ -29,6 +35,10 @@ struct SharingCard: View {
                 if sharing.isEnabled || !sharing.clients.isEmpty {
                     MTDivider()
                     appsList
+                }
+                if !services.savedApprovals.rows.isEmpty {
+                    MTDivider()
+                    savedApprovalsList
                 }
             }
         }
@@ -86,6 +96,23 @@ struct SharingCard: View {
                     .onSubmit(add)
                 Button("Add app", action: add)
                     .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private var savedApprovalsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Always allowed").font(.mtLabelLarge).foregroundStyle(Color.mtOnSurfaceVariant)
+            ForEach(services.savedApprovals.rows) { row in
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.name).font(.mtBodyMedium).foregroundStyle(Color.mtOnSurface)
+                        Text(row.scopes.map { $0 == .toolsExec ? "run commands" : "change files" }.joined(separator: ", "))
+                            .font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                    }
+                    Spacer()
+                    Button("Ask me again") { Task { await services.savedApprovals.forget(row) } }
+                }
             }
         }
     }

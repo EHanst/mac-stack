@@ -18,6 +18,9 @@ public final class AppServices {
     public let credentials = CredentialStore()
     /// The local OpenAI-compatible API and the apps allowed to use it (off by default).
     public let sharing: APISharingModel
+    /// Questions from outside apps that want to change files or run commands.
+    public let approvals = ApprovalCenter()
+    public let savedApprovals: SavedApprovalsModel
     public private(set) var workspaceName: String?
     private let registry: ModelRegistry
     /// All text generation goes through here: routing policy, GPU scheduling, fallback.
@@ -49,7 +52,9 @@ public final class AppServices {
         self.routingPolicy = policy
         let inference = InferenceService(registry: registry, scheduler: gpuScheduler, policy: policy)
         self.inference = inference
-        let host = MCPToolHost(inference: inference)
+        let memory = ApprovalMemory()
+        self.savedApprovals = SavedApprovalsModel(memory: memory)
+        let host = MCPToolHost(inference: inference, gate: ToolGate(memory: memory, approver: approvals))
         self.mcpHost = host
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }

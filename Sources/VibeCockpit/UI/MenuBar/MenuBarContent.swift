@@ -39,6 +39,12 @@ struct MenuBarContent: View {
         if case .running(let port) = services.sharing.status {
             Text("Shared with other apps · port \(port)")
         }
+        if !services.approvals.pending.isEmpty {
+            Button("\(services.approvals.pending.count) waiting for your OK — Review…") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "main")
+            }
+        }
         Divider()
 
         Button("Open VibeCockpit") {

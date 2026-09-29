@@ -38,7 +38,14 @@ struct VibeCockpitApp: App {
             MenuBarIcon()
                 .environment(coordinator)
                 // Starts the services at launch even when no window is shown (e.g. login item).
-                .task { await services.startup(coordinator: coordinator) }
+                .task {
+                    // A question from another app must be seen even if the window was closed.
+                    services.approvals.onNeedsAttention = {
+                        NSApp.activate(ignoringOtherApps: true)
+                        NSApp.windows.first(where: { $0.title == "VibeCockpit" })?.makeKeyAndOrderFront(nil)
+                    }
+                    await services.startup(coordinator: coordinator)
+                }
         }
         .menuBarExtraStyle(.menu)
     }
