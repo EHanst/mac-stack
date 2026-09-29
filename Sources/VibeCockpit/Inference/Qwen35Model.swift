@@ -72,9 +72,7 @@ private final class Qwen35RMSNorm: Module, UnaryLayer, @unchecked Sendable {
 // MARK: - Attention
 
 final class Qwen35Attention: Module, @unchecked Sendable {
-    private let qProj: PrismPackedLinear
-    private let kProj: PrismPackedLinear
-    private let vProj: PrismPackedLinear
+    private let qkvProj: PrismFusedLinear
     private let oProj: PrismPackedLinear
     private let qNorm: Qwen35RMSNorm?
     private let kNorm: Qwen35RMSNorm?
@@ -84,18 +82,13 @@ final class Qwen35Attention: Module, @unchecked Sendable {
     let headDim: Int
     let attnOutputGate: Bool
 
-    init(weights: [String: MLXArray], prefix: String,
+    init(weights: WeightStore, prefix: String,
          config: Qwen35Config, hadamard: HadamardMeta) {
-        // Derive nHeads from actual weight shape to handle attn_output_gate doubling
-        let qScalesShape = weights["\(prefix).q_proj.scales"]?.shape ?? []
-        let qOutDim = qScalesShape.first ?? (config.numAttentionHeads * config.headDim)
         attnOutputGate = config.attnOutputGate
-        let qNominalDim = config.numAttentionHeads * config.headDim
         // With attn_output_gate, q_proj outputs 2×(nHeads×headDim); use config values for heads
         nHeads   = config.numAttentionHeads
         nKVHeads = config.numKeyValueHeads
         headDim  = config.headDim
-        _ = qOutDim; _ = qNominalDim
 
         func proj(_ name: String) -> PrismPackedLinear {
             let p = "\(prefix).\(name)"
@@ -111,9 +104,10 @@ final class Qwen35Attention: Module, @unchecked Sendable {
             return Qwen35RMSNorm(weight: w, eps: config.rmsNormEps)
         }
 
-        qProj = proj("q_proj")
-        kProj = proj("k_proj")
-        vProj = proj("v_proj")
+        qkvProj = PrismFusedLinear(
+            store: weights,
+            prefixes: ["q_proj", "k_proj", "v_proj"].map { "\(prefix).\($0)" },
+            hadamard: hadamard)
         oProj = proj("o_proj")
         qNorm = rmsNorm("q_norm")
         kNorm = rmsNorm("k_norm")
@@ -123,13 +117,14 @@ final class Qwen35Attention: Module, @unchecked Sendable {
 
     func callAsFunction(
         _ x: MLXArray, mask: MLXFast.ScaledDotProductAttentionMaskMode,
-        cache: inout (key: MLXArray, value: MLXArray)?
+        cache: Qwen35LayerCache
     ) -> MLXArray {
         let B = x.shape[0]
         let L = x.shape[1]
-        let offset = cache?.key.shape[2] ?? 0
+        let offset = cache.offset
 
-        let qRaw = qProj(x)  // [B, L, nHeads*headDim] or [B, L, 2*nHeads*headDim] if gated
+        let proj = qkvProj(x)  // one fused matmul → [q, k, v]
+        let qRaw = proj[0]  // [B, L, nHeads*headDim] or [B, L, 2*nHeads*headDim] if gated
         let qDim = nHeads * headDim
         let gate: MLXArray?
         if attnOutputGate {
@@ -138,8 +133,8 @@ final class Qwen35Attention: Module, @unchecked Sendable {
             gate = nil
         }
         var q = qRaw[0..., 0..., 0..<qDim].reshaped([B, L, nHeads, headDim]).transposed(0, 2, 1, 3)
-        var k = kProj(x).reshaped([B, L, nKVHeads, headDim]).transposed(0, 2, 1, 3)
-        var v = vProj(x).reshaped([B, L, nKVHeads, headDim]).transposed(0, 2, 1, 3)
+        var k = proj[1].reshaped([B, L, nKVHeads, headDim]).transposed(0, 2, 1, 3)
+        let v = proj[2].reshaped([B, L, nKVHeads, headDim]).transposed(0, 2, 1, 3)
 
         if let qn = qNorm { q = qn(q) }
         if let kn = kNorm { k = kn(k) }
@@ -147,31 +142,14 @@ final class Qwen35Attention: Module, @unchecked Sendable {
         q = rope(q, offset: offset)
         k = rope(k, offset: offset)
 
-        if let c = cache {
-            k = concatenated([c.key,   k], axis: 2)
-            v = concatenated([c.value, v], axis: 2)
-        }
-        cache = (key: k, value: v)
+        let (kAll, vAll) = cache.updateKV(keys: k, values: v)
 
-        let S = k.shape[2]
-        let kFull: MLXArray
-        let vFull: MLXArray
-        if nHeads != nKVHeads {
-            let g = nHeads / nKVHeads
-            kFull = broadcast(k.expandedDimensions(axis: 2),
-                              to: [B, nKVHeads, g, S, headDim])
-                .reshaped([B, nHeads, S, headDim])
-            vFull = broadcast(v.expandedDimensions(axis: 2),
-                              to: [B, nKVHeads, g, S, headDim])
-                .reshaped([B, nHeads, S, headDim])
-        } else {
-            kFull = k
-            vFull = v
-        }
-
+        // The fused SDPA kernel handles grouped-query attention natively; keys/values must
+        // NOT be tiled up to nHeads (that materialised a copy of the whole KV history per
+        // layer per token).
         let scale = 1.0 / Float(headDim).squareRoot()
         let attn = MLXFast.scaledDotProductAttention(
-            queries: q, keys: kFull, values: vFull, scale: scale, mask: mask)
+            queries: q, keys: kAll, values: vAll, scale: scale, mask: mask)
         var out = attn.transposed(0, 2, 1, 3).reshaped([B, L, qDim])
         if let g = gate { out = out * g }
         return oProj(out)
@@ -181,11 +159,10 @@ final class Qwen35Attention: Module, @unchecked Sendable {
 // MARK: - MLP
 
 final class Qwen35MLP: Module, @unchecked Sendable {
-    private let gateProj: PrismPackedLinear
-    private let upProj:   PrismPackedLinear
-    private let downProj: PrismPackedLinear
+    private let gateUpProj: PrismFusedLinear
+    private let downProj:   PrismPackedLinear
 
-    init(weights: [String: MLXArray], prefix: String, hadamard: HadamardMeta) {
+    init(weights: WeightStore, prefix: String, hadamard: HadamardMeta) {
         func proj(_ name: String) -> PrismPackedLinear {
             let p = "\(prefix).\(name)"
             let (b, s) = hadamard.rotation(for: p)
@@ -195,22 +172,24 @@ final class Qwen35MLP: Module, @unchecked Sendable {
                 biases: weights["\(p).biases"]!,
                 block: b, signs: s)
         }
-        gateProj = proj("gate_proj")
-        upProj   = proj("up_proj")
+        gateUpProj = PrismFusedLinear(
+            store: weights,
+            prefixes: ["gate_proj", "up_proj"].map { "\(prefix).\($0)" },
+            hadamard: hadamard)
         downProj = proj("down_proj")
         super.init()
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
-        downProj(MLXNN.silu(gateProj(x)) * upProj(x))
+        let gu = gateUpProj(x)
+        return downProj(MLXNN.silu(gu[0]) * gu[1])
     }
 }
 
 // MARK: - Bonsai Linear Attention (Mamba2-style SSM layer)
 
 final class BonsaiLinearAttn: Module, @unchecked Sendable {
-    private let inProjQKV: PrismPackedLinear
-    private let inProjZ:   PrismPackedLinear
+    private let inProjQKVZ: PrismFusedLinear
     private let outProj:   PrismPackedLinear
     private let inProjA:   MLXArray   // [nQH, hiddenSize] float dt projection
     private let inProjB:   MLXArray   // [nQH, hiddenSize] float (unused in fwd for now)
@@ -225,7 +204,7 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
     let dInner: Int   // nQH * headD = 6144
     let dQKV:   Int   // nQH*headD + 2*nKVH*headD = 10240
 
-    init(weights: [String: MLXArray], prefix: String,
+    init(weights: WeightStore, prefix: String,
          config: Qwen35Config, hadamard: HadamardMeta) {
         let aLogW   = weights["\(prefix).A_log"]!
         let zScales = weights["\(prefix).in_proj_z.scales"]!
@@ -249,8 +228,10 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
                 biases: weights["\(p).biases"]!,
                 block: b, signs: s)
         }
-        inProjQKV = qproj("in_proj_qkv")
-        inProjZ   = qproj("in_proj_z")
+        inProjQKVZ = PrismFusedLinear(
+            store: weights,
+            prefixes: ["in_proj_qkv", "in_proj_z"].map { "\(prefix).\($0)" },
+            hadamard: hadamard)
         outProj   = qproj("out_proj")
         inProjA   = weights["\(prefix).in_proj_a.weight"]!
         inProjB   = weights["\(prefix).in_proj_b.weight"]!
@@ -262,22 +243,19 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         super.init()
     }
 
-    func callAsFunction(
-        _ x: MLXArray,
-        mask: MLXFast.ScaledDotProductAttentionMaskMode,
-        cache: inout (key: MLXArray, value: MLXArray)?
-    ) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, cache: Qwen35LayerCache) -> MLXArray {
         let B  = x.shape[0]
         let L  = x.shape[1]
         let Dm = x.shape[2]
         let xf = x.reshaped([B * L, Dm])
 
-        // Projections
-        var qkv = inProjQKV(xf).reshaped([B, L, dQKV])
-        let z   = inProjZ(xf).reshaped([B, L, dInner])
+        // Projections (one fused matmul for qkv and z)
+        let proj = inProjQKVZ(xf)
+        var qkv = proj[0].reshaped([B, L, dQKV])
+        let z   = proj[1].reshaped([B, L, dInner])
 
-        // Causal depthwise conv1d over L
-        qkv = bonsaiCausalConv(qkv, w: conv1dW)
+        // Causal depthwise conv1d over L, continuing from the cached trailing inputs
+        qkv = bonsaiCausalConv(qkv, w: conv1dW, cache: cache)
         qkv = MLXNN.silu(qkv)
 
         // Split Q / K / V
@@ -299,37 +277,18 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let negA  = -MLX.exp(aLog)                   // [nQH]
         let logDecay = dt * negA                     // [B, L, nQH]
 
-        // Cumulative log decay
-        let logDecayCum = MLX.cumsum(logDecay, axis: 1)  // [B, L, nQH]
-
-        // Compute attention output
-        let isGenerate = (L == 1 && cache != nil)
-        let y: MLXArray
-        if isGenerate {
-            y = bonsaiGenerate(Q: Q, KE: KE, VE: VE, logDecay: logDecay,
-                               hPrev: cache!.key, B: B)
+        // Recurrence: H_t = exp(logDecay_t)·H_{t-1} + k_t v_tᵀ ;  y_t = q_t·H_t
+        let step: (y: MLXArray, h: MLXArray)
+        if L == 1 {
+            step = bonsaiGenerate(Q: Q, KE: KE, VE: VE, logDecay: logDecay,
+                                  hPrev: cache.ssmState, B: B)
         } else {
-            y = bonsaiPrefill(Q: Q, KE: KE, VE: VE, logDecayCum: logDecayCum, B: B, L: L)
+            step = bonsaiPrefill(Q: Q, KE: KE, VE: VE,
+                                 logDecayCum: MLX.cumsum(logDecay, axis: 1),
+                                 hPrev: cache.ssmState, B: B, L: L)
         }
-
-        // Update SSM state cache
-        let newH: MLXArray
-        if isGenerate {
-            let k = KE[0..., 0, 0..., 0...]  // [B, nQH, headD]
-            let v = VE[0..., 0, 0..., 0...]  // [B, nQH, headD]
-            let outer = k.expandedDimensions(axis: 3) * v.expandedDimensions(axis: 2)
-            let decay1 = MLX.exp(logDecay[0..., 0, 0...]).reshaped([B, nQH, 1, 1])
-            newH = decay1 * cache!.key + outer
-        } else {
-            let lastCum = logDecayCum[0..., L - 1, 0...]  // [B, nQH]
-            let w = MLX.exp(lastCum.expandedDimensions(axis: 1) - logDecayCum)  // [B, L, nQH]
-            let wKE = w.expandedDimensions(axis: 3) * KE  // [B, L, nQH, headD]
-            let wKEt = wKE.transposed(0, 2, 3, 1)          // [B, nQH, headD, L]
-            let VEt  = VE.transposed(0, 2, 1, 3)           // [B, nQH, L, headD]
-            newH = MLX.matmul(wKEt, VEt)                   // [B, nQH, headD, headD]
-        }
-        let placeholder = MLXArray([Float(0)])
-        cache = (key: newH, value: placeholder)
+        let y = step.y
+        cache.ssmState = step.h
 
         // Per-head norm and gate
         let yNorm = headNorm(y.reshaped([B * L * nQH, headD])).reshaped([B, L, dInner])
@@ -337,62 +296,79 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         return outProj((yNorm * gate).reshaped([B * L, dInner])).reshaped([B, L, Dm])
     }
 
+    /// Single-token step. Q, KE, VE: [B, 1, nQH, headD], logDecay: [B, 1, nQH],
+    /// hPrev: [B, nQH, headD, headD] (nil at the start of a sequence).
     private func bonsaiGenerate(Q: MLXArray, KE: MLXArray, VE: MLXArray,
-                                 logDecay: MLXArray, hPrev: MLXArray, B: Int) -> MLXArray {
-        // Q, KE, VE: [B, 1, nQH, headD], logDecay: [B, 1, nQH]
-        // hPrev: [B, nQH, headD, headD]
+                                logDecay: MLXArray, hPrev: MLXArray?,
+                                B: Int) -> (y: MLXArray, h: MLXArray) {
         let q = Q[0..., 0, 0..., 0...]    // [B, nQH, headD]
         let k = KE[0..., 0, 0..., 0...]   // [B, nQH, headD]
         let v = VE[0..., 0, 0..., 0...]   // [B, nQH, headD]
         let outer = k.expandedDimensions(axis: 3) * v.expandedDimensions(axis: 2)  // [B,nQH,headD,headD]
         let decay1 = MLX.exp(logDecay[0..., 0, 0...]).reshaped([B, nQH, 1, 1])
-        let hNew = decay1 * hPrev + outer
+        let hNew = hPrev.map { decay1 * $0 + outer } ?? outer
         let qm   = q.expandedDimensions(axis: 2)           // [B, nQH, 1, headD]
         let yh   = MLX.matmul(qm, hNew).squeezed(axis: 2)  // [B, nQH, headD]
-        return yh.reshaped([B, 1, nQH * headD])
+        return (yh.reshaped([B, 1, nQH * headD]), hNew)
     }
 
+    /// Chunked (parallel) form over L tokens, optionally continuing from `hPrev`.
+    ///
+    /// With c_t the cumulative log decay within the chunk:
+    ///   y_t  = exp(c_t)·(q_t·H₀) + Σ_{s≤t} exp(c_t − c_s)(q_t·k_s) v_s
+    ///   H_L  = exp(c_L)·H₀       + Σ_s      exp(c_L − c_s) k_s v_sᵀ
+    /// so a long prompt can be prefilled in bounded-size chunks with identical results.
     private func bonsaiPrefill(Q: MLXArray, KE: MLXArray, VE: MLXArray,
-                                logDecayCum: MLXArray, B: Int, L: Int) -> MLXArray {
+                               logDecayCum: MLXArray, hPrev: MLXArray?,
+                               B: Int, L: Int) -> (y: MLXArray, h: MLXArray) {
         // All inputs: [B, L, nQH, headD]; logDecayCum: [B, L, nQH]
         let Qh  = Q.transposed(0, 2, 1, 3)                  // [B, nQH, L, headD]
         let Kh  = KE.transposed(0, 2, 1, 3)                 // [B, nQH, L, headD]
         let Vh  = VE.transposed(0, 2, 1, 3)                 // [B, nQH, L, headD]
         let QK  = MLX.matmul(Qh, Kh.transposed(0, 1, 3, 2))  // [B, nQH, L, L]
 
-        // Log decay weight matrix [B, nQH, L_t, L_s]
+        // Log decay weight matrix [B, nQH, L_t, L_s], future positions masked to -inf
         let ldc  = logDecayCum.transposed(0, 2, 1)           // [B, nQH, L]
-        let ldcT = ldc.expandedDimensions(axis: 3)           // [B, nQH, L, 1]
-        let ldcS = ldc.expandedDimensions(axis: 2)           // [B, nQH, 1, L]
-        var logW = ldcT - ldcS                               // [B, nQH, L, L]
+        let logW = MLX.where(
+            Self.causalTriangle(L),
+            ldc.expandedDimensions(axis: 3) - ldc.expandedDimensions(axis: 2),
+            MLXArray(Float(-1e30)))
 
-        // Causal mask: set s>t to -inf
-        let causalMask = MLXArray(
-            (0..<L).flatMap { t in (0..<L).map { s in Float(s <= t ? 0.0 : -1e30) } }
-        ).reshaped([L, L])
-        logW = logW + causalMask.reshaped([1, 1, L, L])
+        var y = MLX.matmul(QK * MLX.exp(logW), Vh)           // [B, nQH, L, headD]
 
-        // Weighted scores and output
-        let scores = QK * MLX.exp(logW)                      // [B, nQH, L, L]
-        let y = MLX.matmul(scores, Vh)                       // [B, nQH, L, headD]
-        return y.transposed(0, 2, 1, 3).reshaped([B, L, nQH * headD])
+        // State after the chunk
+        let lastCum = ldc[0..., 0..., L - 1]                                  // [B, nQH]
+        let w   = MLX.exp(lastCum.expandedDimensions(axis: 2) - ldc)          // [B, nQH, L]
+        let wKt = (Kh * w.expandedDimensions(axis: 3)).transposed(0, 1, 3, 2) // [B, nQH, headD, L]
+        var newH = MLX.matmul(wKt, Vh)                                        // [B, nQH, headD, headD]
+
+        if let h0 = hPrev {
+            y = y + MLX.matmul(Qh, h0) * MLX.exp(ldc).expandedDimensions(axis: 3)
+            newH = newH + h0 * MLX.exp(lastCum).reshaped([B, nQH, 1, 1])
+        }
+        return (y.transposed(0, 2, 1, 3).reshaped([B, L, nQH * headD]), newH)
     }
 
-    private func bonsaiCausalConv(_ x: MLXArray, w: MLXArray) -> MLXArray {
-        // x: [B, L, C]; w: [C, K, 1] depthwise causal conv, kernel size K=4
+    /// Lower-triangular (including diagonal) boolean mask, built on device.
+    private static func causalTriangle(_ L: Int) -> MLXArray {
+        let idx = MLXArray(Int32(0) ..< Int32(L))
+        return idx[0..., .newAxis] .>= idx[.newAxis]
+    }
+
+    /// Depthwise causal conv (kernel K) that continues from the K-1 inputs cached from the
+    /// previous chunk / decode step instead of restarting from zero padding every call.
+    private func bonsaiCausalConv(_ x: MLXArray, w: MLXArray, cache: Qwen35LayerCache) -> MLXArray {
+        // x: [B, L, C]; w: [C, K, 1]
         let B = x.shape[0], L = x.shape[1], C = x.shape[2]
         let K = w.shape[1]
         let wk = w.reshaped([C, K])  // [C, K]
-        let padCount = B * (K - 1) * C
-        let zeros = MLXArray(Array(repeating: Float(0), count: padCount))
-                        .reshaped([B, K - 1, C]).asType(x.dtype)
-        let padded = concatenated([zeros, x], axis: 1)  // [B, L+K-1, C]
-        var out = MLXArray(Array(repeating: Float(0), count: B * L * C))
-                    .reshaped([B, L, C]).asType(x.dtype)
-        for i in 0..<K {
-            let slice = padded[0..., i..<(i + L), 0...]  // [B, L, C]
-            let wi    = wk[0..., i]                        // [C]
-            out = out + slice * wi
+        let history = cache.convState ?? MLXArray.zeros([B, K - 1, C], dtype: x.dtype)
+        let padded = concatenated([history, x], axis: 1)  // [B, L+K-1, C]
+        // Last K-1 rows; contiguous() so the state doesn't pin the whole padded chunk.
+        cache.convState = contiguous(padded[0..., L..., 0...])
+        var out = padded[0..., 0..<L, 0...] * wk[0..., 0]
+        for i in 1..<K {
+            out = out + padded[0..., i..<(i + L), 0...] * wk[0..., i]
         }
         return out
     }
@@ -407,7 +383,7 @@ final class Qwen35DecoderLayer: Module, @unchecked Sendable {
     private let inputLayerNorm:    Qwen35RMSNorm
     private let postAttnLayerNorm: Qwen35RMSNorm
 
-    init(weights: [String: MLXArray], prefix: String,
+    init(weights: WeightStore, prefix: String,
          config: Qwen35Config, hadamard: HadamardMeta,
          layerType: String = "full_attention") {
         if layerType == "linear_attention" {
@@ -435,14 +411,14 @@ final class Qwen35DecoderLayer: Module, @unchecked Sendable {
     func callAsFunction(
         _ x: MLXArray,
         mask: MLXFast.ScaledDotProductAttentionMaskMode,
-        cache: inout (key: MLXArray, value: MLXArray)?
+        cache: Qwen35LayerCache
     ) -> MLXArray {
         let normed = inputLayerNorm(x)
         let attnOut: MLXArray
         if let attn = selfAttn {
-            attnOut = attn(normed, mask: mask, cache: &cache)
+            attnOut = attn(normed, mask: mask, cache: cache)
         } else if let attn = linearAttn {
-            attnOut = attn(normed, mask: mask, cache: &cache)
+            attnOut = attn(normed, cache: cache)
         } else {
             attnOut = MLXArray.zeros(x.shape).asType(x.dtype)
         }
@@ -462,7 +438,7 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
     private let lmHeadEmbed: PrismPackedEmbedding?
     let config: Qwen35Config
 
-    init(weights: [String: MLXArray], config: Qwen35Config, hadamard: HadamardMeta) {
+    init(weights: WeightStore, config: Qwen35Config, hadamard: HadamardMeta) {
         self.config = config
         let (eb, es) = hadamard.rotation(for: "model.embed_tokens")
         embedTokens = PrismPackedEmbedding(
@@ -494,29 +470,43 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
         super.init()
     }
 
-    func callAsFunction(
-        _ tokens: MLXArray,
-        cache: inout [(key: MLXArray, value: MLXArray)?]
-    ) -> MLXArray {
+    func makeCache() -> Qwen35Cache { Qwen35Cache(layerCount: config.numHiddenLayers) }
+
+    /// Attention mask for `length` new tokens appended after `offset` cached ones.
+    static func attentionMask(length L: Int, offset: Int) -> MLXFast.ScaledDotProductAttentionMaskMode {
+        if L == 1 { return .none }
+        if offset == 0 { return .causal }
+        // Chunked prefill: new queries also attend to every cached key.
+        let total = offset + L
+        let rinds = MLXArray(Int32(0) ..< Int32(total))
+        let linds = MLXArray(Int32(offset) ..< Int32(total))
+        return .array(linds[0..., .newAxis] .>= rinds[.newAxis])
+    }
+
+    /// Run all decoder layers, updating `cache`. Returns hidden states `[B, L, hidden]`.
+    private func hidden(_ tokens: MLXArray, cache: Qwen35Cache) -> MLXArray {
         let L = tokens.shape[1]
-        let offset = cache[0]?.key.shape[2] ?? 0
-
         var h = embedTokens(tokens)
-
-        let mask: MLXFast.ScaledDotProductAttentionMaskMode
-        if L > 1 {
-            mask = .causal
-        } else {
-            mask = .none
-        }
-
+        let mask = Self.attentionMask(length: L, offset: cache.tokenCount)
         for (i, layer) in layers.enumerated() {
-            h = layer(h, mask: mask, cache: &cache[i])
+            h = layer(h, mask: mask, cache: cache.layers[i])
         }
+        cache.advance(by: L)
+        return h
+    }
 
-        h = norm(h)
-        // Extract last-token hidden state: [B, hiddenSize]
-        let lastH = h[0, h.shape[1] - 1].expandedDimensions(axis: 0)  // [1, hiddenSize]
+    /// Feed tokens through the model only to populate `cache` (no final norm / LM head).
+    /// The caller evaluates `cache.stateArrays`; the last layer's MLP output is never needed
+    /// and is therefore never computed.
+    func prefill(_ tokens: MLXArray, cache: Qwen35Cache) {
+        _ = hidden(tokens, cache: cache)
+    }
+
+    /// Logits `[1, vocab]` for the last position of `tokens` (`[1, L]`).
+    func callAsFunction(_ tokens: MLXArray, cache: Qwen35Cache) -> MLXArray {
+        let h = norm(hidden(tokens, cache: cache))
+        // Extract last-token hidden state: [1, hiddenSize]
+        let lastH = h[0, h.shape[1] - 1].expandedDimensions(axis: 0)
         if let head = lmHead {
             return head(lastH)
         } else {
