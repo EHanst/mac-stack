@@ -277,3 +277,12 @@ public actor InferenceService {
         }
     }
 }
+
+extension InferenceService {
+    /// The model a chat request would go to right now (first in the routing plan), so callers can
+    /// tailor a prompt to it. Nil when nothing can serve a request under the current policy.
+    public func plannedModel() async -> ProviderID? {
+        let request = RoutingRequest(task: .textGeneration, localContextLimit: await localContextLimit())
+        return await registry.route(policy: policy, request: request).first
+    }
+}

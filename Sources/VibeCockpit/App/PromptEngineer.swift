@@ -9,7 +9,7 @@ public struct PromptEngineer {
 
     // MARK: - Intent classification
 
-    public enum Intent: Sendable, Equatable {
+    public enum Intent: String, Sendable, Equatable {
         case generate   // write new code, add feature, create file
         case debug      // fix bug, error, crash, not working
         case refactor   // clean up, rename, restructure, simplify
@@ -34,18 +34,34 @@ public struct PromptEngineer {
                      "is this correct", "is this right", "critique"]),
     ]
 
+    /// Whole-word matching: "add" does not match "address", "move" does not match "remove".
+    /// A keyword also matches its plain inflections (test → tests, fix → fixed, create → creating).
     public static func classify(_ prompt: String) -> Intent {
-        let lower = prompt.lowercased()
+        let normalized = " " + normalize(prompt) + " "
+        let words = Set(normalized.split(separator: " ").map(String.init))
         var bestScore = 0
         var bestIntent = Intent.general
         for (intent, keywords) in patterns {
-            let score = keywords.filter { lower.contains($0) }.count
+            let score = keywords.filter { matches($0, normalized: normalized, words: words) }.count
             if score >= bestScore, score > 0 {
                 bestScore = score
                 bestIntent = intent
             }
         }
         return bestIntent
+    }
+
+    private static func normalize(_ text: String) -> String {
+        let mapped = text.lowercased().map { $0.isLetter || $0.isNumber || $0 == "'" ? $0 : " " }
+        return String(mapped).split(separator: " ").joined(separator: " ")
+    }
+
+    private static func matches(_ keyword: String, normalized: String, words: Set<String>) -> Bool {
+        if keyword.contains(" ") { return normalized.contains(" \(keyword) ") }
+        if words.contains(keyword) { return true }
+        var forms = [keyword + "s", keyword + "es", keyword + "ed", keyword + "d", keyword + "ing"]
+        if keyword.hasSuffix("e") { forms.append(String(keyword.dropLast()) + "ing") }
+        return forms.contains { words.contains($0) }
     }
 
     // MARK: - Message transformation
@@ -84,61 +100,21 @@ public struct PromptEngineer {
     /// `PromptLedger`) instead of re-deriving it each request, so earlier turns never change and
     /// the model's prefix cache stays valid. Guidance lives here rather than in the system
     /// message because the system message is fixed for the whole session.
-    public static func augmentUserTurn(_ text: String, intent: Intent, ragContext: String?) -> String {
+    ///
+    /// `recipe` is the guidance from the prompt library: `nil` means use the built-in text, an empty
+    /// string means the user switched this task's guidance off.
+    public static func augmentUserTurn(_ text: String, intent: Intent, ragContext: String?, recipe: String? = nil) -> String {
         let body = ragContext.map { "\($0)\n\nUser request: \(text)" } ?? text
         let framed = (userFraming(for: intent) ?? "") + body
-        return systemAddendum(for: intent) + "\n\n" + framed
+        let guidance = recipe ?? systemAddendum(for: intent)
+        return guidance.isEmpty ? framed : guidance + "\n\n" + framed
     }
 
     // MARK: - Per-intent content
 
+    /// The shipped guidance; the prompt library holds the user's editable copy (see `BuiltInPrompts`).
     private static func systemAddendum(for intent: Intent) -> String {
-        switch intent {
-        case .generate:
-            return """
-                When generating code:
-                - Produce complete, compilable Swift. Do not use placeholder comments like "// TODO" unless the user asked for a skeleton.
-                - Follow Swift API Design Guidelines. Prefer value types. Use async/await over completion handlers.
-                - State the file path of each new or modified file before its code block.
-                """
-        case .debug:
-            return """
-                When debugging:
-                - First identify the root cause before proposing a fix. State it explicitly.
-                - Show the minimal diff that resolves the issue — avoid unrelated changes.
-                - If the fix requires understanding runtime state you cannot see, list what information would confirm the diagnosis.
-                """
-        case .refactor:
-            return """
-                When refactoring:
-                - Preserve observable behaviour exactly. Do not change public API signatures without flagging it.
-                - Prefer small, reviewable steps over large rewrites.
-                - Call out any renamed symbols that callers outside the current file will need to update.
-                """
-        case .explain:
-            return """
-                When explaining code:
-                - Lead with the high-level purpose before implementation details.
-                - Use concrete examples where helpful.
-                - Keep jargon to a minimum; define any Swift/concurrency-specific terms you use.
-                """
-        case .test:
-            return """
-                When writing tests:
-                - Use Swift Testing (@Test, #expect) for new test files. Only use XCTest if the existing suite already uses it.
-                - Each test should cover exactly one behaviour. Name tests descriptively.
-                - Include at least one edge-case and one failure-path test per function under test.
-                """
-        case .review:
-            return """
-                When reviewing code:
-                - Categorise each finding: correctness, performance, style, or security.
-                - Be specific: quote the problematic line and explain why it is an issue.
-                - Distinguish must-fix from nice-to-have.
-                """
-        case .general:
-            return "Think step by step before responding. Be concise and specific to the codebase."
-        }
+        BuiltInPrompts.recipeText(for: intent.rawValue)
     }
 
     private static func userFraming(for intent: Intent) -> String? {

@@ -10,6 +10,7 @@ enum NavDestination: Hashable, CaseIterable {
     case chat
     case diff
     case models
+    case prompts
     case tools
     case snapshots
     case settings
@@ -19,6 +20,7 @@ enum NavDestination: Hashable, CaseIterable {
         case .chat:      return "Chat"
         case .diff:      return "Changes"
         case .models:    return "Models"
+        case .prompts:   return "Prompts"
         case .tools:     return "MCP Tools"
         case .snapshots: return "Snapshots"
         case .settings:  return "Settings"
@@ -30,6 +32,7 @@ enum NavDestination: Hashable, CaseIterable {
         case .chat:      return "bubble.left.and.bubble.right.fill"
         case .diff:      return "arrow.left.arrow.right.circle.fill"
         case .models:    return "cpu.fill"
+        case .prompts:   return "text.book.closed.fill"
         case .tools:     return "wrench.and.screwdriver.fill"
         case .snapshots: return "camera.fill"
         case .settings:  return "gearshape.fill"
@@ -126,7 +129,7 @@ struct MainLayout: View {
         .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
     }
 
-    private var primaryItems: [NavDestination] { [.chat, .diff, .models] }
+    private var primaryItems: [NavDestination] { [.chat, .diff, .prompts, .models] }
     private var secondaryItems: [NavDestination] { [.tools, .snapshots, .settings] }
 
     private func badge(for dest: NavDestination) -> Int {
@@ -213,9 +216,10 @@ struct MainLayout: View {
     @ViewBuilder
     private var contentPanel: some View {
         switch selectedDestination {
-        case .chat:      IntentPane()
+        case .chat:      IntentPane(onManagePrompts: { selectedDestination = .prompts })
         case .diff:      DiffCanvas()
         case .models:    ModelManagerView()
+        case .prompts:   PromptLibraryView()
         case .tools:     MCPToolsView()
         case .snapshots: SnapshotScrubber()
         case .settings:  SettingsView()
@@ -280,6 +284,7 @@ struct SettingsView: View {
                 pageHeader
                 generationSection
                 startupSection
+                AssistantCard()
                 CloudUsageCard()
                 SharingCard()
                 DiagnosticsCard()

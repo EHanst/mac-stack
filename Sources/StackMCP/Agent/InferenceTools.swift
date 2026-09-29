@@ -108,3 +108,47 @@ public struct EmbedTool: AgentToolHandler {
         return text(String(decoding: data, as: UTF8.self))
     }
 }
+
+// MARK: - optimize_prompt
+
+public struct OptimizePromptTool: AgentToolHandler {
+    public let toolDefinition = Tool(
+        name: "optimize_prompt",
+        description: "Rewrite a prompt so an AI model can act on it better, keeping every code block, path, quoted string and number exactly. Returns the improved prompt (or the original, with the reason, if the rewrite wasn't trustworthy).",
+        inputSchema: objectSchema([
+            "prompt": .object(["type": "string", "description": "The prompt to improve"]),
+            "mode": .object(["type": "string", "enum": .array(["improve", "expand", "adapt"]),
+                             "description": "improve (default): clearer, same length. expand: add requirements and an output format. adapt: restructure for the target model"]),
+            "target": .object(["type": "string", "description": "Optional: the model the prompt is for, e.g. \"claude\" or \"gpt-5\", so the wording suits it"]),
+            "model": .object(["type": "string", "description": "Optional model id from list_models to do the rewriting"]),
+        ], required: ["prompt"]))
+    public var requiredScope: ClientScope { .chat }
+    let inference: InferenceService
+    public init(inference: InferenceService) { self.inference = inference }
+
+    public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
+        guard case .string(let prompt) = arguments["prompt"], !prompt.isEmpty else {
+            throw AgentToolError.missingArgument("prompt")
+        }
+        var mode = OptimizeMode.improve
+        if case .string(let m) = arguments["mode"] {
+            switch m { case "expand": mode = .expand; case "adapt": mode = .adapt; default: break }
+        }
+        var target: String?
+        if case .string(let t) = arguments["target"] { target = t }
+        var requested: String?
+        if case .string(let m) = arguments["model"] { requested = m }
+        let context = OptimizeContext(
+            profile: .profile(forProviderID: target), pin: InferenceService.pin(for: requested), priority: .api)
+        var result: Optimization?
+        for try await event in PromptOptimizer(inference: inference).optimize(draft: prompt, context: context, mode: mode) {
+            if case .finished(let o) = event { result = o }
+        }
+        guard let result else { return text("The model returned nothing.") }
+        if let rejection = result.rejection { return text("\(result.original)\n\n[not changed: \(rejection.reason)]") }
+        if !result.questions.isEmpty && !result.didChange {
+            return text("\(result.original)\n\n[needs more detail: " + result.questions.joined(separator: " ") + "]")
+        }
+        return text(result.improved)
+    }
+}

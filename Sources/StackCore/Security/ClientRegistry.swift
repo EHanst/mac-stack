@@ -9,6 +9,7 @@ public enum ClientScope: String, Codable, CaseIterable, Sendable, Hashable {
     case toolsRead       // tools that only read (search code, read files)
     case toolsWrite      // tools that change files
     case toolsExec       // tools that run commands
+    case prompts         // read the saved prompts
 
     public var title: String {
         switch self {
@@ -18,6 +19,7 @@ public enum ClientScope: String, Codable, CaseIterable, Sendable, Hashable {
         case .toolsRead:   "Read your files and search code"
         case .toolsWrite:  "Change files"
         case .toolsExec:   "Run build commands"
+        case .prompts:     "Read your saved prompts"
         }
     }
 

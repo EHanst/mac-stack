@@ -50,6 +50,12 @@ public final class AppServices {
     public let externalServers = MCPClientManager()
     /// Project folders the user added; each has its own index, git and boundary.
     public let workspaces: WorkspaceManager
+    /// Saved prompts and the editable per-task guidance (recipes).
+    public let promptLibrary: PromptLibrary
+    /// Save/insert/improve prompts from the chat box.
+    public let promptStudio: PromptStudioModel
+    /// Prompts committed inside project folders (`.vibe/prompts`); usable only after the user approves each.
+    public let projectPrompts: WorkspacePromptStore
     public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
     public let diagnostics: DiagnosticsModel
     public let workspacesModel: WorkspacesModel
@@ -64,6 +70,8 @@ public final class AppServices {
     public init(defaults: UserDefaults = .standard) {
         let registry = ModelRegistry()
         self.registry = registry
+        let promptLibrary = PromptLibrary()
+        self.promptLibrary = promptLibrary
         self.defaults = defaults
         let policy = defaults.string(forKey: Self.policyKey).flatMap(RoutingPolicy.init(rawValue:)) ?? .localFirst
         self.routingPolicy = policy
@@ -80,6 +88,14 @@ public final class AppServices {
             try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get())
         }
         self.workspaces = workspaces
+        let projectPrompts = WorkspacePromptStore(roots: { await workspaces.list.map { ($0.record.name, $0.record.url) } })
+        self.projectPrompts = projectPrompts
+        self.promptStudio = PromptStudioModel(
+            library: promptLibrary, optimizer: PromptOptimizer(inference: inference),
+            plannedModel: { await inference.plannedModel() },
+            listModels: { await inference.availableModels() },
+            projectPrompts: projectPrompts,
+            defaults: defaults)
         let externals = externalServers, requestLog = self.requestLog, governor = self.governor
         self.diagnostics = DiagnosticsModel(log: requestLog) {
             try await AppServices.makeSupportBundle(
@@ -95,6 +111,8 @@ public final class AppServices {
         Task {
             await host.setExternalTools { await externals.tools() }
             await host.setProjectTools { await workspaces.tools() }
+            // Other apps see your own prompts plus project prompts you approved; nothing else.
+            await host.setPromptProvider { await promptLibrary.userPrompts() + projectPrompts.approvedPrompts() }
         }
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
@@ -121,12 +139,19 @@ public final class AppServices {
         guard !startupComplete else { return }
         startupComplete = true
         DiagnosticsCollector.shared.start()
+        promptStudio.conversationPrefix = { [weak self, weak coordinator] in
+            guard let self, let coordinator else { return [] }
+            return self.optimizerPrefix(promptCount: coordinator.state.intentHistory.filter { $0.kind == .userPrompt }.count)
+        }
+        await promptStudio.reload()
+        await promptStudio.refreshModel()
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
             let mgr = GitSnapshotManager(workspaceURL: url)
             try? await mgr.open()
             snapshotManager = mgr
             workspaceName = url.lastPathComponent
+            promptStudio.workspaceName = url.lastPathComponent
         }
 
         let dbURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -188,6 +213,8 @@ public final class AppServices {
                     await self?.notifyHealth(provider.id, health, coordinator: coordinator)
                 }
             }
+            // The list the Models page and chat header read was built before the model loaded.
+            await self?.refreshModels(coordinator: coordinator)
         }
 
         // MCP: model tools are always offered; project tools join for every project the user opened
@@ -328,11 +355,10 @@ public final class AppServices {
 
     // MARK: - Inference
 
-    public func processIntent(_ text: String, coordinator: AppCoordinator) async {
+    public func processIntent(_ text: String, coordinator: AppCoordinator, intent intentOverride: PromptEngineer.Intent? = nil) async {
         coordinator.send(.generationStarted)
 
-        let ragContext = await retrieveContext(for: text)
-        let intent = PromptEngineer.classify(text)
+        let composed = await composeUserTurn(text, intentOverride: intentOverride)
 
         let externalTools = await externalServers.tools()
         let agentTools: [AgentToolHandler] = externalTools + [
@@ -355,7 +381,7 @@ public final class AppServices {
         } else if ledger.isEmpty {
             ledger.begin(system: buildSystemPrompt())
         }
-        ledger.appendUserTurn(PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext))
+        ledger.appendUserTurn(composed.turn)
         // Budget: the smaller of ~80% of maxTokens and what this Mac can hold right now
         // (provider-reported, tokens → chars at a conservative 2.5 chars/token). Drops whole old
         // turns permanently so the prompt stays append-only afterwards.
@@ -412,6 +438,48 @@ public final class AppServices {
 
         coordinator.send(.generationFinished)
         await diagnostics.reload()
+    }
+
+    /// What a rewrite done by a model on this Mac continues from: this conversation's prompt as the
+    /// model has it (so its cached prefix stays warm), or just the system message before the first
+    /// send or when the visible chat and the ledger disagree (a cleared chat).
+    private func optimizerPrefix(promptCount: Int) -> [ChatMessage] {
+        if !ledger.isEmpty, ledger.userTurns == promptCount { return ledger.messages }
+        return [ChatMessage(role: .system, content: buildSystemPrompt())]
+    }
+
+    /// The full text of one user turn: task guidance (from the prompt library), framing, retrieved
+    /// code, then the request. `processIntent` and the "what the model sees" inspector both call this,
+    /// so what the inspector shows is what gets sent.
+    private func composeUserTurn(_ text: String, intentOverride: PromptEngineer.Intent?)
+        async -> (turn: String, intent: PromptEngineer.Intent, usedContext: Bool)
+    {
+        let ragContext = await retrieveContext(for: text)
+        let intent = intentOverride ?? PromptEngineer.classify(text)
+        let recipe = await promptLibrary.recipeText(for: intent.rawValue)
+        let turn = PromptEngineer.augmentUserTurn(text, intent: intent, ragContext: ragContext, recipe: recipe)
+        return (turn, intent, ragContext != nil)
+    }
+
+    /// Exactly what the next message would send, for the inspector.
+    public struct PromptPreview: Sendable {
+        public let system: String
+        public let userTurn: String
+        public let intent: String
+        public let usedRetrievedCode: Bool
+        /// Messages already in this conversation's prompt (they are sent again as the prefix).
+        public let earlierMessages: Int
+        public let estimatedTokens: Int
+    }
+
+    public func previewNextTurn(_ text: String, intent: PromptEngineer.Intent? = nil) async -> PromptPreview {
+        let composed = await composeUserTurn(text, intentOverride: intent)
+        let system = ledger.messages.first(where: { $0.role == .system })?.content ?? buildSystemPrompt()
+        let earlier = max(0, ledger.messages.count - (ledger.isEmpty ? 0 : 1))
+        let tokens = InferenceService.estimateTokens(ledger.messages + [ChatMessage(role: .user, content: composed.turn)])
+            + (ledger.isEmpty ? PromptTokens.estimate(system) : 0)
+        return PromptPreview(system: system, userTurn: composed.turn, intent: composed.intent.rawValue,
+                             usedRetrievedCode: composed.usedContext, earlierMessages: earlier, estimatedTokens: tokens)
     }
 
     /// A line for the chat when the answer didn't come from the local model the way you'd expect.
@@ -622,9 +690,8 @@ public final class AppServices {
     }
 
     private func buildSystemPrompt() -> String {
-        var lines = [
-            "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications.",
-        ]
+        var lines = [Self.identityPrompt(persona: defaults.object(forKey: Self.personaKey) as? Bool ?? true,
+                                         addressName: defaults.string(forKey: Self.addressNameKey))]
         if let workspace = detectWorkspaceURL() {
             lines.append("Workspace root: \(workspace.path)")
         }
@@ -636,6 +703,30 @@ public final class AppServices {
         }
         lines.append(UntrustedContent.systemPromptRule)
         return lines.joined(separator: "\n")
+    }
+
+    static let personaKey = "kokoroPersonaEnabled"
+    static let addressNameKey = "kokoroAddressName"
+
+    /// Who the model is. Kept short and fixed for the session: the system message is built once
+    /// so the local prefix cache stays valid.
+    nonisolated static func identityPrompt(persona: Bool, addressName: String?) -> String {
+        guard persona else {
+            return "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications."
+        }
+        var text = """
+            You are Kokoro, the assistant inside VibeCockpit, a macOS app for building Swift software with a local model. You are warm, upbeat and a little playful, and you enjoy a good debugging puzzle.
+
+            Substance comes first: be correct, concise and safe. If unsure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
+
+            Stack: Swift 6, SwiftUI/AppKit, actors, MLX. Never suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
+
+            Voice: short and friendly. Celebrate a green build briefly. Treat errors as puzzles. Accept praise shyly. At most one light flourish per reply, none in code, diffs, commit messages, tool arguments or file contents.
+            """
+        if let name = addressName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            text += "\nAddress the user as \(name)."
+        }
+        return text
     }
 
     private func cachedSwiftVersion() -> String? {
