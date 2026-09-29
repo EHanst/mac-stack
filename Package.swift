@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "StackCore", targets: ["StackCore"]),
         .library(name: "StackMCP", targets: ["StackMCP"]),
+        .library(name: "StackHTTP", targets: ["StackHTTP"]),
         .library(name: "VibeCockpitCore", targets: ["VibeCockpitCore"]),
         .executable(name: "VibeCockpit", targets: ["VibeCockpit"]),
     ],
@@ -18,6 +19,8 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "0.1.17"),
         // Auxiliary (non-Bonsai) models: embeddings via MLXEmbedders. See docs/plans/m0-status.md item 4.
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.31.3"),
+        // HTTP server for the opt-in OpenAI-compatible API (decision 6 in docs/plans/2026-09-28-next-phase-plan.md).
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.27.0"),
     ],
     targets: [
         // C module: sqlite-vec (compiled amalgamation)
@@ -75,11 +78,24 @@ let package = Package(
             ]
         ),
 
+        // HTTP adapter: OpenAI-compatible API on loopback. Translation types have no HTTP dependency.
+        .target(
+            name: "StackHTTP",
+            dependencies: [
+                "StackCore",
+                .product(name: "Hummingbird", package: "hummingbird"),
+            ],
+            path: "Sources/StackHTTP",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete"]),
+            ]
+        ),
+
         // App logic: state reducer, service wiring, prompt engineering. Re-exports the stack
         // so UI and tests can keep a single `import VibeCockpitCore`.
         .target(
             name: "VibeCockpitCore",
-            dependencies: ["StackCore", "StackMCP"],
+            dependencies: ["StackCore", "StackMCP", "StackHTTP"],
             path: "Sources/VibeCockpit",
             exclude: [
                 "UI/",
@@ -136,7 +152,7 @@ let package = Package(
 
         .testTarget(
             name: "VibeCockpitTests",
-            dependencies: ["VibeCockpitCore", "StackCore", "StackMCP"],
+            dependencies: ["VibeCockpitCore", "StackCore", "StackMCP", "StackHTTP"],
             path: "Tests/VibeCockpitTests"
         ),
     ]

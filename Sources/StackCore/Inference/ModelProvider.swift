@@ -54,9 +54,21 @@ public enum FinishReason: String, Sendable, Codable {
     case stop, length, toolUse, error
 }
 
+/// Tokens processed for one request (reported just before `.finished` when the provider knows them).
+public struct GenerationUsage: Sendable, Equatable {
+    public let promptTokens: Int
+    public let completionTokens: Int
+    public var totalTokens: Int { promptTokens + completionTokens }
+    public init(promptTokens: Int, completionTokens: Int) {
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+    }
+}
+
 public enum GenerationEvent: Sendable {
     case token(String)
     case toolCall(ToolCall)
+    case usage(GenerationUsage)
     case finished(FinishReason)
 }
 

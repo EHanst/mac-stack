@@ -263,7 +263,7 @@ public final class AppServices {
                         case .toolCall(let call):
                             coordinator.send(.toolCallMade(call.name, call.arguments, call.id))
                             pendingToolCalls.append(call)
-                        case .finished:
+                        case .usage, .finished:
                             break
                         }
                     }

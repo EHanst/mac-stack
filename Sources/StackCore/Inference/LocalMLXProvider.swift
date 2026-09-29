@@ -351,6 +351,7 @@ public actor LocalMLXProvider: ModelProvider {
             prefillSeconds: prefillSecs, generatedTokens: generated,
             decodeSeconds: decodeSecs, peakGPUBytes: Memory.peakMemory)
 
+        continuation.yield(.usage(GenerationUsage(promptTokens: promptIds.count, completionTokens: generated)))
         continuation.yield(.finished(finish))
         continuation.finish()
     }
