@@ -59,7 +59,9 @@ public actor MCPClientManager {
     static let maxDescriptionCharacters = 400
     static let connectTimeout: Duration = .seconds(20)
 
-    private struct Running { let process: Process; let client: Client; var tools: [ExternalMCPTool] }
+    /// `pipes` must outlive `client`: the transport holds only their raw descriptor numbers, and a
+    /// deallocated `Pipe` closes them, so a late write would land in whatever file reuses the number.
+    private struct Running { let process: Process; let client: Client; let pipes: [Pipe]; var tools: [ExternalMCPTool] }
 
     private let store: any ExternalServerStore
     private(set) var servers: [ExternalMCPServer]
@@ -161,6 +163,8 @@ public actor MCPClientManager {
         process.standardOutput = outPipe
         process.standardError = FileHandle.nullDevice
         try process.run()
+        // A write to a server that has exited must fail with EPIPE, not kill this app with SIGPIPE.
+        _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
 
         let transport = StdioTransport(
             input: FileDescriptor(rawValue: outPipe.fileHandleForReading.fileDescriptor),
@@ -173,6 +177,9 @@ public actor MCPClientManager {
             tools = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[ExternalMCPTool], Error>) in
                 let once = Once()
                 let work = Task {
+                    // Keep the pipes open until this task is done with the transport, even if `launch`
+                    // has already given up on it (timeout, early exit).
+                    defer { withExtendedLifetime((inPipe, outPipe)) {} }
                     do {
                         _ = try await client.connect(transport: transport)
                         var out: [ExternalMCPTool] = []
@@ -201,7 +208,7 @@ public actor MCPClientManager {
             throw error
         }
         process.terminationHandler = nil
-        return Running(process: process, client: client, tools: tools)
+        return Running(process: process, client: client, pipes: [inPipe, outPipe], tools: tools)
     }
 
     static func makeTool(_ t: Tool, server: ExternalMCPServer, client: Client) -> ExternalMCPTool {

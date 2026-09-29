@@ -8,16 +8,33 @@ public actor SocketConnectionTransport: Transport {
 
     public nonisolated let logger: Logger
 
-    /// The file descriptor is closed exactly once, by whoever gets there first; `shutdown`
-    /// wakes a blocked reader without ever touching a descriptor that was already closed.
+    /// The file descriptor is closed exactly once, and never while a write is using it: a write
+    /// that outlived the close would hit whatever unrelated file the OS reused the number for.
+    /// `shutdown` wakes a blocked reader without ever touching a descriptor that was already closed.
     private final class Descriptor: @unchecked Sendable {
         let fd: Int32
         private let lock = NSLock()
         private var open = true
+        private var writers = 0
+        private var closePending = false
         init(_ fd: Int32) { self.fd = fd }
         var isOpen: Bool { lock.withLock { open } }
         func shutdown() { lock.withLock { if open { Darwin.shutdown(fd, SHUT_RDWR) } } }
-        func close() { lock.withLock { if open { open = false; Darwin.close(fd) } } }
+        func close() {
+            lock.withLock {
+                guard open else { return }
+                open = false
+                if writers == 0 { Darwin.close(fd) } else { closePending = true }
+            }
+        }
+        /// Pins the descriptor for a write; false if it is already closed. Pair with `endWrite`.
+        func beginWrite() -> Bool { lock.withLock { if open { writers += 1; return true } else { return false } } }
+        func endWrite() {
+            lock.withLock {
+                writers -= 1
+                if writers == 0, closePending { closePending = false; Darwin.close(fd) }
+            }
+        }
     }
 
     private let descriptor: Descriptor
@@ -67,6 +84,8 @@ public actor SocketConnectionTransport: Transport {
         let descriptor = self.descriptor
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             writeQueue.async {
+                guard descriptor.beginWrite() else { cont.resume(throwing: UnixSocketListener.ListenerError.notConnected); return }
+                defer { descriptor.endWrite() }
                 var offset = 0
                 while offset < payload.count {
                     let n = payload.withUnsafeBytes { Darwin.write(descriptor.fd, $0.baseAddress! + offset, payload.count - offset) }
