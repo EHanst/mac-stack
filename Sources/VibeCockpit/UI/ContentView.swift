@@ -273,11 +273,13 @@ struct SettingsView: View {
     @Environment(LoginItemModel.self) private var loginItem
     @Environment(UpdatesModel.self) private var updates
     @State private var workspacePath: String = ""
+    @AppStorage(AppTheme.storageKey) private var themeChoice = AppTheme.default.rawValue
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 pageHeader
+                appearanceSection
                 generationSection
                 startupSection
                 CloudUsageCard()
@@ -302,6 +304,25 @@ struct SettingsView: View {
             Text("Configure VibeCockpit's inference, indexing and workspace behaviour.")
                 .font(.mtBodyMedium)
                 .foregroundStyle(Color.mtOnSurfaceVariant)
+        }
+    }
+
+    private var appearanceSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                Label("Appearance", systemImage: "circle.lefthalf.filled")
+                    .font(.mtTitleSmall)
+                    .foregroundStyle(Color.mtOnSurface)
+                MTDivider()
+                Picker("Theme", selection: $themeChoice) {
+                    ForEach(AppTheme.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                Text("System follows your Mac's Light or Dark setting as it changes.")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+            }
         }
     }
 

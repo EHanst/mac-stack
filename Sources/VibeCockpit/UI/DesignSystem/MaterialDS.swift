@@ -4,57 +4,58 @@ import VibeCockpitCore
 #endif
 import SwiftUI
 
-// MARK: - Material 3 Color Tokens
+// MARK: - Color tokens
 
 extension Color {
-    // Primary (indigo-violet, matching app's existing purple identity)
-    static let mtPrimary               = Color(red: 0.40, green: 0.20, blue: 0.82)
-    static let mtOnPrimary             = Color.white
-    static let mtPrimaryContainer      = Color(red: 0.88, green: 0.78, blue: 1.00)
-    static let mtOnPrimaryContainer    = Color(red: 0.10, green: 0.02, blue: 0.26)
-    static let mtPrimaryFixed          = Color(red: 0.88, green: 0.78, blue: 1.00)
+    // Aliases onto `Palette` (Theme.swift). Names are kept so call sites don't change yet.
+    // Primary (indigo-violet accent)
+    static let mtPrimary               = Palette.accent
+    static let mtOnPrimary             = Palette.onAccent
+    static let mtPrimaryContainer      = Palette.accentFill
+    static let mtOnPrimaryContainer    = Palette.onAccentFill
+    static let mtPrimaryFixed          = Palette.accentFill
 
-    // Secondary (muted purple)
-    static let mtSecondary             = Color(red: 0.37, green: 0.34, blue: 0.47)
-    static let mtOnSecondary           = Color.white
-    static let mtSecondaryContainer    = Color(red: 0.87, green: 0.84, blue: 1.00)
-    static let mtOnSecondaryContainer  = Color(red: 0.12, green: 0.10, blue: 0.23)
+    // Secondary (neutral tonal fill)
+    static let mtSecondary             = Palette.textSecondary
+    static let mtOnSecondary           = Palette.raised
+    static let mtSecondaryContainer    = Palette.accentFill
+    static let mtOnSecondaryContainer  = Palette.onAccentFill
 
-    // Tertiary (teal accent for tooling/build)
-    static let mtTertiary              = Color(red: 0.13, green: 0.43, blue: 0.49)
-    static let mtOnTertiary            = Color.white
-    static let mtTertiaryContainer     = Color(red: 0.72, green: 0.95, blue: 1.00)
-    static let mtOnTertiaryContainer   = Color(red: 0.00, green: 0.14, blue: 0.17)
+    // Tertiary (teal info accent for tooling/build)
+    static let mtTertiary              = Palette.info
+    static let mtOnTertiary            = Palette.onInfo
+    static let mtTertiaryContainer     = Palette.infoFill
+    static let mtOnTertiaryContainer   = Palette.onInfoFill
 
     // Error
-    static let mtError                 = Color(red: 0.69, green: 0.10, blue: 0.11)
-    static let mtOnError               = Color.white
-    static let mtErrorContainer        = Color(red: 1.00, green: 0.87, blue: 0.87)
-    static let mtOnErrorContainer      = Color(red: 0.27, green: 0.00, blue: 0.01)
+    static let mtError                 = Palette.danger
+    static let mtOnError               = Palette.onDanger
+    static let mtErrorContainer        = Palette.dangerFill
+    static let mtOnErrorContainer      = Palette.onDangerFill
 
-    // Surface / background (adaptive to system appearance)
-    static let mtSurface               = Color(nsColor: .windowBackgroundColor)
-    static let mtOnSurface             = Color(nsColor: .labelColor)
-    static let mtSurfaceVariant        = Color(nsColor: .controlBackgroundColor)
-    static let mtOnSurfaceVariant      = Color(nsColor: .secondaryLabelColor)
-    static let mtOutline               = Color(nsColor: .separatorColor)
-    static let mtOutlineVariant        = Color(nsColor: .quaternaryLabelColor)
+    // Surface / background
+    static let mtSurface               = Palette.raised
+    static let mtOnSurface             = Palette.text
+    static let mtSurfaceVariant        = Palette.sunken
+    static let mtOnSurfaceVariant      = Palette.textSecondary
+    static let mtOutline               = Palette.hairline
+    static let mtOutlineVariant        = Palette.hairlineSoft
 
-    // Surface containers (elevation tones, light surface tint)
-    static let mtSurfaceContainerLowest  = Color(nsColor: .underPageBackgroundColor)
-    static let mtSurfaceContainerLow     = Color(nsColor: .windowBackgroundColor)
-    static let mtSurfaceContainer        = Color(nsColor: .controlBackgroundColor)
-    static let mtSurfaceContainerHigh    = Color(nsColor: .controlBackgroundColor).opacity(0.7)
-    static let mtSurfaceContainerHighest = Color.mtPrimary.opacity(0.05)
+    // Surface containers (tonal steps instead of shadows)
+    static let mtSurfaceContainerLowest  = Palette.page
+    static let mtSurfaceContainerLow     = Palette.page
+    static let mtSurfaceContainer        = Palette.raised
+    static let mtSurfaceContainerHigh    = Palette.neutralFill
+    static let mtSurfaceContainerHighest = Palette.sunken
 
     // Inverse
-    static let mtInverseSurface    = Color(nsColor: .labelColor)
-    static let mtInverseOnSurface  = Color(nsColor: .windowBackgroundColor)
+    static let mtInverseSurface    = Palette.text
+    static let mtInverseOnSurface  = Palette.raised
 
     // Status / semantic (for health badges)
-    static let mtHealthy    = Color(red: 0.12, green: 0.58, blue: 0.24)
-    static let mtDegraded   = Color(red: 0.80, green: 0.53, blue: 0.00)
-    static let mtUnavailable = Color.mtError
+    static let mtHealthy     = Palette.success
+    static let mtDegraded    = Palette.warning
+    static let mtUnavailable = Palette.danger
 }
 
 // MARK: - Material 3 Typography Scale
