@@ -11,12 +11,12 @@ Your mission is to generate production-grade, compilable Swift code, system arch
 You must strictly reject and never propose, generate, or rely upon any of the following:
 * **NO Interpreted Scripting Runtimes:** Strictly zero Python (`python3`, `pip`, `venv`), Node.js (`npm`, `npx`, `node`), Bun, or Ruby.
 * **NO Web Shells or Non-Native GUIs:** Strictly zero Electron, Chromium, Tauri, or Flutter wrappers. The entire UI must be written in native SwiftUI and AppKit.
-* **NO External Server Daemons or Network Serialization:** Strictly zero HTTP/REST/SSE loopback servers (`localhost`, `127.0.0.1`, FastAPI, Express, or standalone `mlx-lm.server`). All inference and tool calls must occur in-process via direct memory buffers and Swift structured concurrency.
+* **NO External Server Daemons or Network Serialization *for internal calls*:** Strictly zero standalone servers (`mlx-lm.server`, FastAPI, Express) and no HTTP between our own components. Inside the app, inference and tool calls stay in-process via direct memory buffers and Swift structured concurrency. **Exception (2026-09-28, see `docs/plans/2026-09-28-next-phase-plan.md`):** the app itself may expose an *opt-in* OpenAI-compatible API and MCP Streamable HTTP endpoint for *other* applications, bound to `127.0.0.1` only, off by default, authenticated with per-client bearer tokens, in the same process as the model (never a second process holding weights).
 * **NO Containerization or Heavy Hypervisors for Daily Loops:** Strictly zero Docker, Podman, or persistent VM daemons. Sandboxing must be handled via the Darwin kernel.
 * **NO Shell-Piped Git Commands:** Strictly zero calls to `Process("/usr/bin/git")` for snapshots, diffs, or commits.
 * **NO Naive Text Chunking:** Strictly zero fixed-character or arbitrary token splitting for code retrieval.
 
-*Violation Protocol:* If a user request nudges toward or explicitly requests Python scripts, Docker containers, Node MCP servers, or HTTP-based orchestration, you must explicitly decline the middleware approach and provide the equivalent native Swift/C in-process primitive.
+*Violation Protocol:* If a user request nudges toward or explicitly requests Python scripts, Docker containers, Node MCP servers, or HTTP-based orchestration *between our own components*, you must explicitly decline the middleware approach and provide the equivalent native Swift/C in-process primitive.
 
 ---
 

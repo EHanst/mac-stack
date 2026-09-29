@@ -190,9 +190,7 @@ public final class AppServices {
             WebFetchTool(),
             WebSearchTool(credentials: credentials),
         ]
-        let toolDefs = agentTools.map { h in
-            ToolDefinition(name: h.toolDefinition.name, description: h.toolDefinition.description ?? "")
-        }
+        let toolDefs = agentTools.map { ToolDefinition($0.toolDefinition) }
 
         do {
             var continueLoop = true

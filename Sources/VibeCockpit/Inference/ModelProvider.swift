@@ -29,9 +29,15 @@ public struct Message: Sendable, Codable {
 public struct ToolDefinition: Sendable, Codable {
     public let name: String
     public let description: String
-    public let inputSchema: [String: String]
+    /// Full JSON Schema for the tool's arguments (`{"type":"object","properties":{…}}`).
+    public let inputSchema: JSONValue
 
-    public init(name: String, description: String, inputSchema: [String: String] = [:]) {
+    public static let emptySchema: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([:]),
+    ])
+
+    public init(name: String, description: String, inputSchema: JSONValue = ToolDefinition.emptySchema) {
         self.name = name
         self.description = description
         self.inputSchema = inputSchema
