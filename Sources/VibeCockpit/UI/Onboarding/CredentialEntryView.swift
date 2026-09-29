@@ -10,7 +10,7 @@ struct CredentialEntryView: View {
     @State private var providerID = ""
     @State private var apiToken = ""
     @State private var baseURL = "https://api.openai.com/v1"
-    @State private var modelID = "gpt-4o"
+    @State private var modelID = ""
     @State private var isSaving = false
     @State private var saveError: String?
 
@@ -28,7 +28,7 @@ struct CredentialEntryView: View {
                 MTTextField("https://api.openai.com/v1", text: $baseURL)
             }
 
-            fieldGroup("Model", hint: "e.g. gpt-4o, or claude-sonnet-5-5 with https://api.anthropic.com") {
+            fieldGroup("Model", hint: "The provider's model id, e.g. claude-sonnet-5-5 with https://api.anthropic.com") {
                 MTTextField("model-name", text: $modelID)
             }
 

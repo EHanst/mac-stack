@@ -283,6 +283,7 @@ struct AddModelSheet: View {
     @State private var isBusy = false
 
     // Remote fields
+    @State private var remotePreset = ""
     @State private var remoteID = ""
     @State private var remoteBaseURL = ""
     @State private var remoteModelID = ""
@@ -386,19 +387,34 @@ struct AddModelSheet: View {
 
     // MARK: Remote form
 
+    private var keyOptional: Bool { CloudPreset.preset(id: remotePreset).map { !$0.keyRequired } ?? false }
+
     private var remoteForm: some View {
         VStack(alignment: .leading, spacing: 16) {
+            fieldGroup("Provider", hint: "Pick one to fill in the address for you") {
+                Picker("Provider", selection: $remotePreset) {
+                    ForEach(CloudPreset.all) { Text($0.name).tag($0.id) }
+                    Text("Other").tag("")
+                }
+                .labelsHidden()
+                .onChange(of: remotePreset) { _, id in
+                    guard let p = CloudPreset.preset(id: id) else { return }
+                    remoteID = p.id
+                    remoteBaseURL = p.baseURL.absoluteString
+                    remoteModelID = p.suggestedModel ?? ""
+                }
+            }
             fieldGroup("Provider ID", hint: "e.g. openai, anthropic, custom") {
                 MTTextField("provider-id", text: $remoteID)
             }
             fieldGroup("Base URL", hint: "e.g. https://api.openai.com/v1") {
                 MTTextField("https://…", text: $remoteBaseURL)
             }
-            fieldGroup("Model Identifier", hint: "e.g. gpt-4o, claude-sonnet-5-5") {
+            fieldGroup("Model Identifier", hint: CloudPreset.preset(id: remotePreset)?.modelHint ?? "The provider's model id") {
                 MTTextField("model-name", text: $remoteModelID)
             }
-            fieldGroup("API Token", hint: "Stored in macOS Keychain") {
-                SecureField("sk-…", text: $remoteToken)
+            fieldGroup("API Key", hint: CloudPreset.preset(id: remotePreset)?.keyHint ?? "Stored in macOS Keychain") {
+                SecureField(keyOptional ? "optional" : "paste key", text: $remoteToken)
                     .textFieldStyle(.plain)
                     .padding(10)
                     .background(Color.mtSurfaceContainerHighest)
@@ -412,13 +428,13 @@ struct AddModelSheet: View {
                     .buttonStyle(MTOutlinedButtonStyle())
                 Button(isBusy ? "Saving…" : "Add Provider") {
                     guard let base = URL(string: remoteBaseURL),
-                          !remoteID.isEmpty, !remoteToken.isEmpty,
+                          !remoteID.isEmpty, keyOptional || !remoteToken.isEmpty,
                           !remoteModelID.trimmingCharacters(in: .whitespaces).isEmpty else { return }
                     isBusy = true
                     Task {
                         do {
                             try await services.saveCredentialAndComplete(
-                                token: remoteToken,
+                                token: remoteToken.isEmpty ? CloudPreset.placeholderKey : remoteToken,
                                 providerID: remoteID,
                                 baseURL: base,
                                 modelIdentifier: remoteModelID.trimmingCharacters(in: .whitespaces),
@@ -434,7 +450,7 @@ struct AddModelSheet: View {
                     }
                 }
                 .buttonStyle(MTFilledButtonStyle())
-                .disabled(remoteID.isEmpty || remoteBaseURL.isEmpty || remoteToken.isEmpty
+                .disabled(remoteID.isEmpty || remoteBaseURL.isEmpty || (remoteToken.isEmpty && !keyOptional)
                           || remoteModelID.trimmingCharacters(in: .whitespaces).isEmpty || isBusy)
             }
         }
