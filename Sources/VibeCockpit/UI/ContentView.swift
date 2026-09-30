@@ -319,9 +319,7 @@ struct SettingsView: View {
     private var appearanceSection: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Appearance", systemImage: "circle.lefthalf.filled")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Appearance", icon: "circle.lefthalf.filled", tint: .accent)
                 MTDivider()
                 Picker("Theme", selection: $themeChoice) {
                     ForEach(AppTheme.allCases) { Text($0.title).tag($0.rawValue) }
@@ -354,9 +352,7 @@ struct SettingsView: View {
     private var generationSection: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Inference", systemImage: "sparkles")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Inference", icon: "sparkles", tint: .accent)
                 MTDivider()
                 providerHealthRows
             }
@@ -366,9 +362,7 @@ struct SettingsView: View {
     private var startupSection: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Privacy & startup", systemImage: "lock.shield")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Privacy & startup", icon: "lock.shield", tint: .success)
                 MTDivider()
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Where your work is processed")
@@ -463,9 +457,7 @@ struct SettingsView: View {
     private var indexingSection: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Indexing", systemImage: "arrow.clockwise.circle")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Indexing", icon: "arrow.clockwise.circle", tint: .warning)
                 MTDivider()
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
@@ -493,9 +485,7 @@ struct SettingsView: View {
     private var aboutSection: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("About", systemImage: "info.circle")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("About", icon: "info.circle", tint: .info)
                 MTDivider()
                 infoRow("Platform", "macOS 26+  ·  Apple Silicon")
                 infoRow("Inference", "MLX Swift (in-process)")

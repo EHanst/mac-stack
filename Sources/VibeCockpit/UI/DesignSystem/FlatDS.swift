@@ -66,14 +66,14 @@ extension Font {
     static var mtDisplaySmall: Font { AppTypography.font(size: 36, weight: .regular) }
     static var mtHeadlineLarge: Font { AppTypography.font(size: 32, weight: .regular) }
     static var mtHeadlineMedium: Font { AppTypography.font(size: 28, weight: .regular) }
-    static var mtHeadlineSmall: Font { AppTypography.font(size: 24, weight: .regular) }
+    static var mtHeadlineSmall: Font { AppTypography.font(size: 24, weight: .semibold) }
     static var mtTitleLarge: Font { AppTypography.font(size: 22, weight: .regular) }
-    static var mtTitleMedium: Font { AppTypography.font(size: 16, weight: .medium) }
-    static var mtTitleSmall: Font { AppTypography.font(size: 14, weight: .medium) }
+    static var mtTitleMedium: Font { AppTypography.font(size: 16, weight: .semibold) }
+    static var mtTitleSmall: Font { AppTypography.font(size: 14, weight: .semibold) }
     static var mtBodyLarge: Font { AppTypography.font(size: 16, weight: .regular) }
     static var mtBodyMedium: Font { AppTypography.font(size: 14, weight: .regular) }
     static var mtBodySmall: Font { AppTypography.font(size: 12, weight: .regular) }
-    static var mtLabelLarge: Font { AppTypography.font(size: 14, weight: .medium) }
+    static var mtLabelLarge: Font { AppTypography.font(size: 14, weight: .semibold) }
     static var mtLabelMedium: Font { AppTypography.font(size: 12, weight: .medium) }
     static var mtLabelSmall: Font { AppTypography.font(size: 11, weight: .medium) }
 }
@@ -271,6 +271,69 @@ struct MTFilterChip: View {
     }
 }
 
+// MARK: - Color-block icon tile and card title
+
+/// A flat block of solid color with a white-ish glyph: the Flat 2.0 signature.
+enum MTTint {
+    case accent, info, success, warning, danger
+
+    var fill: Color {
+        switch self {
+        case .accent:  Palette.accent
+        case .info:    Palette.info
+        case .success: Palette.success
+        case .warning: Palette.warning
+        case .danger:  Palette.danger
+        }
+    }
+    var glyph: Color {
+        switch self {
+        case .accent:  Palette.onAccent
+        case .info:    Palette.onInfo
+        case .success: Palette.onSuccess
+        case .warning: Palette.onWarning
+        case .danger:  Palette.onDanger
+        }
+    }
+}
+
+struct MTIconTile: View {
+    let symbol: String
+    var tint: MTTint = .accent
+    var size: CGFloat = 28
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: size * 0.46, weight: .bold))
+            .foregroundStyle(tint.glyph)
+            .frame(width: size, height: size)
+            .background(tint.fill)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.control))
+    }
+}
+
+/// Card heading: a colored icon tile beside a bold title.
+struct MTCardTitle: View {
+    let title: String
+    let icon: String
+    var tint: MTTint = .accent
+
+    init(_ title: String, icon: String, tint: MTTint = .accent) {
+        self.title = title
+        self.icon = icon
+        self.tint = tint
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            MTIconTile(symbol: icon, tint: tint)
+            Text(title)
+                .font(.mtTitleSmall)
+                .foregroundStyle(Color.mtOnSurface)
+        }
+    }
+}
+
 // MARK: - Section header
 
 struct MTSectionHeader: View {
@@ -346,12 +409,12 @@ struct MTNavItem: View {
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.system(size: 18, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color.mtPrimary : Color.mtOnSurfaceVariant)
+                    .foregroundStyle(isSelected ? Color.mtOnPrimary : Color.mtOnSurfaceVariant)
                     .frame(width: 24)
                 Text(label)
                     .font(.mtLabelLarge)
                     .foregroundStyle(
-                        isSelected ? Color.mtOnSurface : Color.mtOnSurfaceVariant
+                        isSelected ? Color.mtOnPrimary : Color.mtOnSurfaceVariant
                     )
                 Spacer()
                 if badge > 0 {
@@ -359,19 +422,14 @@ struct MTNavItem: View {
                         .font(.mtLabelSmall)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
-                        .background(Color.mtPrimary)
-                        .foregroundStyle(Color.mtOnPrimary)
+                        .background(isSelected ? Color.mtOnPrimary : Color.mtPrimary)
+                        .foregroundStyle(isSelected ? Color.mtPrimary : Color.mtOnPrimary)
                         .clipShape(Capsule())
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(isSelected ? Color.mtSecondaryContainer : Color.clear)
-            .overlay(alignment: .leading) {
-                if isSelected {
-                    Capsule().fill(Color.mtPrimary).frame(width: 3, height: 18)
-                }
-            }
+            .background(isSelected ? Color.mtPrimary : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: Radius.control))
             .animation(Motion.quick, value: isSelected)
         }

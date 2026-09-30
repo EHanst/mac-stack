@@ -19,9 +19,7 @@ struct AssistantCard: View {
     var body: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Kokoro", systemImage: "sparkles")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Kokoro", icon: "sparkles", tint: .accent)
                 MTDivider()
                 Toggle("Friendly personality", isOn: $persona)
                 HStack {

@@ -178,9 +178,9 @@ struct IntentPane: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color.mtSurfaceContainerHighest)
-                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20)
+                    RoundedRectangle(cornerRadius: Radius.card)
                         .stroke(inputFocused ? Color.mtPrimary : Color.mtOutline, lineWidth: inputFocused ? 2 : 1)
                 )
 
@@ -444,7 +444,7 @@ private struct IntentEventBubble: View {
     @ViewBuilder
     private var assistantIcon: some View {
         ZStack {
-            Circle()
+            RoundedRectangle(cornerRadius: Radius.control)
                 .fill(iconBackground)
                 .frame(width: 28, height: 28)
             Image(systemName: iconName)

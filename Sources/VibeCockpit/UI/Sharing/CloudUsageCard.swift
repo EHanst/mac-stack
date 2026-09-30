@@ -18,9 +18,7 @@ struct CloudUsageCard: View {
     var body: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Cloud use & privacy log", systemImage: "cloud")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Cloud use & privacy log", icon: "cloud", tint: .info)
                 MTDivider()
                 limitRow
                 MTDivider()
