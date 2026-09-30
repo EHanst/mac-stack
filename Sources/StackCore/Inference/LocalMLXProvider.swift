@@ -372,7 +372,7 @@ public actor LocalMLXProvider: ModelProvider {
 
         // The store is the only owner from here on: fused projections consume their source
         // tensors, so the unfused copies are freed layer by layer during construction.
-        let store = WeightStore(weights)
+        let store = WeightStore(weights, quant: loadQuantConfig(from: modelDirectory))
         weights = [:]
         let mdl = Qwen35ForCausalLM(weights: store, config: config, hadamard: hadamard)
         let allW = mdl.allArrays()
@@ -383,7 +383,7 @@ public actor LocalMLXProvider: ModelProvider {
         weightBytes = allW.reduce(0) { $0 + $1.nbytes }
         wiredBytes = min(weightBytes + (2 << 30), GPU.maxRecommendedWorkingSetBytes() ?? Int.max)
 
-        let tok = try await AutoTokenizer.from(modelFolder: modelDirectory)
+        let tok = try await Self.loadTokenizer(from: modelDirectory)
         warmKernels(mdl)
 
         self.model     = mdl
@@ -414,6 +414,39 @@ public actor LocalMLXProvider: ModelProvider {
         return Dictionary(uniqueKeysWithValues: all.map { k, v in
             (k.hasPrefix(lmPrefix) ? String(k.dropFirst(lmPrefix.count)) : k, v)
         })
+    }
+
+    /// swift-transformers predates the `TokenizersBackend` class name that newer converters
+    /// write into `tokenizer_config.json`. Those packs still ship a plain `tokenizer.json`
+    /// (byte-level BPE, same as Qwen2), so load them through a temp folder that names the
+    /// class swift-transformers knows. Our prompts come from `ChatPromptRenderer`, so the
+    /// chat template is not needed.
+    private static func loadTokenizer(from dir: URL) async throws -> any Tokenizer {
+        let cfgURL = dir.appendingPathComponent("tokenizer_config.json")
+        guard let data = try? Data(contentsOf: cfgURL),
+              var cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              cfg["tokenizer_class"] as? String == "TokenizersBackend"
+        else { return try await AutoTokenizer.from(modelFolder: dir) }
+
+        cfg["tokenizer_class"] = "Qwen2Tokenizer"
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kokoro-tokenizer-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        for name in ["tokenizer.json", "config.json"] {
+            try FileManager.default.copyItem(at: dir.appendingPathComponent(name),
+                                             to: tmp.appendingPathComponent(name))
+        }
+        try JSONSerialization.data(withJSONObject: cfg)
+            .write(to: tmp.appendingPathComponent("tokenizer_config.json"))
+        return try await AutoTokenizer.from(modelFolder: tmp)
+    }
+
+    private func loadQuantConfig(from dir: URL) -> QuantConfig {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("config.json")),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return QuantConfig() }
+        return QuantConfig(configDict: dict)
     }
 
     private func loadConfig(from dir: URL) throws -> Qwen35Config {

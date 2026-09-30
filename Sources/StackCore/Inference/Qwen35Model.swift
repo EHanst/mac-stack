@@ -99,13 +99,7 @@ final class Qwen35Attention: Module, @unchecked Sendable {
         headDim  = config.headDim
 
         func proj(_ name: String) -> PrismPackedLinear {
-            let p = "\(prefix).\(name)"
-            let (b, s) = hadamard.rotation(for: p)
-            return PrismPackedLinear(
-                weight: weights["\(p).weight"]!,
-                scales: weights["\(p).scales"]!,
-                biases: weights["\(p).biases"]!,
-                block: b, signs: s)
+            weights.packedLinear("\(prefix).\(name)", hadamard: hadamard)
         }
         func rmsNorm(_ name: String) -> Qwen35RMSNorm? {
             guard let w = weights["\(prefix).\(name).weight"] else { return nil }
@@ -180,13 +174,7 @@ final class Qwen35MLP: Module, @unchecked Sendable {
 
     init(weights: WeightStore, prefix: String, hadamard: HadamardMeta) {
         func proj(_ name: String) -> PrismPackedLinear {
-            let p = "\(prefix).\(name)"
-            let (b, s) = hadamard.rotation(for: p)
-            return PrismPackedLinear(
-                weight: weights["\(p).weight"]!,
-                scales: weights["\(p).scales"]!,
-                biases: weights["\(p).biases"]!,
-                block: b, signs: s)
+            weights.packedLinear("\(prefix).\(name)", hadamard: hadamard)
         }
         gateUpProj = PrismFusedLinear(
             store: weights,
@@ -244,21 +232,15 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
                      "unexpected Gated DeltaNet shapes in \(prefix)")
 
         func qproj(_ name: String) -> PrismPackedLinear {
-            let p = "\(prefix).\(name)"
-            let (b, s) = hadamard.rotation(for: p)
-            return PrismPackedLinear(
-                weight: weights["\(p).weight"]!,
-                scales: weights["\(p).scales"]!,
-                biases: weights["\(p).biases"]!,
-                block: b, signs: s)
+            weights.packedLinear("\(prefix).\(name)", hadamard: hadamard)
         }
         inProjQKVZ = PrismFusedLinear(
             store: weights,
             prefixes: ["in_proj_qkv", "in_proj_z"].map { "\(prefix).\($0)" },
             hadamard: hadamard)
         outProj   = qproj("out_proj")
-        inProjA   = weights["\(prefix).in_proj_a.weight"]!
-        inProjB   = weights["\(prefix).in_proj_b.weight"]!
+        inProjA   = weights.dense("\(prefix).in_proj_a")
+        inProjB   = weights.dense("\(prefix).in_proj_b")
         aLog      = aLogW
         dtBias    = weights["\(prefix).dt_bias"]!
         conv1dW   = weights["\(prefix).conv1d.weight"]!
@@ -392,7 +374,7 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
             weight: weights["model.embed_tokens.weight"]!,
             scales: weights["model.embed_tokens.scales"]!,
             biases: weights["model.embed_tokens.biases"]!,
-            block: eb, signs: es)
+            block: eb, signs: es, spec: weights.quant.spec(for: "model.embed_tokens"))
 
         layers = (0..<config.numHiddenLayers).map { i in
             let lt = config.layerTypes.count > i ? config.layerTypes[i] : "full_attention"
@@ -408,7 +390,8 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
         if let hw = weights["lm_head.weight"], let hs = weights["lm_head.scales"],
            let hb = weights["lm_head.biases"] {
             let (hblock, hsigns) = hadamard.rotation(for: "lm_head")
-            lmHead      = PrismPackedLinear(weight: hw, scales: hs, biases: hb, block: hblock, signs: hsigns)
+            lmHead      = PrismPackedLinear(weight: hw, scales: hs, biases: hb, block: hblock, signs: hsigns,
+                                            spec: weights.quant.spec(for: "lm_head"))
             lmHeadEmbed = nil
         } else {
             lmHead      = nil
