@@ -192,6 +192,16 @@ struct InferenceServiceTests {
         #expect(try await collect(try await svc.generate(messages: msgs, tools: [])) == "local")
     }
 
+    @Test("the local context limit ignores a local model that cannot serve right now")
+    func contextLimitSkipsUnavailableLocal() async throws {
+        let probe = Probe()
+        let svc = await service([
+            StubProvider(id: "local:big", behavior: .tokens(["x"]), probe: probe, contextLimit: 0, health: .unavailable("no memory")),
+            StubProvider(id: "local:small", behavior: .tokens(["x"]), probe: probe, contextLimit: 40_000),
+        ])
+        #expect(await svc.localContextLimit() == 40_000)
+    }
+
     @Test("local requests are serialised by the scheduler")
     func localSerialised() async throws {
         let probe = Probe()
