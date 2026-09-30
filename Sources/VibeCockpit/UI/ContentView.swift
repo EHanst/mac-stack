@@ -258,6 +258,7 @@ struct SettingsView: View {
                 generationSection
                 startupSection
                 AssistantCard()
+                KnowledgeCard()
                 CloudUsageCard()
                 SharingCard()
                 DiagnosticsCard()
