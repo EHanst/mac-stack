@@ -9,6 +9,7 @@ struct BriefWorkbenchView: View {
     @Environment(AppServices.self) private var services
     @State private var newTitle = ""
     @State private var creating = false
+    @State private var improving = false
 
     private var model: BriefWorkbenchModel { services.briefs }
 
@@ -23,6 +24,7 @@ struct BriefWorkbenchView: View {
             }
         }
         .background(Color.mtSurface)
+        .sheet(isPresented: $improving) { improveSheet }
         .task { await model.reload() }
         .onDisappear { Task { await model.flush() } }
     }
@@ -79,6 +81,10 @@ struct BriefWorkbenchView: View {
                 Text(Self.title(kind)).font(.mtLabelLarge)
                 Text("~\(PromptTokens.estimate(section?.text ?? "")) tokens")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                if kind == .goal {
+                    Button("Improve") { improveGoal() }
+                        .disabled((section?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
                 Spacer()
                 Toggle("Include", isOn: Binding(get: { enabled }, set: { model.setEnabled($0, for: kind) }))
                     .toggleStyle(.switch).controlSize(.small).labelsHidden()
@@ -93,6 +99,25 @@ struct BriefWorkbenchView: View {
                 .opacity(enabled ? 1 : 0.5)
             Text(Self.hint(kind)).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
         }
+    }
+
+    private var goalText: String { model.selected?.text(of: .goal) ?? "" }
+
+    private func improveGoal() {
+        services.promptStudio.startOptimize(draft: goalText, mode: .improve, intent: PromptEngineer.Intent.general.rawValue)
+        improving = true
+    }
+
+    private var improveSheet: some View {
+        OptimizeReviewSheet(
+            studio: services.promptStudio, draft: goalText,
+            onAccept: { model.setText($0, for: .goal); services.promptStudio.dismissReview(); improving = false },
+            onExpand: { services.promptStudio.startOptimize(draft: goalText, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
+            onAskQuestions: { questions in
+                model.setText(goalText + "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), for: .goal)
+                services.promptStudio.dismissReview(); improving = false
+            },
+            onClose: { services.promptStudio.dismissReview(); improving = false })
     }
 
     static func title(_ kind: BriefSection.Kind) -> String {
