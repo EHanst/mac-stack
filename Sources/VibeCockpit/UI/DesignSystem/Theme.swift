@@ -52,7 +52,7 @@ extension NSColor {
 /// the hairline, never from shadows. The `mt*` tokens in `FlatDS.swift` alias these.
 enum Palette {
     // Surfaces: page < raised. Sunken is for wells inside a raised card.
-    static let page         = Color.adaptive(light: 0xF3F4F7, dark: 0x121317)
+    static let page         = Color.adaptive(light: 0xECEEF5, dark: 0x111216)
     static let raised       = Color.adaptive(light: 0xFFFFFF, dark: 0x1B1D23)
     static let sunken       = Color.adaptive(light: 0xE9EBF0, dark: 0x0D0E11)
     static let hairline     = Color.adaptive(light: 0x000000, dark: 0xFFFFFF, lightAlpha: 0.10, darkAlpha: 0.10)
@@ -63,7 +63,7 @@ enum Palette {
     static let textSecondary = Color.adaptive(light: 0x596070, dark: 0x9BA2B0)
 
     // Accent (indigo-violet, a touch lighter in dark for contrast)
-    static let accent         = Color.adaptive(light: 0x5B3FD1, dark: 0x9683FF)
+    static let accent         = Color.adaptive(light: 0x5B34E8, dark: 0x9A85FF)
     static let onAccent       = Color.adaptive(light: 0xFFFFFF, dark: 0x160F3A)
     static let accentFill     = Color.adaptive(light: 0xE7E2FB, dark: 0x2B2555)
     static let onAccentFill   = Color.adaptive(light: 0x241A5E, dark: 0xDDD6FF)
@@ -82,7 +82,9 @@ enum Palette {
     static let success        = Color.adaptive(light: 0x1B7F3A, dark: 0x5CCB7C)
     static let successFill    = Color.adaptive(light: 0xDDF3E3, dark: 0x163523)
     static let onSuccessFill  = Color.adaptive(light: 0x0D4A22, dark: 0xC8F0D3)
+    static let onSuccess      = Color.adaptive(light: 0xFFFFFF, dark: 0x07240F)
     static let warning        = Color.adaptive(light: 0x9A5B00, dark: 0xF0B44C)
+    static let onWarning      = Color.adaptive(light: 0xFFFFFF, dark: 0x2D1D00)
     static let warningFill    = Color.adaptive(light: 0xFBEBCF, dark: 0x3A2A0E)
     static let onWarningFill  = Color.adaptive(light: 0x5C3500, dark: 0xF8DFB0)
     static let danger         = Color.adaptive(light: 0xB3261E, dark: 0xF28B82)

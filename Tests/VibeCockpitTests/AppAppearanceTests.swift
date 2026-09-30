@@ -117,10 +117,11 @@ struct RevealCurveTests {
         #expect(RevealCurve.opacity(position: 100, index: 20, edge: 24) == 1)
     }
 
-    @Test("opacity rises monotonically across the edge, ease-out")
+    @Test("opacity rises monotonically across the edge, smoothly")
     func monotonic() {
         let values = (0...24).map { RevealCurve.opacity(position: 20 + Double($0), index: 20, edge: 24) }
         #expect(zip(values, values.dropFirst()).allSatisfy { $0 <= $1 })
-        #expect(values[12] > 0.5)   // ease-out: past halfway by the midpoint
+        #expect(abs(values[12] - 0.5) < 0.0001)   // symmetric ease-in-out: exactly half at the midpoint
+        #expect(values[3] < 0.2 && values[21] > 0.8)   // gentle at both ends
     }
 }

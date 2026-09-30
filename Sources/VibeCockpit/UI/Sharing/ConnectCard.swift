@@ -25,9 +25,7 @@ struct ConnectCard: View {
     var body: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Connect an app", systemImage: "link")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Connect an app", icon: "link", tint: .accent)
                 MTDivider()
                 if !sharing.isEnabled {
                     Text("Turn on sharing above first. Claude Desktop connects without it; Cursor, scripts and the OpenAI library need it.")
