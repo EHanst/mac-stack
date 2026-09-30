@@ -29,7 +29,7 @@ public enum BriefExporter {
 
     /// Stable per brief, so saving again replaces the file instead of adding another.
     public static func fileName(for brief: Brief) -> String {
-        "\(slug(brief.title))-\(slug(String(brief.id.prefix(8)))).md"
+        "\(slug(ContextRedactor.redact(brief.title).text))-\(slug(String(brief.id.prefix(8)))).md"
     }
 
     /// nil when the brief has no goal.

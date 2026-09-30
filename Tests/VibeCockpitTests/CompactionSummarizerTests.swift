@@ -110,4 +110,14 @@ struct CompactionSummarizerPartTests {
     func ordered() {
         #expect(CompactionSummarizer.instruction.contains("order they happened"))
     }
+
+    @Test("finalizeBody has no chat wrapper but keeps the kept-verbatim block")
+    func finalizeBody() throws {
+        let body = try #require(CompactionSummarizer.finalizeBody(
+            summary: String(repeating: "The user asked for a retry and it was added. ", count: 3),
+            mustKeep: ["Sources/Up.swift"], maxTokens: 400))
+        #expect(!body.contains("[Earlier part"))
+        #expect(body.contains("- Sources/Up.swift"))
+        #expect(CompactionSummarizer.finalizeBody(summary: "too short", mustKeep: [], maxTokens: 400) == nil)
+    }
 }

@@ -88,13 +88,19 @@ public enum CompactionSummarizer {
     ///   - part: 1 for the first summary in a conversation; part 1 is always the oldest, so the
     ///     model can answer "the first thing I asked about" from the right place.
     public static func finalize(summary raw: String, mustKeep: [String], maxTokens: Int, part: Int = 1) -> String? {
+        guard let body = finalizeBody(summary: raw, mustKeep: mustKeep, maxTokens: maxTokens) else { return nil }
+        return "\(marker)\(part) of this conversation, summarized automatically to save space. Part 1 is the oldest; everything after this message happened later.]\n\(body)"
+    }
+
+    /// The checked summary and the kept-verbatim list, without the chat-specific wrapper line.
+    public static func finalizeBody(summary raw: String, mustKeep: [String], maxTokens: Int) -> String? {
         var summary = raw
         if let close = summary.range(of: "</think>") { summary = String(summary[close.upperBound...]) }
         summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         guard summary.count >= minSummaryChars,
               InferenceService.estimateTokens([Message(role: .assistant, content: summary)]) <= maxTokens * 2
         else { return nil }
-        var text = "\(marker)\(part) of this conversation, summarized automatically to save space. Part 1 is the oldest; everything after this message happened later.]\n\(summary)"
+        var text = summary
         if !mustKeep.isEmpty {
             text += "\n\nKept word for word from those messages:\n" + mustKeep.map { "- \($0)" }.joined(separator: "\n")
         }

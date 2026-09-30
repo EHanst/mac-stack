@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import StackCore
 
 @Suite("ContextRedactor")
@@ -85,5 +86,36 @@ struct ContextRedactorTests {
         let once = ContextRedactor.redact(#"password = "hunter2hunter2""#)
         let twice = ContextRedactor.redact(once.text)
         #expect(twice.count == 0 && twice.text == once.text)
+    }
+
+    @Test("a long run of identifier characters does not make redaction slow")
+    func longRunIsFast() {
+        let start = Date()
+        _ = ContextRedactor.redact(String(repeating: "a", count: 20_000))
+        _ = ContextRedactor.redact(String(repeating: "ab.", count: 7_000))
+        #expect(Date().timeIntervalSince(start) < 2)
+    }
+
+    @Test("a long credential name still redacts its value")
+    func longNameStillRedacts() {
+        let out = ContextRedactor.redact(#"MY_SERVICE_API_KEY_PRODUCTION = "hunter2hunter2""#)
+        #expect(out.count == 1 && !out.text.contains("hunter2"))
+    }
+
+    @Test("credential names with a long tail after the keyword are still redacted")
+    func longNameTail() {
+        for sample in [#"PASSWORD_FOR_THE_STAGING_ENVIRONMENT_PRIMARY_DATABASE = "hunter2hunter2""#,
+                       #"stripe_secret_key_used_by_the_billing_worker_in_production_eu: "hunter2hunter2""#,
+                       #"very_long_prefix_of_a_service_name_before_the_DB_PASSWORD = "hunter2hunter2""#] {
+            let out = ContextRedactor.redact(sample)
+            #expect(out.count == 1 && !out.text.contains("hunter2"), Comment(rawValue: sample))
+        }
+    }
+
+    @Test("two megabytes of dense text redact in bounded time")
+    func hugeInputIsBounded() {
+        let start = Date()
+        _ = ContextRedactor.redact(String(repeating: "a", count: 200_000))
+        #expect(Date().timeIntervalSince(start) < 3)
     }
 }

@@ -321,4 +321,171 @@ struct BriefWorkbenchModelTests {
         #expect(m.selected?.text(of: .goal) == "")
         #expect(m.briefs.first { $0.id == a }?.text(of: .goal) == "only a")
     }
+
+    @Test("saveVersion records once; unchanged sections add nothing")
+    func saveVersionOnce() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.setText("Do X", for: .goal)
+        m.saveVersion(); m.saveVersion()
+        #expect(m.selected?.versions.count == 1)
+        m.setText("Do Y", for: .goal)
+        m.saveVersion()
+        #expect(m.selected?.versions.count == 2)
+    }
+
+    @Test("empty goal creates no version")
+    func noVersionWithoutGoal() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.saveVersion()
+        #expect(m.selected?.versions.isEmpty == true)
+    }
+
+    @Test("copyForClipboard returns the prompt and records a version")
+    func copyRecords() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.setText("Do X", for: .goal)
+        #expect(m.copyForClipboard(for: nil).contains("Do X"))
+        #expect(m.copyForClipboard(for: nil).contains("Do X"))
+        #expect(m.selected?.versions.count == 1)
+    }
+
+    @Test("restore brings back old text and keeps the current text as a version")
+    func restore() async {
+        let (m, store) = make()
+        await m.newBrief(title: "t")
+        m.setText("old goal", for: .goal)
+        m.saveVersion()
+        m.setText("new goal", for: .goal)
+        m.restoreVersion(0)
+        #expect(m.selected?.text(of: .goal) == "old goal")
+        #expect(m.selected?.versions.last?.sections.first { $0.kind == .goal }?.text == "new goal")
+        #expect(m.compiled?.text.contains("old goal") == true)
+        await m.flush()
+        #expect(await store.all().first?.text(of: .goal) == "old goal")
+    }
+
+    @Test("restore with a bad index does nothing; the version cap holds")
+    func restoreBoundsAndCap() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.setText("a", for: .goal)
+        m.restoreVersion(5); m.restoreVersion(-1)
+        #expect(m.selected?.text(of: .goal) == "a")
+        for i in 0..<(Brief.maxVersions + 5) { m.setText("g\(i)", for: .goal); m.saveVersion() }
+        #expect(m.selected?.versions.count == Brief.maxVersions)
+    }
+
+    private func tempRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("wbx-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    @Test("export writes the brief into the project and reports the path")
+    func export() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "Fix login")
+        m.setText("Add a retry", for: .goal)
+        let root = try tempRoot()
+        let msg = m.exportSelected(to: root)
+        #expect(msg.hasPrefix("Saved to .vibe/briefs/fix-login-"))
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".vibe/briefs").path)
+        #expect(files.count == 1)
+        #expect(m.selected?.versions.count == 1)
+        _ = m.exportSelected(to: root)
+        #expect(m.selected?.versions.count == 1)
+    }
+
+    @Test("export with no goal says so and writes nothing")
+    func exportNoGoal() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        let root = try tempRoot()
+        #expect(m.exportSelected(to: root) == "Write a goal first, then save.")
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".vibe").path))
+        #expect(m.selected?.versions.isEmpty == true)
+    }
+
+    @Test("export refuses a symlinked .vibe with the exporter's sentence")
+    func exportSymlink() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "t"); m.setText("g", for: .goal)
+        let fm = FileManager.default
+        let root = try tempRoot(), elsewhere = try tempRoot()
+        try fm.createSymbolicLink(at: root.appendingPathComponent(".vibe"), withDestinationURL: elsewhere)
+        #expect(m.exportSelected(to: root) == BriefExportError.outsideProject.errorDescription)
+        #expect(try fm.contentsOfDirectory(atPath: elsewhere.path).isEmpty)
+    }
+
+    @Test("exportRoots is empty without a context source")
+    func rootsEmpty() async {
+        let (m, _) = make()
+        #expect(await m.exportRoots().isEmpty)
+    }
+
+    @Test("a brief from the clipboard uses the text as goal and the first line as title")
+    func fromClipboard() async {
+        let (m, _) = make()
+        let made = await m.newBrief(fromClipboard: "\n  Fix the flaky upload test\nmore detail")
+        #expect(made)
+        #expect(m.selected?.title == "Fix the flaky upload test")
+        #expect(m.selected?.text(of: .goal) == "\n  Fix the flaky upload test\nmore detail")
+    }
+
+    @Test("blank clipboard makes nothing")
+    func blankClipboard() async {
+        let (m, _) = make()
+        #expect(await m.newBrief(fromClipboard: " \n\t") == false)
+        #expect(m.briefs.isEmpty)
+    }
+
+    @Test("a secret on the clipboard is kept in the brief but never compiled")
+    func clipboardSecret() async {
+        let (m, _) = make()
+        await m.newBrief(fromClipboard: "Deploy with AKIAIOSFODNN7EXAMPLE now")
+        #expect(m.selected?.text(of: .goal).contains("AKIAIOSFODNN7EXAMPLE") == true)
+        #expect(m.compiled?.text.contains("AKIAIOSFODNN7EXAMPLE") == false)
+        #expect(m.copyText(for: nil).contains("AKIAIOSFODNN7EXAMPLE") == false)
+    }
+
+    @Test("a long first line is trimmed for the title")
+    func longTitle() async {
+        let (m, _) = make()
+        await m.newBrief(fromClipboard: String(repeating: "word ", count: 40))
+        #expect((m.selected?.title.count ?? 99) <= 40)
+    }
+
+    @Test("newBrief with goal and context fills both sections")
+    func newWithContext() async {
+        let (m, _) = make()
+        await m.newBrief(title: "Continue: x", goal: "Continue this work.", context: "- Sources/A.swift")
+        #expect(m.selected?.text(of: .goal) == "Continue this work.")
+        #expect(m.selected?.text(of: .context) == "- Sources/A.swift")
+    }
+
+    @Test("restoring at the version cap keeps the restored text and the current text")
+    func restoreAtCap() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        for i in 0..<Brief.maxVersions { m.setText("g\(i)", for: .goal); m.saveVersion() }
+        m.setText("current", for: .goal)
+        m.restoreVersion(0)
+        #expect(m.selected?.text(of: .goal) == "g0")
+        #expect(m.selected?.versions.count == Brief.maxVersions)
+        #expect(m.selected?.versions.last?.sections.first { $0.kind == .goal }?.text == "current")
+    }
+
+    @Test("a secret on the clipboard is not in the title or the export file name")
+    func clipboardSecretTitle() async throws {
+        let (m, _) = make()
+        await m.newBrief(fromClipboard: "Deploy with AKIAIOSFODNN7EXAMPLE now")
+        #expect(m.selected?.title.contains("AKIAIOSFODNN7EXAMPLE") == false)
+        let root = try tempRoot()
+        _ = m.exportSelected(to: root)
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".vibe/briefs").path)
+        #expect(files.allSatisfy { !$0.lowercased().contains("akiaiosfodnn7example") })
+    }
 }

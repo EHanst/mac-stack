@@ -9,6 +9,7 @@ import SwiftUI
 struct SidecarRailView: View {
     @Environment(AppServices.self) private var services
     @State private var answers: [String: String] = [:]
+    @State private var showReply = false
 
     private var sidecar: BriefSidecarModel { services.sidecar }
     private var workbench: BriefWorkbenchModel { services.briefs }
@@ -27,6 +28,9 @@ struct SidecarRailView: View {
                     .disabled(running(brief))
                 Button { sidecar.run(.critique, brief: brief) } label: { Label("Critique", systemImage: "checklist") }
                     .disabled(running(brief))
+                Button { showReply = true } label: { Label("Paste reply", systemImage: "arrowshape.turn.up.left") }
+                    .disabled(running(brief))
+                    .help("Paste the answer you got back and get suggested changes to this brief")
                 if running(brief) {
                     ProgressView().controlSize(.small)
                     Button("Cancel") { sidecar.cancel() }
@@ -40,11 +44,30 @@ struct SidecarRailView: View {
                 if let note = result.note { Text(note).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant) }
                 ForEach(result.questions) { questionCard($0) }
                 ForEach(result.findings) { findingCard($0) }
+                ForEach(result.revisions) { revisionCard($0, briefID: brief.id) }
             }
         }
         .padding(12)
         .background(Color.mtSurfaceContainerHighest.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
+        .sheet(isPresented: $showReply) {
+            ReplySheet(title: "Paste the reply",
+                       prompt: "Paste the answer from Claude Code or ChatGPT. The sidecar suggests changes to this brief; nothing changes until you apply one.",
+                       action: "Suggest changes",
+                       onSubmit: { sidecar.run(.revise, brief: brief, reply: $0) },
+                       onClose: { showReply = false })
+        }
+    }
+
+    private func revisionCard(_ r: SidecarRevision, briefID: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(BriefWorkbenchView.title(r.section)).font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
+            BriefVersionsSheet.diffText(WordDiff.segments(from: r.original, to: r.proposed)).font(.mtBodyMedium)
+            HStack {
+                Button("Apply") { sidecar.acceptRevision(r, in: workbench) }
+                Button("Dismiss") { sidecar.dismiss(revisionID: r.id) }
+            }
+        }
     }
 
     private func questionCard(_ q: SidecarQuestion) -> some View {

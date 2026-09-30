@@ -68,4 +68,10 @@ struct BriefExporterTests {
         #expect(throws: BriefExportError.outsideProject) { try BriefExporter.export(brief(), toProjectRoot: root) }
         #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
     }
+
+    @Test("a secret in the title never reaches the file name")
+    func titleSecretNotInFileName() {
+        let name = BriefExporter.fileName(for: brief(title: "Deploy with AKIAIOSFODNN7EXAMPLE now"))
+        #expect(!name.lowercased().contains("akiaiosfodnn7example"))
+    }
 }
