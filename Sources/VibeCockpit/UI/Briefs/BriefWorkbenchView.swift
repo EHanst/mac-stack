@@ -31,7 +31,7 @@ struct BriefWorkbenchView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Picker("Brief", selection: Binding(get: { model.selectedID }, set: { model.select($0) })) {
+            Picker("Brief", selection: Binding(get: { model.selectedID }, set: { model.select($0); services.sidecar.clear() })) {
                 if model.briefs.isEmpty { Text("No briefs").tag(String?.none) }
                 ForEach(model.briefs) { Text($0.title).tag(Optional($0.id)) }
             }
@@ -40,7 +40,7 @@ struct BriefWorkbenchView: View {
             Spacer()
             Button { creating = true } label: { Label("New brief", systemImage: "plus") }
                 .buttonStyle(MTFilledButtonStyle())
-            Button(role: .destructive) { Task { await model.deleteSelected() } } label: { Image(systemName: "trash") }
+            Button(role: .destructive) { services.sidecar.clear(); Task { await model.deleteSelected() } } label: { Image(systemName: "trash") }
                 .disabled(model.selected == nil)
                 .help("Delete this brief")
         }
@@ -67,6 +67,7 @@ struct BriefWorkbenchView: View {
     private func editor(_ brief: Brief) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                SidecarRailView()
                 ForEach(BriefSection.Kind.allCases, id: \.self) { kind in
                     sectionEditor(kind, section: brief.sections.first { $0.kind == kind })
                 }
@@ -98,6 +99,18 @@ struct BriefWorkbenchView: View {
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                 .opacity(enabled ? 1 : 0.5)
+            if kind == .goal, let id = model.selectedID {
+                ForEach(services.promptStudio.lint(section?.text ?? "", intent: nil)) { finding in
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.circle").foregroundStyle(Color.mtOnSurfaceVariant)
+                        Text(finding.message).font(.mtBodySmall)
+                        if let add = finding.suggestion {
+                            Button("Add") { model.append(add.trimmingCharacters(in: .whitespacesAndNewlines), to: .goal, briefID: id) }
+                                .controlSize(.small)
+                        }
+                    }
+                }
+            }
             Text(Self.hint(kind)).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
             if kind == .context { ContextListView() }
         }

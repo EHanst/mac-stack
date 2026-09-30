@@ -58,6 +58,7 @@ public final class AppServices {
     public let promptLibrary: PromptLibrary
     /// Save/insert/improve prompts from the chat box.
     public let promptStudio: PromptStudioModel
+    public let sidecar: BriefSidecarModel
     let workspaceSearch: WorkspaceSearch
     public let briefs = BriefWorkbenchModel(store: BriefStore())
     /// Prompts committed inside project folders (`.vibe/prompts`); usable only after the user approves each.
@@ -105,6 +106,18 @@ public final class AppServices {
             listModels: { await inference.availableModels() },
             projectPrompts: projectPrompts,
             defaults: defaults)
+        let studio = self.promptStudio
+        self.sidecar = BriefSidecarModel(sidecar: BriefSidecar { messages in
+            let pin = await MainActor.run { studio.optimizerPin }
+            let stream = try await inference.generate(
+                messages: messages, tools: [], options: GenerationOptions(maxTokens: 700),
+                priority: .interactive, pin: pin)
+            var out = ""
+            for try await event in stream {
+                if case .token(let t) = event { out += t }
+            }
+            return out
+        })
         let externals = externalServers, requestLog = self.requestLog, governor = self.governor
         self.diagnostics = DiagnosticsModel(log: requestLog) {
             try await AppServices.makeSupportBundle(

@@ -73,14 +73,16 @@ struct BriefSidecarModelTests {
 
     @Test("a second run replaces the first; only the second result shows")
     func secondWins() async {
-        let wb = await workbench()
+        let wb = await workbench(goal: "first goal")
         let gate = AsyncGate()
-        let calls = CallCounter()
-        let m = model {
-            if await calls.next() == 1 { await gate.wait(); return "<questions>\n- goal: first\n</questions>" }
+        let m = BriefSidecarModel(sidecar: BriefSidecar { messages in
+            if messages.last?.content.contains("first goal") == true {
+                await gate.wait(); return "<questions>\n- goal: first\n</questions>"
+            }
             return "<questions>\n- goal: second\n</questions>"
-        }
+        })
         m.run(.interview, brief: wb.selected!)
+        wb.setText("second goal", for: .goal)
         m.run(.interview, brief: wb.selected!)
         await settle(m)
         await gate.open()
@@ -129,4 +131,3 @@ private actor AsyncGate {
     func wait() async { if opened { return }; await withCheckedContinuation { waiters.append($0) } }
     func open() { opened = true; waiters.forEach { $0.resume() }; waiters = [] }
 }
-private actor CallCounter { var n = 0; func next() -> Int { n += 1; return n } }
