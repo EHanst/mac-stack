@@ -110,7 +110,7 @@ public final class AppServices {
         self.sidecar = BriefSidecarModel(sidecar: BriefSidecar { messages in
             let pin = await MainActor.run { studio.optimizerPin }
             let stream = try await inference.generate(
-                messages: messages, tools: [], options: GenerationOptions(maxTokens: 700),
+                messages: messages, tools: [], options: BriefSidecar.generationOptions,
                 priority: .interactive, pin: pin)
             var out = ""
             for try await event in stream {

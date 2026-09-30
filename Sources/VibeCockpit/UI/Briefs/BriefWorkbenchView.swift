@@ -40,7 +40,7 @@ struct BriefWorkbenchView: View {
             Spacer()
             Button { creating = true } label: { Label("New brief", systemImage: "plus") }
                 .buttonStyle(MTFilledButtonStyle())
-            Button(role: .destructive) { services.sidecar.clear(); Task { await model.deleteSelected() } } label: { Image(systemName: "trash") }
+            Button(role: .destructive) { Task { await model.deleteSelected(); if model.selected == nil || model.selectedID != services.sidecar.briefID { services.sidecar.clear() } } } label: { Image(systemName: "trash") }
                 .disabled(model.selected == nil)
                 .help("Delete this brief")
         }
@@ -99,12 +99,13 @@ struct BriefWorkbenchView: View {
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                 .opacity(enabled ? 1 : 0.5)
-            if kind == .goal, let id = model.selectedID {
-                ForEach(services.promptStudio.lint(section?.text ?? "", intent: nil)) { finding in
+            if kind == .goal, enabled, let id = model.selectedID, let target = model.selected?.target {
+                ForEach(PromptLint.check(section?.text ?? "", context: .init(maxTokens: target.tokenBudget))) { finding in
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.circle").foregroundStyle(Color.mtOnSurfaceVariant)
                         Text(finding.message).font(.mtBodySmall)
-                        if let add = finding.suggestion {
+                        // "Name the file" has no text worth inserting; a blank "File:" would only repeat.
+                        if let add = finding.suggestion, finding.rule != .noTarget {
                             Button("Add") { model.append(add.trimmingCharacters(in: .whitespacesAndNewlines), to: .goal, briefID: id) }
                                 .controlSize(.small)
                         }

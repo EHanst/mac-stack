@@ -12,7 +12,9 @@ struct SidecarRailView: View {
 
     private var sidecar: BriefSidecarModel { services.sidecar }
     private var workbench: BriefWorkbenchModel { services.briefs }
-    private var running: Bool { if case .running = sidecar.phase { true } else { false } }
+    private func running(_ brief: Brief) -> Bool {
+        if case .running = sidecar.phase { sidecar.briefID == brief.id } else { false }
+    }
 
     var body: some View {
         if let brief = workbench.selected { content(brief) }
@@ -22,16 +24,16 @@ struct SidecarRailView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Button { sidecar.run(.interview, brief: brief) } label: { Label("Ask me", systemImage: "questionmark.bubble") }
-                    .disabled(running)
+                    .disabled(running(brief))
                 Button { sidecar.run(.critique, brief: brief) } label: { Label("Critique", systemImage: "checklist") }
-                    .disabled(running)
-                if running {
+                    .disabled(running(brief))
+                if running(brief) {
                     ProgressView().controlSize(.small)
                     Button("Cancel") { sidecar.cancel() }
                 }
                 Spacer()
             }
-            if case .failed(let message) = sidecar.phase {
+            if sidecar.briefID == brief.id, case .failed(let message) = sidecar.phase {
                 Text(message).font(.mtBodySmall).foregroundStyle(Color.mtError)
             }
             if sidecar.briefID == brief.id, let result = sidecar.result {
