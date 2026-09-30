@@ -112,8 +112,8 @@ public struct OptimizePromptTool: AgentToolHandler {
         description: "Rewrite a prompt so an AI model can act on it better, keeping every code block, path, quoted string and number exactly. Returns the improved prompt (or the original, with the reason, if the rewrite wasn't trustworthy).",
         inputSchema: objectSchema([
             "prompt": .object(["type": "string", "description": "The prompt to improve"]),
-            "mode": .object(["type": "string", "enum": .array(["improve", "expand", "adapt"]),
-                             "description": "improve (default): clearer, same length. expand: add requirements and an output format. adapt: restructure for the target model"]),
+            "mode": .object(["type": "string", "enum": .array(["improve", "expand", "adapt", "synthesize"]),
+                             "description": "improve (default): clearer, same length. expand: turn it into a detailed specification. synthesize: resolve conflicting instructions and fill in missing information. adapt: restructure for the target model"]),
             "target": .object(["type": "string", "description": "Optional: the model the prompt is for, e.g. \"claude\" or \"gpt-5\", so the wording suits it"]),
             "model": .object(["type": "string", "description": "Optional model id from list_models to do the rewriting"]),
         ], required: ["prompt"]))
@@ -127,7 +127,7 @@ public struct OptimizePromptTool: AgentToolHandler {
         }
         var mode = OptimizeMode.improve
         if case .string(let m) = arguments["mode"] {
-            switch m { case "expand": mode = .expand; case "adapt": mode = .adapt; default: break }
+            switch m { case "expand": mode = .expand; case "adapt": mode = .adapt; case "synthesize": mode = .synthesize; default: break }
         }
         var target: String?
         if case .string(let t) = arguments["target"] { target = t }

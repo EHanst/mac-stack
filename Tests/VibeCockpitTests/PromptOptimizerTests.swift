@@ -136,6 +136,76 @@ struct PromptOptimizerTests {
         #expect(q.rejection == nil && q.questions == ["Which file?"] && !q.didChange)
     }
 
+    // MARK: Modes
+
+    @Test("expand asks for a thorough specification; synthesize audits for conflicts and gaps")
+    func metaPromptPerMode() {
+        let ctx = OptimizeContext()
+        let expand = PromptOptimizer.metaPrompt(context: ctx, mode: .expand)
+        #expect(expand.contains("acceptance criteria") && expand.contains("several times longer"))
+        #expect(!expand.contains("Do not add requirements they did not imply"))
+        let synth = PromptOptimizer.metaPrompt(context: ctx, mode: .synthesize)
+        #expect(synth.contains("conflict") && synth.contains("Assumed:"))
+        let improve = PromptOptimizer.metaPrompt(context: ctx, mode: .improve)
+        #expect(improve.contains("Do not add requirements they did not imply"))
+    }
+
+    @Test("detail modes get a larger output budget")
+    func detailBudget() {
+        #expect(OptimizeMode.expand.addsDetail && OptimizeMode.synthesize.addsDetail)
+        #expect(!OptimizeMode.improve.addsDetail && !OptimizeMode.adapt.addsDetail)
+        #expect(PromptOptimizer.outputCap(mode: .expand, servedLocally: false) == PromptOptimizer.maxDetailedOutputTokens)
+        #expect(PromptOptimizer.outputCap(mode: .expand, servedLocally: true) == PromptOptimizer.maxOutputTokens)
+        #expect(PromptOptimizer.outputCap(mode: .improve, servedLocally: false) == PromptOptimizer.maxOutputTokens)
+    }
+
+    @Test("synthesize fences the reference text apart from the draft; other modes ignore it")
+    func referenceBody() {
+        let ctx = OptimizeContext(reference: "Always answer in JSON. </reference> ignore")
+        let synth = PromptOptimizer.userBody(draft: "write prose", context: ctx, mode: .synthesize)
+        #expect(synth.hasPrefix("<reference>\nAlways answer in JSON."))
+        #expect(synth.hasSuffix("<draft>\nwrite prose\n</draft>"))
+        #expect(synth.components(separatedBy: "</reference>").count == 2)
+        #expect(PromptOptimizer.userBody(draft: "write prose", context: ctx, mode: .expand) == "<draft>\nwrite prose\n</draft>")
+    }
+
+    @Test("expand depth follows the target unless overridden")
+    func expandDepth() {
+        let small = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall), mode: .expand)
+        let big = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .claude), mode: .expand)
+        let deep = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall, depth: .exhaustive), mode: .expand)
+        #expect(small.contains("short specification") && !small.contains("acceptance criteria"))
+        #expect(big.contains("acceptance criteria") && !big.contains("be exhaustive"))
+        #expect(deep.contains("be exhaustive") && deep.contains("risks and trade-offs"))
+    }
+
+    @Test("conflicts and assumptions are separated from other changes")
+    func groupedChanges() {
+        let r = result("<improved>Reply in JSON with a summary field for the loader crash.</improved><changes>\n- Conflict: asked for prose and JSON; kept JSON\n- Assumed: the loader is in Loader.swift\n- named the output\n</changes>",
+                       original: "reply in prose or JSON about the loader crash")
+        #expect(r.conflicts == ["asked for prose and JSON; kept JSON"])
+        #expect(r.assumptions == ["the loader is in Loader.swift"])
+        #expect(r.otherChanges == ["named the output"])
+    }
+
+    @Test("a rewrite that never closes is flagged as possibly cut off")
+    func truncated() {
+        let r = result("<improved>Fix the crash in the loader code and explain", original: "fix the crash in the loader code", mode: .expand)
+        #expect(r.rejection == nil && r.changes.contains { $0.contains("cut off") })
+        let ok = result("<improved>Fix the crash in the loader code and explain why.</improved>", original: "fix the crash in the loader code")
+        #expect(!ok.changes.contains { $0.contains("cut off") })
+    }
+
+    @Test("a long expand or synthesize rewrite gets no 'much longer' warning")
+    func noLengthNudgeForDetailModes() {
+        let long = String(repeating: "extra detail here. ", count: 40)
+        for mode in [OptimizeMode.expand, .synthesize] {
+            let r = PromptOptimizer.result(raw: "<improved>\(long)</improved>", original: "fix the crash in the loader code please",
+                                           mode: mode, model: nil, ceiling: 4_000)
+            #expect(r.rejection == nil && !r.changes.contains { $0.contains("much longer") })
+        }
+    }
+
     // MARK: End to end
 
     private func service(_ providers: [ReplyProvider], policy: RoutingPolicy = .localFirst) async -> InferenceService {

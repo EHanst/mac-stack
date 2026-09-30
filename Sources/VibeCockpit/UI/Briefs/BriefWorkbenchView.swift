@@ -181,6 +181,7 @@ struct BriefWorkbenchView: View {
             studio: services.promptStudio, draft: goalText,
             onAccept: { model.setText($0, for: .goal); services.promptStudio.clearUndo(); improving = false },
             onExpand: { services.promptStudio.startOptimize(draft: goalText, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
+            onSynthesize: { services.promptStudio.startOptimize(draft: goalText, mode: .synthesize, intent: PromptEngineer.Intent.general.rawValue) },
             onAskQuestions: { questions in
                 model.setText(goalText + "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), for: .goal)
                 services.promptStudio.dismissReview(); improving = false
