@@ -115,6 +115,37 @@ public final class BriefWorkbenchModel {
         return true
     }
 
+    public func setBody(_ text: String) {
+        mutate { brief in
+            if brief.body == nil { brief.inputAtEdit = brief.input }
+            brief.body = text
+            brief.updatedAt = Date()
+        }
+    }
+
+    public func rebuildFromInput() {
+        guard let brief = selected, brief.body != nil else { return }
+        snapshotIfChanged(id: brief.id)
+        mutate { $0.body = nil; $0.inputAtEdit = nil; $0.updatedAt = Date() }
+    }
+
+    public var inputChangedSinceEdit: Bool {
+        guard let brief = selected, brief.body != nil else { return false }
+        return brief.input != brief.inputAtEdit
+    }
+
+    public func appendToBody(_ text: String) {
+        mutate { brief in
+            if brief.body == nil {
+                brief.inputAtEdit = brief.input
+                brief.body = brief.input + (brief.input.isEmpty ? "" : "\n\n") + text
+            } else {
+                brief.body! += "\n\n" + text
+            }
+            brief.updatedAt = Date()
+        }
+    }
+
     public func setTarget(modelFamily: String, surface: Surface) {
         mutate { $0.target = .make(modelFamily: modelFamily, surface: surface); $0.updatedAt = Date() }
     }

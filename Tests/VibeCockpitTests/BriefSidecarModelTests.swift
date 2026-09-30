@@ -293,6 +293,18 @@ struct BriefSidecarModelTests {
         #expect(accepted == 1)
     }
 
+    @Test("sidecar answer while edited appends to body, not input")
+    func answerToEditedBody() async {
+        let wb = await workbench()
+        wb.setBody("Edited body")
+        let m = model { "<questions>\n- Which endpoint?\n</questions>" }
+        m.run(.interview, brief: wb.selected!)
+        await settle(m)
+        m.answer(m.result!.questions[0], text: "/v1/upload", in: wb)
+        #expect(wb.selected?.input == "Add retry to uploads")
+        #expect(wb.selected?.body == "Edited body\n\nQ: Which endpoint?\nA: /v1/upload")
+    }
+
 }
 
 private actor AsyncGate {
