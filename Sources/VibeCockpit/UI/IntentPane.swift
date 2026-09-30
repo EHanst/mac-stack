@@ -12,6 +12,10 @@ struct IntentPane: View {
     @State private var intentOverride: PromptEngineer.Intent?
     @State private var sheet: ComposerSheet?
     @State private var showPalette = false
+    /// When on, a draft the lint finds gaps in goes through Synthesize once before it is sent.
+    @AppStorage("checkBeforeSend") private var checkBeforeSend = false
+    /// The draft Synthesize was already offered for, so sending it again goes through.
+    @State private var checkedDraft: String?
     /// Opens the Prompts page; set by the main layout.
     var onManagePrompts: () -> Void = {}
 
@@ -56,6 +60,7 @@ struct IntentPane: View {
                 studio: studio, draft: intentText,
                 onAccept: { text in intentText = text; sheet = nil },
                 onExpand: { studio.startOptimize(draft: intentText, mode: .expand, intent: activeIntent.rawValue) },
+                onSynthesize: { synthesize() },
                 onAskQuestions: { questions in
                     intentText += "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n")
                     studio.dismissReview()
@@ -63,7 +68,10 @@ struct IntentPane: View {
                 },
                 onClose: { sheet = nil })
         case .inspect:
-            PromptInspectorSheet(draft: intentText, intent: intentOverride) { sheet = nil }
+            PromptInspectorSheet(
+                draft: intentText, intent: intentOverride,
+                onSynthesize: { asSent in synthesize(asSent: asSent) },
+                onClose: { sheet = nil })
         case .save(let text):
             SavePromptSheet(studio: studio, initialBody: text) { sheet = nil }
         case .insert(let prompt):
@@ -269,7 +277,14 @@ struct IntentPane: View {
         HStack(spacing: 8) {
             Menu {
                 Button("Improve") { improve(.improve) }
-                Button("Expand with detail") { improve(.expand) }
+                Menu("Expand with detail") {
+                    Button("Concise") { improve(.expand, depth: .concise) }
+                    Button("Standard") { improve(.expand, depth: .standard) }
+                    Button("Exhaustive") { improve(.expand, depth: .exhaustive) }
+                }
+                Button("Synthesize") { synthesize() }
+                Divider()
+                Toggle("Check before sending", isOn: $checkBeforeSend)
                 Button("Adapt for \(studio.profile.displayName)") { improve(.adapt) }
             } label: {
                 Label("Improve", systemImage: "wand.and.stars").lineLimit(1)
@@ -347,9 +362,21 @@ struct IntentPane: View {
         .help("What kind of request this is. It picks the guidance added to your message; edit that under Prompts.")
     }
 
-    private func improve(_ mode: OptimizeMode) {
+    private func improve(_ mode: OptimizeMode, depth: OptimizeDepth? = nil) {
         guard !draftIsEmpty else { return }
-        studio.startOptimize(draft: intentText, mode: mode, intent: activeIntent.rawValue)
+        studio.startOptimize(draft: intentText, mode: mode, intent: activeIntent.rawValue, depth: depth)
+        sheet = .improve
+    }
+
+    /// Checks the draft for conflicts and gaps. With no `asSent`, the message as it would be sent
+    /// (recipe guidance and retrieved code included) is looked up while the rewrite starts.
+    private func synthesize(asSent: String? = nil) {
+        guard !draftIsEmpty else { return }
+        let draft = intentText, override = intentOverride
+        studio.startOptimize(draft: draft, mode: .synthesize, intent: activeIntent.rawValue) {
+            if let asSent { return asSent }
+            return await services.previewNextTurn(draft, intent: override).userTurn
+        }
         sheet = .improve
     }
 
@@ -380,6 +407,14 @@ struct IntentPane: View {
             beginInsert(match)
             return
         }
+        if checkBeforeSend, checkedDraft != trimmed,
+           !PromptLint.check(trimmed, context: .init(maxTokens: studio.profile.maxUsefulTokens, intent: activeIntent.rawValue))
+               .filter({ $0.rule != .tooLong }).isEmpty {
+            checkedDraft = trimmed
+            synthesize()
+            return
+        }
+        checkedDraft = nil
         let override = intentOverride
         coordinator.send(.submitIntent(trimmed))
         intentText = ""

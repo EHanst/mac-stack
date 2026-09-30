@@ -22,6 +22,15 @@ final class Qwen35LayerCache: @unchecked Sendable {
     // Linear attention
     var ssmState: MLXArray?
     var convState: MLXArray?
+    /// Recurrent and conv state after the *first* of two tokens fed together (speculative verify), so a
+    /// rejected second token can be undone. Transient: not part of `stateArrays` or `fork()`.
+    var ssmStateMid: MLXArray?
+    var convStateMid: MLXArray?
+
+    /// Drop the last `n` cached key/value rows (full-attention layers); later writes overwrite them.
+    func trimKV(by n: Int) { offset -= n }
+
+    var midArrays: [MLXArray] { [ssmStateMid, convStateMid].compactMap { $0 } }
 
     /// Append `k`/`v` (shape `[B, nKV, L, D]`) and return views over everything cached so far.
     func updateKV(keys k: MLXArray, values v: MLXArray) -> (keys: MLXArray, values: MLXArray) {
@@ -79,22 +88,28 @@ final class Qwen35LayerCache: @unchecked Sendable {
 final class Qwen35Cache: @unchecked Sendable {
     let layers: [Qwen35LayerCache]
     private(set) var tokenCount: Int
+    /// The MTP head's own key/value cache, when speculative decoding is in use.
+    var mtp: Qwen35LayerCache?
 
-    init(layerCount: Int) {
+    init(layerCount: Int, withMTP: Bool = false) {
         layers = (0..<layerCount).map { _ in Qwen35LayerCache() }
         tokenCount = 0
+        mtp = withMTP ? Qwen35LayerCache() : nil
     }
 
-    private init(layers: [Qwen35LayerCache], tokenCount: Int) {
+    private init(layers: [Qwen35LayerCache], tokenCount: Int, mtp: Qwen35LayerCache?) {
         self.layers = layers
         self.tokenCount = tokenCount
+        self.mtp = mtp
     }
 
     func advance(by n: Int) { tokenCount += n }
+    func rewind(by n: Int) { tokenCount -= n }
 
-    var stateArrays: [MLXArray] { layers.flatMap(\.stateArrays) }
+    var stateArrays: [MLXArray] { layers.flatMap(\.stateArrays) + (mtp?.stateArrays ?? []) }
+    var midArrays: [MLXArray] { layers.flatMap(\.midArrays) }
 
     func fork() -> Qwen35Cache {
-        Qwen35Cache(layers: layers.map { $0.fork() }, tokenCount: tokenCount)
+        Qwen35Cache(layers: layers.map { $0.fork() }, tokenCount: tokenCount, mtp: mtp?.fork())
     }
 }

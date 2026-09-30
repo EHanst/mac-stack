@@ -255,8 +255,11 @@ public final class AppServices {
         }
 
         // Pre-warm local providers in the background so they're healthy before first use.
+        await registry.choosePreferredLocal(ramBytes: ProcessInfo.processInfo.physicalMemory)
+        // Only the preferred chat model: loading every installed one at once would not fit on small Macs.
+        let preferredID = await registry.preferredLocalID
         let localProviders = await registry.allProviders(with: .textGeneration)
-            .filter { $0.id.hasPrefix("local:") }
+            .filter { $0.id.hasPrefix("local:") && (preferredID == nil || $0.id == preferredID) }
         Task.detached(priority: .background) { [weak self] in
             for provider in localProviders {
                 if let local = provider as? LocalMLXProvider {
@@ -728,7 +731,11 @@ public final class AppServices {
         if await !registry.allProviders(with: .textGeneration).isEmpty {
             coordinator.send(.onboardingCompleted)
         }
-        let local = await registry.allProviders(with: .textGeneration).compactMap { $0 as? LocalMLXProvider }
+        await registry.choosePreferredLocal(ramBytes: ProcessInfo.processInfo.physicalMemory)
+        let preferredID = await registry.preferredLocalID
+        let local = await registry.allProviders(with: .textGeneration)
+            .filter { preferredID == nil || $0.id == preferredID }
+            .compactMap { $0 as? LocalMLXProvider }
         Task.detached(priority: .background) { [weak self] in
             for provider in local {
                 try? await provider.warmUp()

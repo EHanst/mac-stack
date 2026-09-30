@@ -99,6 +99,13 @@ extension ModelRegistry {
                 isLocal: provider.isLocal,
                 health: await provider.healthCheck()))
         }
-        return Router.plan(policy: policy, request: request, candidates: candidates)
+        var order = Router.plan(policy: policy, request: request, candidates: candidates)
+        // Among local models, the preferred one goes first (the sort is alphabetical otherwise).
+        if let first = preferredLocalID, let at = order.firstIndex(of: first),
+           let top = order.firstIndex(where: { $0.hasPrefix("local:") }), at > top {
+            order.remove(at: at)
+            order.insert(first, at: top)
+        }
+        return order
     }
 }

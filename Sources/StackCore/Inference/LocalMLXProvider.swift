@@ -23,6 +23,11 @@ public actor LocalMLXProvider: ModelProvider {
     private let logger = Logger(subsystem: "com.vibecockpit", category: "LocalMLXProvider")
 
     private var model: Qwen35ForCausalLM?
+    /// The MTP draft head, when the pack has one and `tuning.speculative` was set at load.
+    private var mtp: Qwen35MTP?
+    /// Drafts made and accepted by the most recent request that used speculative decoding.
+    public private(set) var lastSpeculation: (cycles: Int, accepted: Int)?
+    public func lastSpeculationForBench() -> (cycles: Int, accepted: Int)? { lastSpeculation }
     private var tokenizer: (any Tokenizer)?
     private var _runtime: ModelRuntime?
 
@@ -41,13 +46,17 @@ public actor LocalMLXProvider: ModelProvider {
         public var prefillChunkSize = 128
         /// MLX buffer-cache ceiling; the default is unbounded and grows with prompt length.
         public var bufferCacheLimit = 1 << 30
+        /// Draft with the model's MTP head when the pack ships one (greedy-ish requests only).
+        public var speculative = true
+        /// Draft only from the first N vocabulary entries (0 = all).
+        public var draftVocabulary = 65_536
         public init() {}
     }
     public private(set) var tuning = Tuning()
     /// Bytes of model weights once loaded (0 before load).
     public private(set) var weightBytes = 0
     /// Memory model used to keep prompts inside what this Mac can safely hold.
-    public var budget = ContextBudget.bonsai27B2bit
+    public var budget: ContextBudget
 
     /// How much prompt fits right now, given this Mac's GPU working set, what we already hold,
     /// and what other apps have left free. A Metal out-of-memory error aborts the whole
@@ -57,7 +66,14 @@ public actor LocalMLXProvider: ModelProvider {
             workingSetBytes: GPU.maxRecommendedWorkingSetBytes() ?? Int(ProcessInfo.processInfo.physicalMemory) * 3 / 4,
             weightBytes: weightBytes > 0 ? weightBytes : onDiskWeightBytes(),
             currentActiveBytes: model != nil ? Memory.activeMemory : 0,
-            availableSystemBytes: SystemMemory.availableBytes())
+            // Our own buffer cache is memory we can hand back (`Memory.clearCache`), so it counts as available.
+            availableSystemBytes: SystemMemory.availableBytes().map { $0 + (model != nil ? Memory.cacheMemory : 0) })
+    }
+
+    /// Raw inputs of `contextVerdict`, for diagnosing a budget that refuses (bytes).
+    public func budgetInputs() -> (workingSet: Int, weights: Int, active: Int, cache: Int, available: Int) {
+        (GPU.maxRecommendedWorkingSetBytes() ?? 0, weightBytes, model != nil ? Memory.activeMemory : 0,
+         Memory.cacheMemory, SystemMemory.availableBytes() ?? -1)
     }
 
     public func maxContextTokens() async -> Int? {
@@ -104,6 +120,7 @@ public actor LocalMLXProvider: ModelProvider {
     public init(id: ProviderID, modelDirectory: URL) {
         self.id = id
         self.modelDirectory = modelDirectory
+        self.budget = ContextBudget.forModel(at: modelDirectory)
     }
 
     private func _loadModel() async throws {
@@ -198,9 +215,15 @@ public actor LocalMLXProvider: ModelProvider {
         let (mdl, tok) = try await ensureLoaded()
 
         let (promptIds, boundaries) = tokenize(messages, with: tok)
-        let verdict = contextVerdict()
-        let limit: Int
+        var verdict = contextVerdict()
+        var limit: Int
         switch verdict { case .ok(let n), .belowFloor(let n): limit = n }
+        if promptIds.count > limit {
+            // Give back our cached buffers before refusing; on a tight Mac they are the difference.
+            Memory.clearCache()
+            verdict = contextVerdict()
+            switch verdict { case .ok(let n), .belowFloor(let n): limit = n }
+        }
         if promptIds.count > limit {
             throw LocalModelError.contextTooLarge(promptTokens: promptIds.count, limit: limit)
         }
@@ -254,7 +277,7 @@ public actor LocalMLXProvider: ModelProvider {
             cache = hit.payload.fork()
             consumed = hit.tokens.count
         } else {
-            cache = mdl.makeCache()
+            cache = mdl.makeCache(withMTP: mtp != nil)
         }
 
         // Prefill in chunks cut at message boundaries so a snapshot can be taken at each one.
@@ -265,7 +288,15 @@ public actor LocalMLXProvider: ModelProvider {
             from: consumed, to: lastIndex, chunk: tuning.prefillChunkSize, stops: stops) {
             try Task.checkCancellation()
             let chunk = MLXArray(Array(promptIds[range]))[.newAxis]
-            mdl.prefill(chunk, cache: cache)
+            if let mtp, let mtpCache = cache.mtp {
+                // Keep the draft head's history in step with the prompt: position i pairs the model's
+                // hidden state there with the embedding of token i+1.
+                let h = mdl.finalNorm(mdl.hiddenStates(chunk, cache: cache))
+                let next = MLXArray(Array(promptIds[(range.lowerBound + 1)...range.upperBound]))[.newAxis]
+                _ = mtp(embeds: mdl.embed(next), hidden: h, embeddingFirst: true, cache: mtpCache)
+            } else {
+                mdl.prefill(chunk, cache: cache)
+            }
             MLX.eval(cache.stateArrays)
             if options.cacheSnapshots, stops.contains(range.upperBound) {
                 let isBoundary = boundaries.contains(range.upperBound)
@@ -300,9 +331,6 @@ public actor LocalMLXProvider: ModelProvider {
         }
 
         let decodeStart = Date()
-        var y = step(MLXArray([promptIds[lastIndex]])[.newAxis])
-        MLX.asyncEval(y)
-
         var detok = StreamingDetokenizer { tok.decode(tokens: $0) }
         var filter = StopSequenceFilter(stops: options.stopSequences)
         var generated = 0
@@ -316,25 +344,119 @@ public actor LocalMLXProvider: ModelProvider {
             return r.stopped
         }
 
-        while generated < maxTokens {
-            if Task.isCancelled { finish = .stop; stopped = true; break }
+        // Speculative decoding drafts one token ahead with the MTP head and checks it with a two-token
+        // pass, which is only exact for greedy choice; near-greedy rewrite settings are treated as greedy.
+        let greedyLike = sampling.temperature <= 0.25 && sampling.presencePenalty == 0
+        // Other settings use rejection sampling against the model's own (top-k) distribution, which keeps
+        // the output distribution exactly what plain sampling would give.
+        let sampledSpec = !greedyLike && sampling.temperature > 0 && sampling.topK > 0
+        let speculate = tuning.speculative && mtp != nil && cache.mtp != nil && (greedyLike || sampledSpec)
+        lastSpeculation = nil
 
-            var following: MLXArray?
-            if generated + 1 < maxTokens {
-                let next = step(y.reshaped([1, 1]))
-                MLX.asyncEval(next)
-                following = next
+        if speculate, let mtp, let mtpCache = cache.mtp {
+            var cycles = 0, accepted = 0
+            let first = mdl.decodeStep(MLXArray([promptIds[lastIndex]])[.newAxis], cache: cache)
+            let firstToken = greedyLike
+                ? argMax(first.logits, axis: -1)
+                : TokenSampler.sample(first.logits, sampling, seen: seen)
+            if let current = seen { seen = maximum(current, TokenSampler.oneHot(firstToken, vocab: mdl.config.vocabSize)) }
+            MLX.eval([firstToken, first.hidden] + cache.stateArrays)
+            var curId = firstToken.item(Int.self)
+            var pendingHidden = first.hidden          // [1, n, H]: hidden state of each not-yet-drafted-from position
+            var pendingTokens: [Int32] = [Int32(curId)]   // the token that follows each of them; last is `curId`
+
+            while true {
+                if Task.isCancelled { finish = .stop; stopped = true; break }
+                generated += 1
+                if eosIds.contains(curId) { finish = .stop; stopped = true; break }
+                let text = detok.append(curId)
+                if !text.isEmpty, emit(text) { finish = .stop; stopped = true; break }
+                if generated >= maxTokens { break }
+
+                // Draft the token after `curId`, then run [curId, draft] through the model in one pass.
+                let n = pendingTokens.count
+                let drafted = mtp(embeds: mdl.embed(MLXArray(pendingTokens)[.newAxis]), hidden: pendingHidden,
+                                  embeddingFirst: true, cache: mtpCache)
+                let draft = argMax(mdl.draftLogits(fromNormed: drafted[0, n - 1].expandedDimensions(axis: 0),
+                                                   limit: tuning.draftVocabulary), axis: -1)
+                let verifyInput = concatenated([MLXArray([Int32(curId)]), draft.asType(.int32)], axis: 0)[.newAxis]
+                let verified = mdl.decodeStep(verifyInput, cache: cache, captureMid: true)
+                let draftId: Int
+                var picks: [Int32] = []
+                var dist0: (candidates: [Int32], probs: [Float])?
+                var dist1: (candidates: [Int32], probs: [Float])?
+                var seen1: MLXArray?
+                if greedyLike {
+                    let chosen = argMax(verified.logits, axis: -1)          // model's own pick after each of the two
+                    MLX.eval([chosen, draft, verified.hidden] + cache.stateArrays + cache.midArrays)
+                    draftId = draft.item(Int.self)
+                    picks = chosen.asArray(Int32.self)
+                } else {
+                    // `seen` already holds `curId`; the second row also sees the draft.
+                    seen1 = seen.map { maximum($0, TokenSampler.oneHot(draft, vocab: mdl.config.vocabSize)) }
+                    let rows = TokenSampler.distribution(
+                        verified.logits, sampling,
+                        seen: seen.map { concatenated([$0, seen1!], axis: 0) })          // one pass for both rows
+                    MLX.eval([rows.candidates, rows.probs, draft, verified.hidden]
+                             + cache.stateArrays + cache.midArrays)
+                    draftId = draft.item(Int.self)
+                    let ids = rows.candidates.asArray(Int32.self), ps = rows.probs.asArray(Float.self)
+                    let k = ids.count / 2
+                    dist0 = (Array(ids[0 ..< k]), Array(ps[0 ..< k]))
+                    dist1 = (Array(ids[k...]), Array(ps[k...]))
+                }
+
+                let accept: Bool
+                if greedyLike { accept = Int(picks[0]) == draftId }
+                else {
+                    accept = Float.random(in: 0 ..< 1) < SpeculativeRule.acceptanceProbability(draft: draftId, in: dist0!)
+                }
+
+                cycles += 1
+                if accept {
+                    accepted += 1
+                    generated += 1
+                    if eosIds.contains(draftId) { finish = .stop; stopped = true; break }
+                    let t = detok.append(draftId)
+                    if !t.isEmpty, emit(t) { finish = .stop; stopped = true; break }
+                    if generated >= maxTokens { break }
+                    curId = greedyLike ? Int(picks[1]) : SpeculativeRule.draw(dist1!, u: Float.random(in: 0 ..< 1))
+                    if let s1 = seen1 { seen = maximum(s1, TokenSampler.oneHot(MLXArray([Int32(curId)]), vocab: mdl.config.vocabSize)) }
+                    pendingHidden = verified.hidden
+                    pendingTokens = [Int32(draftId), Int32(curId)]
+                } else {
+                    mdl.rollBackLast(cache: cache)
+                    curId = greedyLike ? Int(picks[0]) : SpeculativeRule.draw(dist0!, excluding: draftId, u: Float.random(in: 0 ..< 1))
+                    if let s = seen { seen = maximum(s, TokenSampler.oneHot(MLXArray([Int32(curId)]), vocab: mdl.config.vocabSize)) }
+                    pendingHidden = verified.hidden[0..., 0..<1]
+                    pendingTokens = [Int32(curId)]
+                }
             }
+            lastSpeculation = (cycles, accepted)
+        } else {
+            var y = step(MLXArray([promptIds[lastIndex]])[.newAxis])
+            MLX.asyncEval(y)
 
-            let id = y.item(Int.self)  // blocks until this token is ready
-            generated += 1
-            if eosIds.contains(id) { finish = .stop; stopped = true; break }
+            while generated < maxTokens {
+                if Task.isCancelled { finish = .stop; stopped = true; break }
 
-            let text = detok.append(id)
-            if !text.isEmpty, emit(text) { finish = .stop; stopped = true; break }
+                var following: MLXArray?
+                if generated + 1 < maxTokens {
+                    let next = step(y.reshaped([1, 1]))
+                    MLX.asyncEval(next)
+                    following = next
+                }
 
-            guard let next = following else { break }
-            y = next
+                let id = y.item(Int.self)  // blocks until this token is ready
+                generated += 1
+                if eosIds.contains(id) { finish = .stop; stopped = true; break }
+
+                let text = detok.append(id)
+                if !text.isEmpty, emit(text) { finish = .stop; stopped = true; break }
+
+                guard let next = following else { break }
+                y = next
+            }
         }
 
         if !stopped {
@@ -361,7 +483,7 @@ public actor LocalMLXProvider: ModelProvider {
         continuation.finish()
     }
 
-    private func ensureLoaded() async throws -> (Qwen35ForCausalLM, any Tokenizer) {
+    func ensureLoaded() async throws -> (Qwen35ForCausalLM, any Tokenizer) {
         if let m = model, let t = tokenizer { return (m, t) }
 
         logger.info("Loading model from \(self.modelDirectory.lastPathComponent, privacy: .public)")
@@ -372,18 +494,27 @@ public actor LocalMLXProvider: ModelProvider {
 
         // The store is the only owner from here on: fused projections consume their source
         // tensors, so the unfused copies are freed layer by layer during construction.
-        let store = WeightStore(weights)
+        let store = WeightStore(weights, quant: loadQuantConfig(from: modelDirectory))
         weights = [:]
         let mdl = Qwen35ForCausalLM(weights: store, config: config, hadamard: hadamard)
         let allW = mdl.allArrays()
         MLX.eval(allW)
+        let mtpFile = modelDirectory.appendingPathComponent("optiq/mtp.safetensors")
+        if tuning.speculative, hadamard.block == 0, FileManager.default.fileExists(atPath: mtpFile.path) {
+            let head = Qwen35MTP(
+                weights: WeightStore(try Qwen35MTP.loadTensors(from: mtpFile), quant: loadQuantConfig(from: modelDirectory)),
+                config: config)
+            MLX.eval(collectModuleArrays(head))
+            mtp = head
+            logger.info("MTP head loaded")
+        }
         logger.info("Weights eval'd (\(allW.count, privacy: .public) tensors)")
 
         Memory.cacheLimit = tuning.bufferCacheLimit
         weightBytes = allW.reduce(0) { $0 + $1.nbytes }
         wiredBytes = min(weightBytes + (2 << 30), GPU.maxRecommendedWorkingSetBytes() ?? Int.max)
 
-        let tok = try await AutoTokenizer.from(modelFolder: modelDirectory)
+        let tok = try await Self.loadTokenizer(from: modelDirectory)
         warmKernels(mdl)
 
         self.model     = mdl
@@ -414,6 +545,42 @@ public actor LocalMLXProvider: ModelProvider {
         return Dictionary(uniqueKeysWithValues: all.map { k, v in
             (k.hasPrefix(lmPrefix) ? String(k.dropFirst(lmPrefix.count)) : k, v)
         })
+    }
+
+    /// swift-transformers predates the `TokenizersBackend` class name that newer converters
+    /// write into `tokenizer_config.json`. Those packs still ship a plain `tokenizer.json`
+    /// (byte-level BPE, same as Qwen2), so load them through a temp folder that names the
+    /// class swift-transformers knows. Our prompts come from `ChatPromptRenderer`, so the
+    /// chat template is not needed.
+    private static func loadTokenizer(from dir: URL) async throws -> any Tokenizer {
+        let cfgURL = dir.appendingPathComponent("tokenizer_config.json")
+        guard let data = try? Data(contentsOf: cfgURL),
+              var cfg = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              cfg["tokenizer_class"] as? String == "TokenizersBackend"
+        else { return try await AutoTokenizer.from(modelFolder: dir) }
+
+        cfg["tokenizer_class"] = "Qwen2Tokenizer"
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kokoro-tokenizer-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        for name in ["tokenizer.json", "config.json"] {
+            try FileManager.default.copyItem(at: dir.appendingPathComponent(name),
+                                             to: tmp.appendingPathComponent(name))
+        }
+        try JSONSerialization.data(withJSONObject: cfg)
+            .write(to: tmp.appendingPathComponent("tokenizer_config.json"))
+        return try await AutoTokenizer.from(modelFolder: tmp)
+    }
+
+    func loadQuantConfigForProbe() -> QuantConfig { loadQuantConfig(from: modelDirectory) }
+    func loadConfigForProbe() throws -> Qwen35Config { try loadConfig(from: modelDirectory) }
+
+    private func loadQuantConfig(from dir: URL) -> QuantConfig {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("config.json")),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return QuantConfig() }
+        return QuantConfig(configDict: dict)
     }
 
     private func loadConfig(from dir: URL) throws -> Qwen35Config {

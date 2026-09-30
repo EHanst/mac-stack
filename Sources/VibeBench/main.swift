@@ -6,6 +6,8 @@ import StackCore
 import MLXNN
 
 // vibe-bench — performance harness for the local model.
+//   swift run -c release VibeBench --optimizer-eval [--modes improve,synthesize] [--repeats 1] [--eval-json out.json] [--sampling rewrite|chat|greedy] [--no-repair]
+//   swift run -c release VibeBench --mtp-probe   (MTP head draft-acceptance, Qwen3.5 packs with optiq/mtp.safetensors)   (rewrite quality gate)
 //   swift run -c release VibeBench --idle-cancel-test   (reply after a background re-read is cancelled part-way)
 //   swift run -c release VibeBench --long-chat-test [--ceiling 6000]   (real chat: cache hits, compaction, summaries)
 //   swift run -c release VibeBench --knowledge-eval   (sidecar critique with vs without retrieved guidance; text search only)
@@ -30,6 +32,16 @@ struct Options {
     var apiTest = false
     var textTest = false
     var studioTest = false
+    var optimizerEval = false
+    var evalModes = ["improve", "synthesize"]
+    var evalRepeats = 1
+    var evalJSON: URL?
+    var evalSampling = "rewrite"
+    var evalRepair = true
+    var mtpProbe = false
+    var mtpCheck = false
+    var noMTP = false
+    var draftVocab: Int?
     var sidecarTest = false
     var knowledgeEval = false
     var compactionTest = false
@@ -58,6 +70,17 @@ struct Options {
             case "--api-test": apiTest = true
             case "--text-test": textTest = true
             case "--studio-test": studioTest = true
+            case "--optimizer-eval": optimizerEval = true
+            case "--sampler-bench": SamplerBench.run(); exit(0)
+            case "--eval-json": if let v = it.next() { evalJSON = URL(fileURLWithPath: v) }
+            case "--mtp-probe": mtpProbe = true
+            case "--mtp-check": mtpCheck = true
+            case "--no-mtp": noMTP = true
+            case "--draft-vocab": if let v = it.next(), let n = Int(v) { draftVocab = n }
+            case "--no-repair": evalRepair = false
+            case "--sampling": if let v = it.next() { evalSampling = v }
+            case "--modes": if let v = it.next() { evalModes = v.split(separator: ",").map(String.init) }
+            case "--repeats": if let v = it.next(), let n = Int(v) { evalRepeats = max(1, n) }
             case "--sidecar-test": sidecarTest = true
             case "--knowledge-eval": knowledgeEval = true
             case "--compaction-test": compactionTest = true
@@ -295,6 +318,12 @@ func run() async throws {
         // Measure beyond the pre-flight limit (the sweep stops itself if the working set is exceeded).
         await provider.setBudget(ContextBudget(model: .init(fixedOverheadBytes: 0, bytesPerToken: 1), safetyFraction: 1, contextWindow: 262_144, minimumUsefulTokens: 0))
     }
+    if opts.noMTP || opts.draftVocab != nil {
+        var t = await provider.tuning
+        if opts.noMTP { t.speculative = false }
+        if let n = opts.draftVocab { t.draftVocabulary = n }
+        await provider.setTuning(t)
+    }
     print("loading model…")
     let loadStart = Date()
     try await provider.warmUp()
@@ -368,6 +397,65 @@ func run() async throws {
                 print("  chunk \(chunk) · \(name) (\(stats?.promptTokens ?? 0) tok): \(text.replacingOccurrences(of: "\n", with: "⏎").prefix(150))")
             }
         }
+        print("")
+    }
+
+    if opts.mtpCheck {
+        print("[mtp check] greedy decode with speculation on vs off (must match), 160 tokens")
+        var totals = (onSecs: 0.0, offSecs: 0.0, tokens: 0, cycles: 0, accepted: 0, same: 0, cases: 0)
+        for mode in [OptimizeMode.improve, .synthesize] {
+            for (name, draft) in OptimizerEval.drafts.prefix(5) {
+                let messages = PromptOptimizer.requestMessages(draft: draft, context: OptimizeContext(profile: .localSmall), mode: mode, useSharedPrefix: false)
+                var texts: [String] = []
+                for on in [true, false] {
+                    var t = await provider.tuning
+                    t.speculative = on
+                    await provider.setTuning(t)
+                    await provider.clearPromptCache()
+                    let m = await measure(provider, messages, gen: 160, timeout: opts.timeout, cacheSnapshots: false)
+                    texts.append(m.text)
+                    if on, let sp = await provider.lastSpeculationForBench() { totals.cycles += sp.cycles; totals.accepted += sp.accepted }
+                    if let st = m.stats {
+                        if on { totals.onSecs += st.decodeSeconds; totals.tokens += st.generatedTokens }
+                        else { totals.offSecs += st.decodeSeconds }
+                    }
+                }
+                let same = texts[0] == texts[1]
+                totals.same += same ? 1 : 0; totals.cases += 1
+                print("  \(mode == .improve ? "improve" : "synthesize") · \(name): \(same ? "identical" : "DIFFERENT")")
+                if !same {
+                    let a = Array(texts[0]), b = Array(texts[1])
+                    let i = zip(a, b).enumerated().first { $0.element.0 != $0.element.1 }?.offset ?? min(a.count, b.count)
+                    print("    first difference at char \(i): on «\(String(a[i...].prefix(40)))» off «\(String(b[i...].prefix(40)))»")
+                }
+            }
+        }
+        print("  drafts accepted \(totals.accepted)/\(totals.cycles)")
+        print("  identical \(totals.same)/\(totals.cases); decode \(fmt(Double(totals.tokens) / max(totals.onSecs, 1e-6))) tok/s with MTP vs \(fmt(Double(totals.tokens) / max(totals.offSecs, 1e-6))) tok/s without (off counted at the same token totals)")
+        print("")
+    }
+
+    if opts.mtpProbe {
+        print("[mtp probe] does the MTP head's guess match the main model's greedy next-next token?")
+        let file = opts.model.appendingPathComponent("optiq/mtp.safetensors")
+        var totals: [String: (Int, Int)] = [:]
+        for mode in [OptimizeMode.improve, .synthesize] {
+            for (_, draft) in OptimizerEval.drafts.prefix(6) {
+                let messages = PromptOptimizer.requestMessages(draft: draft, context: OptimizeContext(profile: .localSmall), mode: mode, useSharedPrefix: false)
+                for r in try await provider.debugMTPProbe(messages: messages, count: 200, mtpFile: file) {
+                    let t = totals[r.variant] ?? (0, 0)
+                    totals[r.variant] = (t.0 + r.matched, t.1 + r.total)
+                }
+            }
+        }
+        for (k, v) in totals.sorted(by: { $0.key < $1.key }) {
+            print("  \(k): \(v.0)/\(v.1) = \(fmt(Double(v.0) / Double(max(1, v.1)) * 100, 1))%")
+        }
+        print("")
+    }
+
+    if opts.optimizerEval {
+        await OptimizerEval.run(provider: provider, modes: opts.evalModes, repeats: opts.evalRepeats, json: opts.evalJSON, sampling: opts.evalSampling, repair: opts.evalRepair)
         print("")
     }
 

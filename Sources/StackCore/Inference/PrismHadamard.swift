@@ -40,27 +40,68 @@ final class PrismPackedLinear: Module, UnaryLayer, @unchecked Sendable {
     let block: Int
     /// Per-element signs ±1 applied before WHT, shape (1, inFeatures) or (inFeatures,)
     let signs: MLXArray?
+    let spec: QuantSpec
 
     init(weight: MLXArray, scales: MLXArray, biases: MLXArray,
-         block: Int = 0, signs: MLXArray? = nil) {
+         block: Int = 0, signs: MLXArray? = nil, spec: QuantSpec = .bonsai) {
         self.weight = weight
         self.scales = scales
         self.biases = biases
         self.block = block
         self.signs = signs
+        self.spec = spec
         super.init()
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
         let inp = block > 0 ? prismFWHT(x, block: block, signs: signs) : x
         return quantizedMatmul(inp, weight, scales: scales, biases: biases,
-                               transpose: true, groupSize: 128, bits: 2)
+                               transpose: true, groupSize: spec.groupSize, bits: spec.bits)
     }
 
     /// True when both layers rotate their input identically (same block size and the very
     /// same sign vector), so they can share one rotated input.
     func sharesRotation(with other: PrismPackedLinear) -> Bool {
         block == other.block && signs === other.signs
+    }
+}
+
+// MARK: - Quantization config
+
+/// Bit width and group size of one quantized tensor.
+struct QuantSpec: Equatable, Sendable {
+    var bits: Int
+    var groupSize: Int
+    /// The Bonsai pack: 2-bit, group 128.
+    static let bonsai = QuantSpec(bits: 2, groupSize: 128)
+}
+
+/// Per-module quantization from `config.json`'s `quantization` block: a default plus optional
+/// per-module overrides (mixed-precision packs such as OptiQ keep sensitive layers at 8-bit).
+/// Override keys are stripped of the `language_model.` prefix to match `WeightStore` keys.
+struct QuantConfig: Sendable {
+    var fallback: QuantSpec = .bonsai
+    var overrides: [String: QuantSpec] = [:]
+
+    func spec(for prefix: String) -> QuantSpec { overrides[prefix] ?? fallback }
+
+    init(fallback: QuantSpec = .bonsai, overrides: [String: QuantSpec] = [:]) {
+        self.fallback = fallback
+        self.overrides = overrides
+    }
+
+    init(configDict dict: [String: Any]) {
+        guard let q = dict["quantization"] as? [String: Any] else { self.init(); return }
+        let base = QuantSpec(bits: q["bits"] as? Int ?? QuantSpec.bonsai.bits,
+                             groupSize: q["group_size"] as? Int ?? QuantSpec.bonsai.groupSize)
+        var ov: [String: QuantSpec] = [:]
+        let lm = "language_model."
+        for (key, value) in q {
+            guard let d = value as? [String: Any], let bits = d["bits"] as? Int else { continue }
+            let name = key.hasPrefix(lm) ? String(key.dropFirst(lm.count)) : key
+            ov[name] = QuantSpec(bits: bits, groupSize: d["group_size"] as? Int ?? base.groupSize)
+        }
+        self.init(fallback: base, overrides: ov)
     }
 }
 
@@ -71,8 +112,30 @@ final class PrismPackedLinear: Module, UnaryLayer, @unchecked Sendable {
 /// instead of holding both the fused and unfused copies of most of the model.
 final class WeightStore: @unchecked Sendable {
     private var tensors: [String: MLXArray]
+    let quant: QuantConfig
 
-    init(_ tensors: [String: MLXArray]) { self.tensors = tensors }
+    init(_ tensors: [String: MLXArray], quant: QuantConfig = QuantConfig()) {
+        self.tensors = tensors
+        self.quant = quant
+    }
+
+    /// The quantized projection at `prefix` (`<prefix>.weight/.scales/.biases`), read in place.
+    func packedLinear(_ prefix: String, hadamard: HadamardMeta) -> PrismPackedLinear {
+        let (b, s) = hadamard.rotation(for: prefix)
+        return PrismPackedLinear(
+            weight: self["\(prefix).weight"]!, scales: self["\(prefix).scales"]!,
+            biases: self["\(prefix).biases"]!, block: b, signs: s, spec: quant.spec(for: prefix))
+    }
+
+    /// A small matrix as float: dequantized when the pack quantized it, raw otherwise.
+    func dense(_ prefix: String) -> MLXArray {
+        guard let s = self["\(prefix).scales"], let b = self["\(prefix).biases"] else {
+            return self["\(prefix).weight"]!
+        }
+        let spec = quant.spec(for: prefix)
+        return dequantized(self["\(prefix).weight"]!, scales: s, biases: b,
+                           groupSize: spec.groupSize, bits: spec.bits)
+    }
 
     subscript(key: String) -> MLXArray? { tensors[key] }
 
@@ -88,44 +151,61 @@ final class WeightStore: @unchecked Sendable {
 /// one Hadamard rotation replace N of each (q/k/v, gate/up, linear-attn qkv/z), which matters
 /// for single-token decode where per-op overhead rivals the weight-streaming time.
 final class PrismFusedLinear: Module, @unchecked Sendable {
-    let linear: PrismPackedLinear
-    private let splitPoints: [Int]
+    /// One fused matmul per run of consecutive projections that share quantization and input
+    /// rotation (a mixed-precision pack may split q/k/v into several runs).
+    private let linears: [PrismPackedLinear]
+    private let splitPoints: [[Int]]
 
     /// `prefixes` name the projections (e.g. `model.layers.3.self_attn.q_proj`); their
     /// tensors are consumed from `store`.
     init(store: WeightStore, prefixes: [String], hadamard: HadamardMeta) {
-        var ws: [MLXArray] = [], ss: [MLXArray] = [], bs: [MLXArray] = []
-        var sizes: [Int] = []
-        var rotation: (block: Int, signs: MLXArray?)?
+        struct Run {
+            var ws: [MLXArray] = [], ss: [MLXArray] = [], bs: [MLXArray] = []
+            var sizes: [Int] = []
+            var spec: QuantSpec
+            var rotation: (block: Int, signs: MLXArray?)
+        }
+        var runs: [Run] = []
         for p in prefixes {
             let r = hadamard.rotation(for: p)
-            if let first = rotation {
-                precondition(first.block == r.block && first.signs === r.signs,
-                             "Fused projections must share an input rotation: \(p)")
-            } else {
-                rotation = r
+            let spec = store.quant.spec(for: p)
+            if runs.last.map({ $0.spec != spec || $0.rotation.block != r.block
+                                 || $0.rotation.signs !== r.signs }) ?? true {
+                runs.append(Run(spec: spec, rotation: r))
             }
             let w = store.take("\(p).weight")!
-            ws.append(w)
-            ss.append(store.take("\(p).scales")!)
-            bs.append(store.take("\(p).biases")!)
-            sizes.append(w.shape[0])
+            runs[runs.count - 1].ws.append(w)
+            runs[runs.count - 1].ss.append(store.take("\(p).scales")!)
+            runs[runs.count - 1].bs.append(store.take("\(p).biases")!)
+            runs[runs.count - 1].sizes.append(w.shape[0])
         }
-        let fw = concatenated(ws, axis: 0)
-        let fs = concatenated(ss, axis: 0)
-        let fb = concatenated(bs, axis: 0)
-        // Materialise now so the source tensors can be freed before the next layer loads.
-        MLX.eval(fw, fs, fb)
-        linear = PrismPackedLinear(weight: fw, scales: fs, biases: fb,
-                                   block: rotation?.block ?? 0, signs: rotation?.signs)
-        var acc = 0
-        splitPoints = sizes.dropLast().map { acc += $0; return acc }
+        var linears: [PrismPackedLinear] = []
+        var splits: [[Int]] = []
+        for run in runs {
+            let fw = concatenated(run.ws, axis: 0)
+            let fs = concatenated(run.ss, axis: 0)
+            let fb = concatenated(run.bs, axis: 0)
+            // Materialise now so the source tensors can be freed before the next layer loads.
+            MLX.eval(fw, fs, fb)
+            linears.append(PrismPackedLinear(weight: fw, scales: fs, biases: fb,
+                                             block: run.rotation.block, signs: run.rotation.signs,
+                                             spec: run.spec))
+            var acc = 0
+            splits.append(run.sizes.dropLast().map { acc += $0; return acc })
+        }
+        self.linears = linears
+        self.splitPoints = splits
         super.init()
     }
 
     /// Outputs of each fused projection, in `prefixes` order.
     func callAsFunction(_ x: MLXArray) -> [MLXArray] {
-        MLX.split(linear(x), indices: splitPoints, axis: -1)
+        var out: [MLXArray] = []
+        for (linear, split) in zip(linears, splitPoints) {
+            let y = linear(x)
+            out += split.isEmpty ? [y] : MLX.split(y, indices: split, axis: -1)
+        }
+        return out
     }
 }
 
@@ -139,14 +219,16 @@ final class PrismPackedEmbedding: Module, @unchecked Sendable {
     let biases: MLXArray
     let block: Int
     let signs: MLXArray?
+    let spec: QuantSpec
 
     init(weight: MLXArray, scales: MLXArray, biases: MLXArray,
-         block: Int = 0, signs: MLXArray? = nil) {
+         block: Int = 0, signs: MLXArray? = nil, spec: QuantSpec = .bonsai) {
         self.weight = weight
         self.scales = scales
         self.biases = biases
         self.block = block
         self.signs = signs
+        self.spec = spec
         super.init()
     }
 
@@ -156,7 +238,7 @@ final class PrismPackedEmbedding: Module, @unchecked Sendable {
     /// instead of dequantizing the entire vocab × hidden table on every forward pass.
     func callAsFunction(_ indices: MLXArray) -> MLXArray {
         let rows = dequantized(weight[indices], scales: scales[indices], biases: biases[indices],
-                               groupSize: 128, bits: 2)
+                               groupSize: spec.groupSize, bits: spec.bits)
         return block > 0 ? prismIFWHT(rows, block: block, signs: signs) : rows
     }
 
@@ -164,6 +246,6 @@ final class PrismPackedEmbedding: Module, @unchecked Sendable {
     func asLMHead(_ x: MLXArray) -> MLXArray {
         let inp = block > 0 ? prismFWHT(x, block: block, signs: signs) : x
         return quantizedMatmul(inp, weight, scales: scales, biases: biases,
-                               transpose: true, groupSize: 128, bits: 2)
+                               transpose: true, groupSize: spec.groupSize, bits: spec.bits)
     }
 }

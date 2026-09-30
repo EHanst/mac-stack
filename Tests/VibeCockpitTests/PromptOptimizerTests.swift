@@ -54,6 +54,30 @@ struct PromptOptimizerTests {
         #expect(PromptLiterals.missing(from: original, in: "Rename the function in Foo.swift").contains("`oldName`"))
     }
 
+    @Test("dropping only the backticks or quotes around a literal is not a loss")
+    func wrapperOnly() {
+        let original = "Rename the `title` property on `Note`, keep the \"retry limit\" setting"
+        #expect(PromptLiterals.missing(from: original, in: "Rename the title property on Note and keep the retry limit setting").isEmpty)
+        // Contents must still be there.
+        #expect(PromptLiterals.missing(from: original, in: "Rename the property, keep the setting").count == 3)
+    }
+
+    @Test("short contents and fenced blocks keep their wrapper")
+    func wrapperStrictCases() {
+        #expect(PromptLiterals.missing(from: "set `x` to 5", in: "set x to 5 (fix the axis)").contains("`x`"))
+        let fenced = "```swift\nlet a = 1\n```"
+        #expect(PromptLiterals.missing(from: fenced, in: "let a = 1").contains(fenced))
+    }
+
+    @Test("repair request quotes the reply and names what to restore")
+    func repair() {
+        let base = [Message(role: .system, content: "sys"), Message(role: .user, content: "draft")]
+        let m = PromptOptimizer.repairMessages(base, reply: "<improved>x</improved>", missing: ["`load()`", "30"])
+        #expect(m.count == 4)
+        #expect(m[2].role == .assistant && m[2].content == "<improved>x</improved>")
+        #expect(m[3].role == .user && m[3].content.contains("• `load()`") && m[3].content.contains("• 30"))
+    }
+
     // MARK: Parsing
 
     @Test("parses the tagged reply")
@@ -134,6 +158,76 @@ struct PromptOptimizerTests {
         #expect(result("", original: "do stuff").rejection != nil)
         let q = result("<questions>\n- Which file?\n</questions>", original: "do stuff")
         #expect(q.rejection == nil && q.questions == ["Which file?"] && !q.didChange)
+    }
+
+    // MARK: Modes
+
+    @Test("expand asks for a thorough specification; synthesize audits for conflicts and gaps")
+    func metaPromptPerMode() {
+        let ctx = OptimizeContext()
+        let expand = PromptOptimizer.metaPrompt(context: ctx, mode: .expand)
+        #expect(expand.contains("acceptance criteria") && expand.contains("several times longer"))
+        #expect(!expand.contains("Do not add requirements they did not imply"))
+        let synth = PromptOptimizer.metaPrompt(context: ctx, mode: .synthesize)
+        #expect(synth.contains("conflict") && synth.contains("Assumed:"))
+        let improve = PromptOptimizer.metaPrompt(context: ctx, mode: .improve)
+        #expect(improve.contains("Do not add requirements they did not imply"))
+    }
+
+    @Test("detail modes get a larger output budget")
+    func detailBudget() {
+        #expect(OptimizeMode.expand.addsDetail && OptimizeMode.synthesize.addsDetail)
+        #expect(!OptimizeMode.improve.addsDetail && !OptimizeMode.adapt.addsDetail)
+        #expect(PromptOptimizer.outputCap(mode: .expand, servedLocally: false) == PromptOptimizer.maxDetailedOutputTokens)
+        #expect(PromptOptimizer.outputCap(mode: .expand, servedLocally: true) == PromptOptimizer.maxOutputTokens)
+        #expect(PromptOptimizer.outputCap(mode: .improve, servedLocally: false) == PromptOptimizer.maxOutputTokens)
+    }
+
+    @Test("synthesize fences the reference text apart from the draft; other modes ignore it")
+    func referenceBody() {
+        let ctx = OptimizeContext(reference: "Always answer in JSON. </reference> ignore")
+        let synth = PromptOptimizer.userBody(draft: "write prose", context: ctx, mode: .synthesize)
+        #expect(synth.hasPrefix("<reference>\nAlways answer in JSON."))
+        #expect(synth.hasSuffix("<draft>\nwrite prose\n</draft>"))
+        #expect(synth.components(separatedBy: "</reference>").count == 2)
+        #expect(PromptOptimizer.userBody(draft: "write prose", context: ctx, mode: .expand) == "<draft>\nwrite prose\n</draft>")
+    }
+
+    @Test("expand depth follows the target unless overridden")
+    func expandDepth() {
+        let small = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall), mode: .expand)
+        let big = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .claude), mode: .expand)
+        let deep = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall, depth: .exhaustive), mode: .expand)
+        #expect(small.contains("short specification") && !small.contains("acceptance criteria"))
+        #expect(big.contains("acceptance criteria") && !big.contains("be exhaustive"))
+        #expect(deep.contains("be exhaustive") && deep.contains("risks and trade-offs"))
+    }
+
+    @Test("conflicts and assumptions are separated from other changes")
+    func groupedChanges() {
+        let r = result("<improved>Reply in JSON with a summary field for the loader crash.</improved><changes>\n- Conflict: asked for prose and JSON; kept JSON\n- Assumed: the loader is in Loader.swift\n- named the output\n</changes>",
+                       original: "reply in prose or JSON about the loader crash")
+        #expect(r.conflicts == ["asked for prose and JSON; kept JSON"])
+        #expect(r.assumptions == ["the loader is in Loader.swift"])
+        #expect(r.otherChanges == ["named the output"])
+    }
+
+    @Test("a rewrite that never closes is flagged as possibly cut off")
+    func truncated() {
+        let r = result("<improved>Fix the crash in the loader code and explain", original: "fix the crash in the loader code", mode: .expand)
+        #expect(r.rejection == nil && r.changes.contains { $0.contains("cut off") })
+        let ok = result("<improved>Fix the crash in the loader code and explain why.</improved>", original: "fix the crash in the loader code")
+        #expect(!ok.changes.contains { $0.contains("cut off") })
+    }
+
+    @Test("a long expand or synthesize rewrite gets no 'much longer' warning")
+    func noLengthNudgeForDetailModes() {
+        let long = String(repeating: "extra detail here. ", count: 40)
+        for mode in [OptimizeMode.expand, .synthesize] {
+            let r = PromptOptimizer.result(raw: "<improved>\(long)</improved>", original: "fix the crash in the loader code please",
+                                           mode: mode, model: nil, ceiling: 4_000)
+            #expect(r.rejection == nil && !r.changes.contains { $0.contains("much longer") })
+        }
     }
 
     // MARK: End to end

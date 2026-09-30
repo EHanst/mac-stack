@@ -11,6 +11,7 @@ struct OptimizeReviewSheet: View {
     let draft: String
     let onAccept: (String) -> Void
     let onExpand: () -> Void
+    let onSynthesize: () -> Void
     let onAskQuestions: ([String]) -> Void
     let onClose: () -> Void
 
@@ -101,18 +102,15 @@ struct OptimizeReviewSheet: View {
                     if tab == .changes { diff(result) } else { editor }
                 }
                 .frame(maxHeight: 220)
-                if !result.changes.isEmpty {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(persona ? "Kokoro's notes" : "What changed").font(.mtLabelLarge)
-                        ForEach(result.changes, id: \.self) {
-                            Text("• \($0)").font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                        }
-                    }
-                }
+                notes("Conflicts resolved", result.conflicts, icon: "arrow.triangle.merge")
+                notes("Assumed — please confirm", result.assumptions, icon: "questionmark.circle")
+                notes(persona ? "Kokoro's notes" : "What changed", result.otherChanges, icon: nil)
                 HStack {
                     Button("Keep mine") { studio.dismissReview(); onClose() }.buttonStyle(MTTextButtonStyle())
                     Button("Expand") { onExpand() }.buttonStyle(MTOutlinedButtonStyle())
-                        .help("Try again and let the rewrite add requirements and an output format")
+                        .help("Try again and turn this into a detailed specification")
+                    Button("Synthesize") { onSynthesize() }.buttonStyle(MTOutlinedButtonStyle())
+                        .help("Resolve conflicting instructions and fill in missing information")
                     Spacer()
                     Button("Use this") { accept(result) }
                         .buttonStyle(MTFilledButtonStyle()).keyboardShortcut(.defaultAction)
@@ -127,8 +125,21 @@ struct OptimizeReviewSheet: View {
                     if result.rejection != nil {
                         Button("Try Expand") { onExpand() }.buttonStyle(MTOutlinedButtonStyle())
                     }
+                    Button("Synthesize") { onSynthesize() }.buttonStyle(MTOutlinedButtonStyle())
                     Spacer()
                     Button("Keep mine") { studio.dismissReview(); onClose() }.buttonStyle(MTFilledButtonStyle())
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func notes(_ title: String, _ items: [String], icon: String?) -> some View {
+        if !items.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                if let icon { Label(title, systemImage: icon).font(.mtLabelLarge) } else { Text(title).font(.mtLabelLarge) }
+                ForEach(items, id: \.self) {
+                    Text("• \($0)").font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 }
             }
         }
