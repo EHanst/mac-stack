@@ -166,7 +166,7 @@ struct IntentPane: View {
 
     private var fieldRow: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Describe what you want to build…", text: $intentText, axis: .vertical)
+            TextField("Describe the task you want a prompt for…", text: $intentText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.mtBodyMedium)
                 .lineLimit(1...8)

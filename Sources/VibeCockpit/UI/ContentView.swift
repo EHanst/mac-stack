@@ -225,7 +225,7 @@ struct MainLayout: View {
             Text("Nothing to show")
                 .font(.mtTitleMedium)
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.5))
-            Text("Diffs and previews appear here when there is something to show.")
+            Text("Changes made by connected tools appear here. Your prompts are copied out of the chat.")
                 .font(.mtBodySmall)
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.4))
                 .multilineTextAlignment(.center)
