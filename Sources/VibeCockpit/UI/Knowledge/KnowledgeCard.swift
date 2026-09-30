@@ -21,6 +21,13 @@ struct KnowledgeCard: View {
                 Text("Kept on this Mac only: the text of briefs you save, copy or export, with secrets removed. Attached files are never kept. Turning this off stops recording; what is already stored stays until you wipe it.")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     .fixedSize(horizontal: false, vertical: true)
+                if let notice = model.notice {
+                    HStack(alignment: .top) {
+                        Text(notice).font(.mtBodySmall).foregroundStyle(Color.mtOnSurface).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Dismiss") { model.dismissNotice() }.buttonStyle(MTOutlinedButtonStyle())
+                    }
+                }
                 if let err = model.error { Text(err).font(.mtBodySmall).foregroundStyle(Color.mtError) }
                 HStack {
                     Text(summary).font(.mtBodySmall).foregroundStyle(Color.mtOnSurface)

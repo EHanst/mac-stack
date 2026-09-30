@@ -111,7 +111,7 @@ public final class AppServices {
             defaults: defaults)
         let studio = self.promptStudio
         let knowledgeStore = KnowledgeStore(
-            dbURL: KnowledgeStore.defaultURL(), dimension: 384,
+            dbURL: KnowledgeStore.defaultURL(), dimension: LocalEmbedder.Config.bgeSmall.dimension,
             embedder: KnowledgeEmbedder(
                 documents: { texts in try await AppServices.localEmbedder(in: registry).embed(texts) },
                 query: { text in try await AppServices.localEmbedder(in: registry).embedQuery(text) }))

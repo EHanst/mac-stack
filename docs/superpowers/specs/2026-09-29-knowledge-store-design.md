@@ -97,7 +97,7 @@ Opting out stops recording immediately. It keeps existing entries until the user
 - Recorder: nothing written while opted out; redaction happens before write; duplicates ignored; no context-item file contents stored.
 - Pack loader: idempotent seeding, updated entries replaced, pack removal, manifest errors.
 - Retriever: token budget respected, at most 3 + 3 entries, empty store returns empty guidance, embedder failure falls back cleanly.
-- Sidecar: `messages` output is byte-identical to today when guidance is empty; the system prompt string is constant across calls.
+- Sidecar: the user message is byte-identical to today when guidance is empty (the system prompt gained one constant sentence about `<guidance>`, and is otherwise the same string for every call).
 - Isolation: MCP `search_code` cannot return knowledge entries (test that the two stores share no file or type).
 - Bench: an eval in `VibeBench` runs the same briefs with and without guidance, comparing the parse-success and finding counts. It needs a seeded fixture pack.
 

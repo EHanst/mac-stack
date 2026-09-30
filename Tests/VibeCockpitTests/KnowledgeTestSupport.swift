@@ -49,3 +49,33 @@ enum KnowledgeStub {
             .appendingPathComponent("knowledge.db")
     }
 }
+
+/// Counts calls and can fail selected ones, to check how the store reacts to an unreliable embedder.
+final class KnowledgeCallLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _documentCalls = 0, _queryCalls = 0
+    var documentCalls: Int { lock.lock(); defer { lock.unlock() }; return _documentCalls }
+    var queryCalls: Int { lock.lock(); defer { lock.unlock() }; return _queryCalls }
+    func bumpDocuments() -> Int { lock.lock(); defer { lock.unlock() }; _documentCalls += 1; return _documentCalls }
+    func bumpQuery() { lock.lock(); _queryCalls += 1; lock.unlock() }
+}
+
+extension KnowledgeStub {
+    /// `failOnDocumentCall` is 1-based: that call throws, the others work. `dim` sets the vector size returned.
+    static func counting(_ log: KnowledgeCallLog, failOnDocumentCall: Int? = nil, dim: Int = KnowledgeStub.dim) -> KnowledgeEmbedder {
+        KnowledgeEmbedder(
+            documents: { texts in
+                let n = log.bumpDocuments()
+                if n == failOnDocumentCall { throw KnowledgeError.noEmbedder }
+                return texts.map { vector($0, dim: dim) }
+            },
+            query: { t in log.bumpQuery(); return vector(t, dim: dim) })
+    }
+
+    /// Takes `delay` to embed, so other calls can run meanwhile.
+    static func slow(_ delay: Duration) -> KnowledgeEmbedder {
+        KnowledgeEmbedder(
+            documents: { texts in try await Task.sleep(for: delay); return texts.map { vector($0) } },
+            query: { vector($0) })
+    }
+}

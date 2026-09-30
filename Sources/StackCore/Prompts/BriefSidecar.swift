@@ -131,12 +131,12 @@ public struct BriefSidecar: Sendable {
     }
     private static let redactMargin = 4_096
 
-    private static let ownTags = (["brief", "attached", "questions", "findings", "reply", "revision"] + BriefSection.Kind.allCases.map(\.rawValue))
+    private static let ownTags = (["brief", "attached", "questions", "findings", "reply", "revision", "guidance"] + BriefSection.Kind.allCases.map(\.rawValue))
         .joined(separator: "|")
 
     /// Breaks any tag of ours inside user text, so it can neither close the fence nor forge a section or reply.
-    private static func fence(_ text: String) -> String {
-        text.replacingOccurrences(of: "<(/?)(\(ownTags))\\b", with: "<\u{200B}$1$2",
+    static func fence(_ text: String) -> String {
+        text.replacingOccurrences(of: "<(\\s*/?\\s*)(\(ownTags))\\b", with: "<\u{200B}$1$2",
                                   options: [.regularExpression, .caseInsensitive])
     }
 

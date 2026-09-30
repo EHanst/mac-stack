@@ -46,6 +46,12 @@ public actor KnowledgeStore {
     private let logger = Logger(subsystem: "com.vibecockpit", category: "KnowledgeStore")
     /// True when the file was unreadable or from another schema and was rebuilt empty.
     public private(set) var didReset = false
+    /// Set when a read finds the file corrupt after a successful open; the next `open()` rebuilds it.
+    private var needsReset = false
+    private var openedOK = false
+    /// Entries the embedder returned a wrong-sized vector for; not retried this session.
+    private var unembeddable: Set<String> = []
+    private var reembedding = false
 
     public static func defaultURL() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -59,19 +65,26 @@ public actor KnowledgeStore {
     // MARK: Open / close
 
     public func open() throws {
-        if db != nil { return }
+        if db != nil && !needsReset { return }
+        if needsReset { rebuild() }
         try FileManager.default.createDirectory(at: dbURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
             try openOnce()
         } catch KnowledgeError.corrupt {
-            logger.error("knowledge store unreadable; rebuilding")
-            closeHandle()
-            for suffix in ["", "-wal", "-shm"] {
-                try? FileManager.default.removeItem(at: URL(fileURLWithPath: dbURL.path + suffix))
-            }
-            didReset = true
+            rebuild()
             try openOnce()
         }
+    }
+
+    /// Drops an unreadable file so the next open starts empty, and remembers to say so.
+    private func rebuild() {
+        logger.error("knowledge store unreadable; rebuilding")
+        closeHandle()
+        for suffix in ["", "-wal", "-shm"] {
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: dbURL.path + suffix))
+        }
+        didReset = true
+        needsReset = false
     }
 
     public func close() { closeHandle() }
@@ -79,6 +92,7 @@ public actor KnowledgeStore {
     private func closeHandle() {
         if let db { sqlite3_close(db) }
         db = nil
+        openedOK = false
     }
 
     private func openOnce() throws {
@@ -96,6 +110,8 @@ public actor KnowledgeStore {
             try run("PRAGMA journal_mode=WAL;")
             try run("PRAGMA synchronous=NORMAL;")
             let version = try query("PRAGMA user_version;") { Int(sqlite3_column_int($0, 0)) }.first ?? 0
+            // A file from a newer build is left alone (this build just can't use it); only an unknown older one is rebuilt.
+            if version > Self.schemaVersion { throw KnowledgeError.openFailed("The saved learning data was made by a newer version of the app.") }
             if version != 0 && version != Self.schemaVersion { throw KnowledgeError.corrupt }
             try exec("""
                 CREATE TABLE IF NOT EXISTS entries(
@@ -120,6 +136,7 @@ public actor KnowledgeStore {
             """)
             try run("INSERT OR REPLACE INTO meta(key, value) VALUES('dimension', ?);", [.text(String(dimension))])
             try exec("PRAGMA user_version = \(Self.schemaVersion);")
+            openedOK = true
         } catch {
             closeHandle()
             throw error
@@ -170,12 +187,16 @@ public actor KnowledgeStore {
         guard let embedder, !rows.isEmpty else { return }
         for start in stride(from: 0, to: rows.count, by: batch) {
             let slice = Array(rows[start..<min(start + batch, rows.count)])
-            guard let vectors = try? await embedder.documents(slice.map(\.text)), vectors.count == slice.count else { return }
-            for (row, v) in zip(slice, vectors) where v.count == dimension { try? storeVector(v, id: row.id) }
+            guard let vectors = try? await embedder.documents(slice.map(\.text)), vectors.count == slice.count else { continue }
+            for (row, v) in zip(slice, vectors) {
+                if v.count == dimension { try? storeVector(v, id: row.id) } else { unembeddable.insert(row.id) }
+            }
         }
     }
 
     private func storeVector(_ v: [Float], id: String) throws {
+        // The entry may have been deleted while the embedder was working (this actor re-enters at `await`).
+        guard try query("SELECT 1 FROM entries WHERE id = ?;", [.text(id)], { _ in 1 }).first != nil else { return }
         try run("DELETE FROM entries_vec WHERE entry_id = ?;", [.text(id)])
         try run("INSERT INTO entries_vec(entry_id, embedding) VALUES(?, ?);", [.text(id), .blob(v.knowledgeBlob)])
     }
@@ -239,6 +260,15 @@ public actor KnowledgeStore {
         }
     }
 
+    /// Removes a brief's accepted exemplars other than `keep`, so the latest version stands alone.
+    public func deleteExemplars(briefID: String, except keep: String) throws {
+        try open()
+        let ids = try query("""
+            SELECT id FROM entries WHERE kind = 'exemplar' AND id != ? AND json_extract(meta_json, '$.briefID') = ?;
+            """, [.text(keep), .text(briefID)]) { kText($0, 0) }
+        if !ids.isEmpty { try delete(ids: ids) }
+    }
+
     /// Removes the user's own history (entries with no pack). Pack entries stay.
     public func wipeHistory() throws {
         try open()
@@ -262,6 +292,8 @@ public actor KnowledgeStore {
 
     public func search(query text: String, target: String?, k: Int = 20) async -> [KnowledgeHit] {
         guard (try? open()) != nil else { return [] }
+        // Nothing to find: skip the embedding a query would cost.
+        guard (try? query("SELECT 1 FROM entries WHERE enabled = 1 LIMIT 1;", [], { _ in 1 }))?.first != nil else { return [] }
         let filter = "e.enabled = 1 AND (e.target IS NULL OR e.target = ?)"
         let targetBind = Bind.text(target ?? "")
         var sparse: [String] = []
@@ -288,10 +320,12 @@ public actor KnowledgeStore {
     /// Embeds entries that have no vector (the embedder was unavailable, or the dimension changed).
     @discardableResult
     public func reembedMissing(batch: Int = 16) async -> Int {
-        guard embedder != nil, (try? open()) != nil else { return 0 }
-        let rows = (try? query("""
+        guard embedder != nil, !reembedding, (try? open()) != nil else { return 0 }
+        reembedding = true
+        defer { reembedding = false }
+        let rows = ((try? query("""
             SELECT id, text FROM entries WHERE id NOT IN (SELECT entry_id FROM entries_vec) LIMIT 500;
-            """) { (id: kText($0, 0), text: kText($0, 1)) }) ?? []
+            """) { (id: kText($0, 0), text: kText($0, 1)) }) ?? []).filter { !unembeddable.contains($0.id) }
         guard !rows.isEmpty else { return 0 }
         let before = (try? embeddedCount()) ?? 0
         await embed(rows, batch: batch)
@@ -368,7 +402,10 @@ public actor KnowledgeStore {
 
     private func failure() -> KnowledgeError {
         let code = sqlite3_errcode(db)
-        if code == SQLITE_NOTADB || code == SQLITE_CORRUPT { return .corrupt }
+        if code == SQLITE_NOTADB || code == SQLITE_CORRUPT {
+            if openedOK { needsReset = true }     // found after a good open: rebuild on the next call
+            return .corrupt
+        }
         return .queryFailed(db.map { String(cString: sqlite3_errmsg($0)) } ?? "no database")
     }
 

@@ -14,12 +14,15 @@ public final class KnowledgeModel {
     public private(set) var entries: [KnowledgeEntry] = []
     public private(set) var packs: [KnowledgePackSummary] = []
     public private(set) var error: String?
+    /// Set once when the store had to be rebuilt empty, so learned history isn't lost without a word.
+    public private(set) var notice: String?
     public var learnedCount: Int { counts[.exemplar] ?? 0 }
 
     @ObservationIgnored public let recorder: KnowledgeRecorder
     @ObservationIgnored public let retriever: KnowledgeRetriever
     @ObservationIgnored private let store: KnowledgeStore
     @ObservationIgnored private let settings: KnowledgeSettings
+    @ObservationIgnored private var resetAcknowledged = false
 
     public init(store: KnowledgeStore, settings: KnowledgeSettings = KnowledgeSettings()) {
         self.store = store; self.settings = settings
@@ -37,11 +40,15 @@ public final class KnowledgeModel {
             entries = try await store.all(limit: 200)
             packs = try await store.packSummaries()
             error = nil
+            if await store.didReset, !resetAcknowledged {
+                notice = "The saved learning data couldn't be read, so it was reset. Turn learning on again to keep recording."
+            }
         } catch { self.error = error.localizedDescription }
     }
 
     public func turnOn() async { settings.setDecision(.enabled); await refresh() }
     public func turnOff() async { settings.setDecision(.declined); await refresh() }
+    public func dismissNotice() { resetAcknowledged = true; notice = nil }
     public func dismissCard() { settings.dismissCard(); prompt = settings.prompt }
     public func dismissNudge() { settings.dismissNudge(); prompt = settings.prompt }
 

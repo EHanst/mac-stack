@@ -14,7 +14,10 @@ public struct KnowledgeRecorder: Sendable {
     public func recordAccepted(_ brief: Brief, now: Date = Date()) async {
         settings.noteAcceptEvent(briefID: brief.id)
         guard settings.isRecording, let entry = Self.exemplar(from: brief, now: now) else { return }
-        _ = try? await store.addAll([entry])
+        // One exemplar per brief: the latest accepted version replaces its earlier ones.
+        if let added = try? await store.addAll([entry]), added > 0 {
+            try? await store.deleteExemplars(briefID: brief.id, except: entry.id)
+        }
     }
 
     public func recordSignal(ids: [String], outcome: SignalOutcome) async {
@@ -35,6 +38,6 @@ public struct KnowledgeRecorder: Sendable {
         let intent = String(goal.replacingOccurrences(of: "\n", with: " ").prefix(200))
         return KnowledgeEntry(kind: .exemplar, target: brief.target.modelFamily,
                               text: String(parts.joined(separator: "\n\n").prefix(KnowledgeLimits.maxTextChars)),
-                              meta: ["intent": intent, "surface": brief.target.surface.rawValue], created: now)
+                              meta: ["intent": intent, "surface": brief.target.surface.rawValue, "briefID": brief.id], created: now)
     }
 }

@@ -55,4 +55,20 @@ struct KnowledgeModelTests {
         #expect(m.entries.map(\.id) == [b.id])
         #expect(m.entries.first?.enabled == false)
     }
+
+    // I4: a reset must be reported, not silent.
+    @Test("a rebuilt store is reported once, and the notice can be dismissed")
+    func reportsReset() async throws {
+        let url = KnowledgeStub.tempURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a database".utf8).write(to: url)
+        let store = KnowledgeStore(dbURL: url, dimension: KnowledgeStub.dim, embedder: KnowledgeStub.embedder())
+        let m = KnowledgeModel(store: store, settings: KnowledgeSettings(defaults: UserDefaults(suiteName: "km-\(UUID().uuidString)")!))
+        #expect(m.notice == nil)
+        await m.refresh()
+        #expect(m.notice != nil)
+        m.dismissNotice()
+        await m.refresh()
+        #expect(m.notice == nil)
+    }
 }

@@ -29,7 +29,9 @@ public struct KnowledgeRetriever: Sendable {
         let constraints = brief.text(of: .constraints).trimmingCharacters(in: .whitespacesAndNewlines)
         let raw = constraints.isEmpty ? goal : goal + "\n" + constraints
         let query = String(ContextRedactor.redact(raw).text.prefix(Self.queryChars))
+        // A brief is not its own example: its earlier accepted versions would fill the exemplar slots.
         let hits = await store.search(query: query, target: brief.target.modelFamily, k: 20)
+            .filter { $0.entry.meta["briefID"] != brief.id }
         return Self.select(hits, budget: tokenBudget, now: now)
     }
 
@@ -63,16 +65,10 @@ public struct KnowledgeRetriever: Sendable {
     }
 
     private static func render(_ e: KnowledgeEntry) -> String {
-        let text = neutralize(ContextRedactor.redact(e.text).text)
+        let text = BriefSidecar.fence(ContextRedactor.redact(e.text).text)
         switch e.kind {
         case .exemplar: return "Accepted brief:\n\(text)"
         case .technique, .targetNote, .constraint: return "- \(text)"
         }
-    }
-
-    /// Makes the fence tags inert, so stored text cannot close `<guidance>` or open `<brief>`.
-    static func neutralize(_ text: String) -> String {
-        text.replacingOccurrences(of: "<(/?)(guidance|brief|reply|attached)>", with: "&lt;$1$2>",
-                                  options: [.regularExpression, .caseInsensitive])
     }
 }
