@@ -176,4 +176,65 @@ struct BriefWorkbenchModelTests {
         #expect(m.compiled != nil)
         #expect(before.contains(.overBudget) || before.contains(.itemDowngraded) || before.contains(.itemDropped))
     }
+
+    // MARK: Context
+
+    @Test("adding an item twice keeps one item and its include state")
+    func addTwice() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        let item = ContextItem(id: "x", kind: .file, ref: "a.swift", text: "func a() {}", mode: .inline)
+        m.addContext([item]); m.setContextIncluded(false, id: "x")
+        m.addContext([item])
+        #expect(m.selected?.contextItems.count == 1)
+        #expect(m.selected?.contextItems.first?.included == false)
+    }
+
+    @Test("excluded items cost nothing and reference mode changes the compiled text")
+    func toggles() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t"); m.setText("Do X", for: .goal)
+        m.addContext([ContextItem(id: "x", kind: .file, ref: "a.swift", text: "func a() {}", mode: .inline)])
+        #expect(m.contextTokens > 0)
+        #expect(m.compiled?.text.contains("func a() {}") == true)
+        m.setContextMode(.reference, id: "x")
+        #expect(m.compiled?.text.contains("func a() {}") == false)
+        m.setContextIncluded(false, id: "x")
+        #expect(m.contextTokens == 0)
+        m.removeContext(id: "x")
+        #expect(m.selected?.contextItems.isEmpty == true)
+    }
+
+    @Test("search results become items with the brief's surface mode; no source means no items")
+    func search() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        #expect(await m.searchContext("login").isEmpty)
+        m.contextSource = BriefContextSource(
+            roots: { [URL(fileURLWithPath: "/w")] },
+            search: { _ in [SearchResult(chunkID: UUID(), filePath: "/w/S.swift", declarationKind: "func", content: "func f() {}", score: 1, rank: 1)] },
+            workingDiff: { _ in "" })
+        let items = await m.searchContext("login")
+        #expect(items.count == 1 && items[0].mode == .reference)
+    }
+
+    @Test("an empty working diff is reported, not added; a real one is added inline")
+    func diff() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.contextSource = BriefContextSource(roots: { [URL(fileURLWithPath: "/w")] }, search: { _ in [] }, workingDiff: { _ in "" })
+        await #expect(throws: ContextItemError.noChanges) { try await m.addWorkingDiff() }
+        #expect(m.selected?.contextItems.isEmpty == true)
+        m.contextSource = BriefContextSource(roots: { [URL(fileURLWithPath: "/w")] }, search: { _ in [] }, workingDiff: { _ in "+x" })
+        try await m.addWorkingDiff()
+        #expect(m.selected?.contextItems.first?.kind == .gitDiff)
+    }
+
+    @Test("without a workspace, adding a file or diff says so")
+    func noWorkspace() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        await #expect(throws: ContextItemError.noWorkspace) { try await m.addWorkingDiff() }
+        await #expect(throws: ContextItemError.noWorkspace) { try await m.addFile(URL(fileURLWithPath: "/w/a.swift")) }
+    }
 }

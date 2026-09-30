@@ -99,6 +99,7 @@ struct BriefWorkbenchView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                 .opacity(enabled ? 1 : 0.5)
             Text(Self.hint(kind)).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+            if kind == .context { ContextListView() }
         }
     }
 

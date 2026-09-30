@@ -58,6 +58,7 @@ public final class AppServices {
     public let promptLibrary: PromptLibrary
     /// Save/insert/improve prompts from the chat box.
     public let promptStudio: PromptStudioModel
+    let workspaceSearch: WorkspaceSearch
     public let briefs = BriefWorkbenchModel(store: BriefStore())
     /// Prompts committed inside project folders (`.vibe/prompts`); usable only after the user approves each.
     public let projectPrompts: WorkspacePromptStore
@@ -89,8 +90,10 @@ public final class AppServices {
         let memory = ApprovalMemory()
         self.savedApprovals = SavedApprovalsModel(memory: memory)
         let runnerBox = SharedBuildRunner()
+        let workspaceSearch = WorkspaceSearch()
+        self.workspaceSearch = workspaceSearch
         let workspaces = WorkspaceManager { record in
-            try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get())
+            try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get(), search: workspaceSearch)
         }
         self.workspaces = workspaces
         let projectPrompts = WorkspacePromptStore(roots: { await workspaces.list.map { ($0.record.name, $0.record.url) } })
@@ -150,6 +153,10 @@ public final class AppServices {
             return self.optimizerPrefix(promptCount: coordinator.state.intentHistory.filter { $0.kind == .userPrompt }.count)
         }
         await promptStudio.reload()
+        briefs.contextSource = BriefContextSource(
+            roots: { [workspaces] in await workspaces.list.map(\.record.url) },
+            search: { [workspaceSearch] query in await workspaceSearch.search(query, limit: 8) },
+            workingDiff: { try await GitDiffReader.workingDiff(in: $0) })
         await briefs.reload()
         await promptStudio.refreshModel()
 
@@ -341,7 +348,7 @@ public final class AppServices {
     /// Builds one project's tools: its own git snapshots, its own search index, and a boundary
     /// that keeps file access and commands inside its folder.
     nonisolated static func openWorkspace(
-        _ record: WorkspaceRecord, registry: ModelRegistry, runner: XPCBuildRunner
+        _ record: WorkspaceRecord, registry: ModelRegistry, runner: XPCBuildRunner, search: WorkspaceSearch
     ) async throws -> [any AgentToolHandler] {
         let url = record.url
         let git = GitSnapshotManager(workspaceURL: url)
@@ -351,6 +358,7 @@ public final class AppServices {
         try FileManager.default.createDirectory(at: indexDir, withIntermediateDirectories: true)
         let pipeline = IndexingPipeline(store: VectorStore(dbURL: indexDir.appendingPathComponent("\(record.id).db")), registry: registry)
         try await pipeline.open()
+        await search.register(id: record.id) { query in try await pipeline.search(query: query, topK: 8) }
         Task.detached(priority: .background) { try? await pipeline.reindexWorkspace(url) }
         await pipeline.watch(url)
         let context = WorkspaceContext(root: url, workspaceID: WorkspaceID(rawValue: record.id), policy: .default)
