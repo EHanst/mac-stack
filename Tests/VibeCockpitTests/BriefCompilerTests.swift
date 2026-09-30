@@ -222,4 +222,27 @@ struct BriefCompilerTests {
         b.body = "Use key AKIAIOSFODNN7EXAMPLE"
         #expect(!BriefCompiler.compile(b).text.contains("AKIAIOSFODNN7EXAMPLE"))
     }
+
+    @Test("compiling a brief with a 200 KB diff stays under 100 ms")
+    func perf() {
+        var b = Brief.new(title: "t",
+                          input: String(repeating: "Fix the login timeout and keep the public API stable.\n\n", count: 4),
+                          target: .make(modelFamily: "claude", surface: .claudeCode))
+        var diff = "diff --git a/Sources/A.swift b/Sources/A.swift\n--- a/Sources/A.swift\n+++ b/Sources/A.swift\n"
+        var n = 0
+        while diff.utf8.count < 200_000 {
+            diff += "@@ -\(n),3 +\(n),4 @@ func load\(n)()\n context line \(n)\n-    let value = old(\(n))\n+    let value = new(\(n)) // changed\n"
+            n += 1
+        }
+        b.contextItems = [ContextItem(kind: .gitDiff, ref: "HEAD", text: diff, mode: .inline)]
+        let clock = ContinuousClock()
+        var best = Duration.seconds(60)
+        var out = BriefCompiler.compile(b)
+        for _ in 0..<3 {
+            let t = clock.measure { out = BriefCompiler.compile(b) }
+            best = min(best, t)
+        }
+        #expect(!out.text.isEmpty)
+        #expect(best < .milliseconds(100))
+    }
 }
