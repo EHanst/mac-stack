@@ -130,7 +130,7 @@ public struct PromptOptimizer: Sendable {
 
     /// A model on this Mac decodes at about 11 tokens/s (docs/plans/model-facts.md), so 4,096 tokens would
     /// be over six minutes; local rewrites keep the standard cap and a cut-off is flagged in the result.
-    static func outputCap(mode: OptimizeMode, servedLocally: Bool) -> Int {
+    public static func outputCap(mode: OptimizeMode, servedLocally: Bool) -> Int {
         mode.addsDetail && !servedLocally ? maxDetailedOutputTokens : maxOutputTokens
     }
 
@@ -174,23 +174,45 @@ public struct PromptOptimizer: Sendable {
                 let budget = min(room, Self.outputCap(mode: mode, servedLocally: servedLocally))
                 let route = RouteBox()
                 do {
-                    let stream = try await inference.generate(
-                        messages: messages, tools: [], options: GenerationOptions(maxTokens: budget),
-                        priority: context.priority, pin: context.pin,
-                        onRoute: { notice in
-                            switch notice.kind {
-                            case .using(let id): route.set(id)
-                            case .fellBack(_, let to, _): route.set(to)
+                    // One pass: stream a reply for `messages` and return it whole.
+                    func pass(_ messages: [Message], budget: Int) async throws -> String {
+                        let stream = try await inference.generate(
+                            messages: messages, tools: [],
+                            options: GenerationOptions(maxTokens: budget, sampling: .rewrite),
+                            priority: context.priority, pin: context.pin,
+                            onRoute: { notice in
+                                switch notice.kind {
+                                case .using(let id): route.set(id)
+                                case .fellBack(_, let to, _): route.set(to)
+                                }
+                            })
+                        var raw = ""
+                        for try await event in stream {
+                            if case .token(let t) = event {
+                                raw += t
+                                if let partial = Self.partialImproved(raw) { continuation.yield(.partial(partial)) }
                             }
-                        })
-                    var raw = ""
-                    for try await event in stream {
-                        if case .token(let t) = event {
-                            raw += t
-                            if let partial = Self.partialImproved(raw) { continuation.yield(.partial(partial)) }
+                        }
+                        return raw
+                    }
+                    let raw = try await pass(messages, budget: budget)
+                    var result = Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)
+
+                    // Dropped literals are systematic and easy to name, so give the model one chance to put
+                    // them back before giving up on the rewrite.
+                    if let missing = result.rejection?.missing, !missing.isEmpty, !Task.isCancelled {
+                        let repair = Self.repairMessages(messages, reply: raw, missing: missing)
+                        var repairRoom = room
+                        if servedLocally, let limit = await inference.localContextLimit() {
+                            repairRoom = limit - InferenceService.estimateTokens(repair) - Self.safetyMargin
+                        }
+                        if repairRoom >= Self.minimumRoom {
+                            let second = try await pass(repair, budget: min(budget, repairRoom))
+                            let retried = Self.result(raw: second, original: trimmed, mode: mode, model: route.value, ceiling: room)
+                            if retried.rejection == nil { result = retried }
                         }
                     }
-                    continuation.yield(.finished(Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)))
+                    continuation.yield(.finished(result))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -201,6 +223,15 @@ public struct PromptOptimizer: Sendable {
     }
 
     // MARK: Prompt
+
+    /// Follow-up asking the model to restore parts of the original that its rewrite dropped.
+    public static func repairMessages(_ messages: [Message], reply: String, missing: [String]) -> [Message] {
+        let list = missing.map { "• \($0)" }.joined(separator: "\n")
+        return messages + [
+            Message(role: .assistant, content: reply),
+            Message(role: .user, content: "Your rewrite left out these parts of the original:\n\(list)\n\nSend the rewrite again in the same format, with each of them kept exactly as written (same characters, including any backticks or quotes). Change nothing else."),
+        ]
+    }
 
     /// The messages for one rewrite. With `useSharedPrefix` the request is the conversation so far plus
     /// one more user message that carries the instructions and the draft; otherwise it is a
@@ -373,7 +404,7 @@ public struct PromptOptimizer: Sendable {
     private static let personaWords = ["senpai", "sugoi", "kawaii", "kokoro"]
 
     /// `ceiling` is the most tokens the rewrite may take (what the target can hold), not a multiple of the draft.
-    static func result(raw: String, original: String, mode: OptimizeMode, model: ProviderID?,
+    public static func result(raw: String, original: String, mode: OptimizeMode, model: ProviderID?,
                        ceiling: Int = .max) -> Optimization {
         let parsed = parse(raw)
         func reject(_ reason: String, missing: [String] = []) -> Optimization {

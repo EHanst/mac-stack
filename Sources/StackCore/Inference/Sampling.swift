@@ -26,6 +26,12 @@ public struct SamplingParameters: Sendable, Equatable {
     /// because the prompt asks the model to skip its reasoning block (`<think>\n\n</think>`).
     public static let bonsaiInstruct = SamplingParameters(temperature: 0.7, topK: 20, topP: 0.8, presencePenalty: 1.5)
 
+    /// Prompt rewrites and other tasks that must reproduce text faithfully: near-deterministic and no
+    /// presence penalty (which would push the model off repeating the paths, quotes and identifiers the
+    /// rewrite has to keep). Measured on the rewrite eval: no fewer rewrites accepted than the chat
+    /// settings, about 13% fewer tokens, and repeatable.
+    public static let rewrite = SamplingParameters(temperature: 0.2, topK: 20, topP: 1, presencePenalty: 0)
+
     /// Ternary-Bonsai model card, "Thinking mode".
     public static let bonsaiThinking = SamplingParameters(temperature: 1.0, topK: 20, topP: 0.95, presencePenalty: 0)
 }

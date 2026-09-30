@@ -36,7 +36,21 @@ public enum PromptLiterals {
 
     /// Literals from `original` that don't appear in `rewritten`.
     public static func missing(from original: String, in rewritten: String) -> [String] {
-        extract(from: original).filter { !rewritten.contains($0) }
+        extract(from: original).filter { !isPresent($0, in: rewritten) }
+    }
+
+    /// The literal appears as written, or (for inline code and quoted text) its contents appear without
+    /// the backticks or quotes around them. Dropping only the wrapper leaves the words intact, which is
+    /// not worth throwing a rewrite away for. Fenced blocks stay exact, and short contents (under 4
+    /// characters) must keep their wrapper, since a bare "x" would match almost anywhere.
+    static func isPresent(_ literal: String, in rewritten: String) -> Bool {
+        if rewritten.contains(literal) { return true }
+        guard !literal.hasPrefix("```"),
+              let first = literal.first, first == "`" || first == "\"",
+              literal.count > 2, literal.last == first
+        else { return false }
+        let inner = String(literal.dropFirst().dropLast())
+        return inner.count >= 4 && rewritten.contains(inner)
     }
 
     private static func matches(_ re: NSRegularExpression?, in text: String) -> [String] {

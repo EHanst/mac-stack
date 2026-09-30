@@ -54,6 +54,30 @@ struct PromptOptimizerTests {
         #expect(PromptLiterals.missing(from: original, in: "Rename the function in Foo.swift").contains("`oldName`"))
     }
 
+    @Test("dropping only the backticks or quotes around a literal is not a loss")
+    func wrapperOnly() {
+        let original = "Rename the `title` property on `Note`, keep the \"retry limit\" setting"
+        #expect(PromptLiterals.missing(from: original, in: "Rename the title property on Note and keep the retry limit setting").isEmpty)
+        // Contents must still be there.
+        #expect(PromptLiterals.missing(from: original, in: "Rename the property, keep the setting").count == 3)
+    }
+
+    @Test("short contents and fenced blocks keep their wrapper")
+    func wrapperStrictCases() {
+        #expect(PromptLiterals.missing(from: "set `x` to 5", in: "set x to 5 (fix the axis)").contains("`x`"))
+        let fenced = "```swift\nlet a = 1\n```"
+        #expect(PromptLiterals.missing(from: fenced, in: "let a = 1").contains(fenced))
+    }
+
+    @Test("repair request quotes the reply and names what to restore")
+    func repair() {
+        let base = [Message(role: .system, content: "sys"), Message(role: .user, content: "draft")]
+        let m = PromptOptimizer.repairMessages(base, reply: "<improved>x</improved>", missing: ["`load()`", "30"])
+        #expect(m.count == 4)
+        #expect(m[2].role == .assistant && m[2].content == "<improved>x</improved>")
+        #expect(m[3].role == .user && m[3].content.contains("• `load()`") && m[3].content.contains("• 30"))
+    }
+
     // MARK: Parsing
 
     @Test("parses the tagged reply")
