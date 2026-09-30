@@ -80,10 +80,12 @@ public actor InferenceService {
         await registry.allProviders(with: .textGeneration).first(where: { $0.isLocal })?.id
     }
 
-    /// Smallest prompt limit among local generation providers (nil if none report one).
+    /// Smallest prompt limit among local generation providers that can serve right now (nil if none report one).
+    /// A model that is unavailable (e.g. too big for free memory) never gets a request, so its limit doesn't count.
     public func localContextLimit() async -> Int? {
         var limits: [Int] = []
         for provider in await registry.allProviders(with: .textGeneration) where provider.isLocal {
+            if case .unavailable = await provider.healthCheck() { continue }
             if let n = await provider.maxContextTokens() { limits.append(n) }
         }
         return limits.min()
