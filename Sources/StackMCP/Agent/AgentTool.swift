@@ -132,5 +132,14 @@ public struct CompilerRunnerTool: AgentToolHandler {
 
 public enum AgentToolError: LocalizedError {
     case missingArgument(String)
-    public var errorDescription: String? { "Missing required argument: \(self)" }
+    case invalidArgument(String, String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingArgument(let name):
+            "Missing required argument: \(name)"
+        case .invalidArgument(let name, let reason):
+            "Invalid \(name): \(reason)"
+        }
+    }
 }

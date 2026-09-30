@@ -9,8 +9,6 @@ struct PromptInspectorSheet: View {
     @Environment(AppServices.self) private var services
     let draft: String
     let intent: PromptEngineer.Intent?
-    /// Called with the message exactly as it would be sent, so the rewriter can check the draft against it.
-    let onSynthesize: (_ asSent: String) -> Void
     let onClose: () -> Void
 
     @State private var preview: AppServices.PromptPreview?
@@ -20,12 +18,6 @@ struct PromptInspectorSheet: View {
             HStack {
                 Label("What the model sees", systemImage: "eye").font(.mtTitleMedium)
                 Spacer()
-                Button {
-                    if let preview { onSynthesize(preview.userTurn) }
-                } label: { Label("Synthesize", systemImage: "wand.and.stars") }
-                    .buttonStyle(MTOutlinedButtonStyle())
-                    .disabled(preview == nil || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .help("Check for conflicting instructions and add useful missing information")
                 Button("Done", action: onClose).buttonStyle(MTFilledButtonStyle()).keyboardShortcut(.defaultAction)
             }
             MTDivider()

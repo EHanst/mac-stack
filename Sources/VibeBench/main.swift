@@ -6,7 +6,7 @@ import StackCore
 import MLXNN
 
 // vibe-bench — performance harness for the local model.
-//   swift run -c release VibeBench --optimizer-eval [--modes improve,synthesize] [--repeats 1] [--eval-json out.json] [--sampling rewrite|chat|greedy] [--no-repair]
+//   swift run -c release VibeBench --optimizer-eval [--modes improve,expand,adapt] [--repeats 1] [--eval-json out.json] [--sampling rewrite|chat|greedy] [--no-repair]
 //   swift run -c release VibeBench --mtp-probe   (MTP head draft-acceptance, Qwen3.5 packs with optiq/mtp.safetensors)   (rewrite quality gate)
 //   swift run -c release VibeBench --idle-cancel-test   (reply after a background re-read is cancelled part-way)
 //   swift run -c release VibeBench --long-chat-test [--ceiling 6000]   (real chat: cache hits, compaction, summaries)
@@ -33,7 +33,7 @@ struct Options {
     var textTest = false
     var studioTest = false
     var optimizerEval = false
-    var evalModes = ["improve", "synthesize"]
+    var evalModes = ["improve"]
     var evalRepeats = 1
     var evalJSON: URL?
     var evalSampling = "rewrite"
@@ -403,7 +403,7 @@ func run() async throws {
     if opts.mtpCheck {
         print("[mtp check] greedy decode with speculation on vs off (must match), 160 tokens")
         var totals = (onSecs: 0.0, offSecs: 0.0, tokens: 0, cycles: 0, accepted: 0, same: 0, cases: 0)
-        for mode in [OptimizeMode.improve, .synthesize] {
+        for mode in [OptimizeMode.improve] {
             for (name, draft) in OptimizerEval.drafts.prefix(5) {
                 let messages = PromptOptimizer.requestMessages(draft: draft, context: OptimizeContext(profile: .localSmall), mode: mode, useSharedPrefix: false)
                 var texts: [String] = []
@@ -422,7 +422,7 @@ func run() async throws {
                 }
                 let same = texts[0] == texts[1]
                 totals.same += same ? 1 : 0; totals.cases += 1
-                print("  \(mode == .improve ? "improve" : "synthesize") · \(name): \(same ? "identical" : "DIFFERENT")")
+                print("  improve · \(name): \(same ? "identical" : "DIFFERENT")")
                 if !same {
                     let a = Array(texts[0]), b = Array(texts[1])
                     let i = zip(a, b).enumerated().first { $0.element.0 != $0.element.1 }?.offset ?? min(a.count, b.count)
@@ -439,7 +439,7 @@ func run() async throws {
         print("[mtp probe] does the MTP head's guess match the main model's greedy next-next token?")
         let file = opts.model.appendingPathComponent("optiq/mtp.safetensors")
         var totals: [String: (Int, Int)] = [:]
-        for mode in [OptimizeMode.improve, .synthesize] {
+        for mode in [OptimizeMode.improve] {
             for (_, draft) in OptimizerEval.drafts.prefix(6) {
                 let messages = PromptOptimizer.requestMessages(draft: draft, context: OptimizeContext(profile: .localSmall), mode: mode, useSharedPrefix: false)
                 for r in try await provider.debugMTPProbe(messages: messages, count: 200, mtpFile: file) {

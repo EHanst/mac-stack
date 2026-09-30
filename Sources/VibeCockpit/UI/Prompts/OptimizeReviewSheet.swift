@@ -11,7 +11,6 @@ struct OptimizeReviewSheet: View {
     let draft: String
     let onAccept: (String) -> Void
     let onExpand: () -> Void
-    let onSynthesize: () -> Void
     let onAskQuestions: ([String]) -> Void
     let onClose: () -> Void
 
@@ -109,8 +108,6 @@ struct OptimizeReviewSheet: View {
                     Button("Keep mine") { studio.dismissReview(); onClose() }.buttonStyle(MTTextButtonStyle())
                     Button("Expand") { onExpand() }.buttonStyle(MTOutlinedButtonStyle())
                         .help("Try again and turn this into a detailed specification")
-                    Button("Synthesize") { onSynthesize() }.buttonStyle(MTOutlinedButtonStyle())
-                        .help("Resolve conflicting instructions and fill in missing information")
                     Spacer()
                     Button("Use this") { accept(result) }
                         .buttonStyle(MTFilledButtonStyle()).keyboardShortcut(.defaultAction)
@@ -125,7 +122,6 @@ struct OptimizeReviewSheet: View {
                     if result.rejection != nil {
                         Button("Try Expand") { onExpand() }.buttonStyle(MTOutlinedButtonStyle())
                     }
-                    Button("Synthesize") { onSynthesize() }.buttonStyle(MTOutlinedButtonStyle())
                     Spacer()
                     Button("Keep mine") { studio.dismissReview(); onClose() }.buttonStyle(MTFilledButtonStyle())
                 }

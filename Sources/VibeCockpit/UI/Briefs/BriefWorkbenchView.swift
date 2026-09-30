@@ -183,7 +183,6 @@ struct BriefWorkbenchView: View {
             studio: services.promptStudio, draft: draft,
             onAccept: { model.setText($0, for: kind); services.promptStudio.clearUndo(); improvingKind = nil },
             onExpand: { services.promptStudio.startOptimize(draft: draft, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
-            onSynthesize: { services.promptStudio.startOptimize(draft: draft, mode: .synthesize, intent: PromptEngineer.Intent.general.rawValue) },
             onAskQuestions: { questions in
                 model.setText(draft + "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), for: kind)
                 services.promptStudio.dismissReview(); improvingKind = nil
