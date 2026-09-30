@@ -11,6 +11,8 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set by the menu-bar Quit item, the one in-app way to stop the app.
     static var quitRequested = false
+    /// Set at launch: writes any brief edit still waiting on its autosave delay before the app exits.
+    static var flushBeforeQuit: (@MainActor () async -> Void)?
     private static let mainWindowTitle = AppBrand.name
     /// `keyQuitReason` ('why?') on the quit Apple event; says whether the system is logging out etc.
     private static let quitReasonKeyword: AEKeyword = 0x7768_793F
@@ -22,7 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .paramDescriptor(forKeyword: Self.quitReasonKeyword)?.enumCodeValue
         switch QuitPolicy.decide(explicitQuit: Self.quitRequested, reason: QuitReason(appleEventCode: code)) {
         case .terminate:
-            return .terminateNow
+            guard let flush = Self.flushBeforeQuit else { return .terminateNow }
+            Task { @MainActor in
+                await flush()
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
         case .hideAndKeepRunning:
             for window in NSApp.windows where window.title == Self.mainWindowTitle { window.close() }
             return .terminateCancel
@@ -85,6 +92,7 @@ struct MenuBarLabel: View {
         MenuBarIcon()
             // Starts the services at launch even when no window is shown (e.g. login item).
             .task {
+                AppDelegate.flushBeforeQuit = { [briefs = services.briefs] in await briefs.flushNow() }
                 services.approvals.onNeedsAttention = {
                     NSApp.activate(ignoringOtherApps: true)
                     openWindow(id: "main")

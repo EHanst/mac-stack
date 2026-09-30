@@ -228,4 +228,34 @@ struct BriefCompilerTests {
         #expect(compile(["a", "b"], budget: full - 1).includedItemIDs == ["b"])
         #expect(compile(["b", "a"], budget: full - 1).includedItemIDs == ["b"])
     }
+
+    @Test("seeded secrets never reach the compiled prompt, and a warning says so")
+    func secretsNeverCompiled() {
+        var b = brief()
+        b.setText("Fix the deploy. My key is sk-abcdefghijklmnopqrstuvwxyz123456", for: .goal)
+        b.contextItems = [ContextItem(kind: .file, ref: "env.swift", text: "let k = \"AKIAIOSFODNN7EXAMPLE\"", mode: .inline)]
+        let out = BriefCompiler.compile(b)
+        #expect(!out.text.contains("sk-abcdef") && !out.text.contains("AKIAIOSFODNN7EXAMPLE"))
+        #expect(out.warnings.contains { $0.code == .secretRedacted })
+    }
+
+    @Test("a secret in a reference path is redacted, and the warning names the item")
+    func secretInRefAndItemWarning() {
+        var b = brief()
+        var item = ContextItem(id: "i1", kind: .file, ref: "a.swift", text: "let k = \"AKIAIOSFODNN7EXAMPLE\"", mode: .inline)
+        item.ref = "AKIAIOSFODNN7EXAMPLE/a.swift"
+        b.contextItems = [item]
+        let out = BriefCompiler.compile(b)
+        #expect(!out.text.contains("AKIAIOSFODNN7EXAMPLE"))
+        #expect(out.warnings.contains { $0.code == .secretRedacted && $0.itemID == "i1" })
+    }
+
+    @Test("secrets in a disabled section or an excluded item produce no warning")
+    func hiddenSecretsQuiet() {
+        var b = brief()
+        b.setText("sk-abcdefghijklmnopqrstuvwxyz123456", for: .examples)
+        b.sections[BriefSection.Kind.allCases.firstIndex(of: .examples)!].enabled = false
+        b.contextItems = [ContextItem(kind: .file, ref: "e", text: "AKIAIOSFODNN7EXAMPLE", mode: .inline, included: false)]
+        #expect(!BriefCompiler.compile(b).warnings.contains { $0.code == .secretRedacted })
+    }
 }

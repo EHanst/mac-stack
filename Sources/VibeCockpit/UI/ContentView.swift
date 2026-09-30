@@ -34,7 +34,7 @@ struct ContentView: View {
 
 struct MainLayout: View {
     @Environment(AppCoordinator.self) private var coordinator
-    @State private var selectedDestination: NavDestination = .chat
+    @State private var selectedDestination: NavDestination = .briefs
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// Re-identifies the panels when the font changes so every `Font.mt*` is re-read.
     @AppStorage(AppFont.storageKey) private var fontChoice = AppFont.default.rawValue
@@ -183,6 +183,7 @@ struct MainLayout: View {
     @ViewBuilder
     private var contentPanel: some View {
         switch selectedDestination {
+        case .briefs:    BriefWorkbenchView()
         case .chat:      IntentPane(onManagePrompts: { selectedDestination = .prompts })
         case .diff:      DiffCanvas()
         case .models:    ModelManagerView()
@@ -197,7 +198,9 @@ struct MainLayout: View {
 
     private var detailPanel: some View {
         VStack(spacing: 0) {
-            if selectedDestination == .diff {
+            if selectedDestination == .briefs {
+                CompiledPromptPane()
+            } else if selectedDestination == .diff {
                 // Diff is already the content panel; show preview or placeholder
                 previewOrEmpty
             } else if coordinator.state.currentDiff != nil {
@@ -225,7 +228,7 @@ struct MainLayout: View {
             Text("Nothing to show")
                 .font(.mtTitleMedium)
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.5))
-            Text("Diffs and previews appear here when there is something to show.")
+            Text("Changes made by connected tools appear here. Your prompts are copied out of the chat.")
                 .font(.mtBodySmall)
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.4))
                 .multilineTextAlignment(.center)

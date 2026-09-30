@@ -144,4 +144,20 @@ struct WorkspaceManagerTests {
         let valid = Tool(name: "t", description: "d", inputSchema: .object(["type": "object", "properties": .object([:])]))
         #expect(valid.withValidSchema.inputSchema == valid.inputSchema)
     }
+
+    @Test("removing a project tells the remove handler its id, so its index can be released")
+    func removeHandler() async throws {
+        let m = manager()
+        let removed = LockedList()
+        await m.setRemoveHandler { removed.add($0) }
+        let record = try await m.add(folder("alpha"))
+        await m.remove(record.id)
+        #expect(removed.items == [record.id])
+    }
+}
+
+private final class LockedList: @unchecked Sendable {
+    private let l = NSLock(); private var d: [String] = []
+    func add(_ s: String) { l.withLock { d.append(s) } }
+    var items: [String] { l.withLock { d } }
 }

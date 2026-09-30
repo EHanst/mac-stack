@@ -71,6 +71,7 @@ public actor WorkspaceManager {
     private var toolsByWorkspace: [String: [any AgentToolHandler]] = [:]
     private var statuses: [String: WorkspaceStatus] = [:]
     private var onChange: (@Sendable () -> Void)?
+    private var onRemove: (@Sendable (String) -> Void)?
     private let log = Logger(subsystem: "com.vibecockpit", category: "WorkspaceManager")
 
     public init(store: any WorkspaceStore = FileWorkspaceStore(url: FileWorkspaceStore.defaultURL()), open: @escaping Opener) {
@@ -80,6 +81,8 @@ public actor WorkspaceManager {
     }
 
     public func setChangeHandler(_ handler: (@Sendable () -> Void)?) { onChange = handler }
+    /// Called with a project's id when it is removed, so anything holding its index can let go.
+    public func setRemoveHandler(_ handler: (@Sendable (String) -> Void)?) { onRemove = handler }
 
     public var list: [(record: WorkspaceRecord, status: WorkspaceStatus)] {
         records.map { ($0, statuses[$0.id] ?? .opening) }
@@ -115,6 +118,7 @@ public actor WorkspaceManager {
         toolsByWorkspace[id] = nil
         statuses[id] = nil
         try? store.save(records)
+        onRemove?(id)
         onChange?()
     }
 

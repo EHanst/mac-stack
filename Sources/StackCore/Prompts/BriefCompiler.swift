@@ -2,7 +2,7 @@ import Foundation
 
 public struct BriefWarning: Sendable, Equatable {
     public enum Code: String, Sendable {
-        case emptyGoal, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, sectionsOverBudget
+        case emptyGoal, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, sectionsOverBudget, secretRedacted
     }
     public var code: Code
     public var message: String
@@ -20,8 +20,34 @@ public struct CompiledPrompt: Sendable, Equatable {
 /// same brief always compiles to the same text. Nothing is dropped without a warning.
 public enum BriefCompiler {
 
-    public static func compile(_ brief: Brief) -> CompiledPrompt {
+    public static func compile(_ original: Brief) -> CompiledPrompt {
         var warnings: [BriefWarning] = []
+        // Nothing leaves the app with a credential in it, whichever section or item it came from.
+        // Only what will actually be emitted is counted, so a hidden secret does not raise a warning.
+        var brief = original
+        var sectionRedactions = 0
+        for i in brief.sections.indices {
+            let r = ContextRedactor.redact(brief.sections[i].text)
+            brief.sections[i].text = r.text
+            if brief.sections[i].enabled { sectionRedactions += r.count }
+        }
+        if sectionRedactions > 0 {
+            warnings.append(.init(code: .secretRedacted,
+                                  message: "\(sectionRedactions) secret\(sectionRedactions == 1 ? " was" : "s were") removed from your text.", itemID: nil))
+        }
+        for i in brief.contextItems.indices {
+            let body = ContextRedactor.redact(brief.contextItems[i].text)
+            let ref = ContextRedactor.redact(brief.contextItems[i].ref)
+            brief.contextItems[i].text = body.text
+            brief.contextItems[i].ref = ref.text
+            if brief.contextItems[i].included, body.count + ref.count > 0 {
+                let n = body.count + ref.count
+                warnings.append(.init(code: .secretRedacted,
+                                      message: "\(n) secret\(n == 1 ? " was" : "s were") removed from \(brief.contextItems[i].ref).",
+                                      itemID: brief.contextItems[i].id))
+            }
+        }
+
         let structure = brief.target.structure
         let budget = brief.target.tokenBudget
 

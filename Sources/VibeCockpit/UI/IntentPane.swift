@@ -131,6 +131,12 @@ struct IntentPane: View {
     private var historyList: some View {
         ScrollViewReader { proxy in
             ScrollView {
+                if coordinator.state.intentHistory.isEmpty {
+                    Text("Quick questions only. Build the real prompt in Briefs.")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .padding(16)
+                }
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(coordinator.state.intentHistory) { event in
                         IntentEventBubble(event: event, onSave: { sheet = .save($0) })
@@ -166,7 +172,7 @@ struct IntentPane: View {
 
     private var fieldRow: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Describe what you want to build…", text: $intentText, axis: .vertical)
+            TextField("Describe the task you want a prompt for…", text: $intentText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.mtBodyMedium)
                 .lineLimit(1...8)
