@@ -96,6 +96,7 @@ public final class AppServices {
             try await AppServices.openWorkspace(record, registry: registry, runner: runnerBox.get(), search: workspaceSearch)
         }
         self.workspaces = workspaces
+        Task { await workspaces.setRemoveHandler { id in Task { await workspaceSearch.unregister(id: id) } } }
         let projectPrompts = WorkspacePromptStore(roots: { await workspaces.list.map { ($0.record.name, $0.record.url) } })
         self.projectPrompts = projectPrompts
         self.promptStudio = PromptStudioModel(
@@ -155,7 +156,7 @@ public final class AppServices {
         await promptStudio.reload()
         briefs.contextSource = BriefContextSource(
             roots: { [workspaces] in await workspaces.list.map(\.record.url) },
-            search: { [workspaceSearch] query in await workspaceSearch.search(query, limit: 8) },
+            search: { [workspaceSearch] query in try await workspaceSearch.searchOrThrow(query, limit: 8) },
             workingDiff: { try await GitDiffReader.workingDiff(in: $0) })
         await briefs.reload()
         await promptStudio.refreshModel()

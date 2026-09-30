@@ -28,6 +28,10 @@ public enum ContextItemFactory {
         guard let root = roots.map({ $0.resolvingSymlinksInPath() }).first(where: { contains($0, resolved) }) else {
             throw ContextItemError.outsideWorkspace
         }
+        // Look before reading: a directory, a pipe or a multi-gigabyte log must not be loaded to find out.
+        guard let values = try? resolved.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              values.isRegularFile == true else { throw ContextItemError.unreadable }
+        if let size = values.fileSize, size > maxFileBytes { throw ContextItemError.tooLarge(size) }
         guard let data = try? Data(contentsOf: resolved) else { throw ContextItemError.unreadable }
         guard data.count <= maxFileBytes else { throw ContextItemError.tooLarge(data.count) }
         guard !data.contains(0), let text = String(data: data, encoding: .utf8) else { throw ContextItemError.binary }

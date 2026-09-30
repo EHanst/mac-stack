@@ -206,15 +206,15 @@ struct BriefWorkbenchModelTests {
     }
 
     @Test("search results become items with the brief's surface mode; no source means no items")
-    func search() async {
+    func search() async throws {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        #expect(await m.searchContext("login").isEmpty)
+        #expect(try await m.searchContext("login").isEmpty)
         m.contextSource = BriefContextSource(
             roots: { [URL(fileURLWithPath: "/w")] },
             search: { _ in [SearchResult(chunkID: UUID(), filePath: "/w/S.swift", declarationKind: "func", content: "func f() {}", score: 1, rank: 1)] },
             workingDiff: { _ in "" })
-        let items = await m.searchContext("login")
+        let items = try await m.searchContext("login")
         #expect(items.count == 1 && items[0].mode == .reference)
     }
 
@@ -236,5 +236,57 @@ struct BriefWorkbenchModelTests {
         await m.newBrief(title: "t")
         await #expect(throws: ContextItemError.noWorkspace) { try await m.addWorkingDiff() }
         await #expect(throws: ContextItemError.noWorkspace) { try await m.addFile(URL(fileURLWithPath: "/w/a.swift")) }
+    }
+
+    @Test("a slow diff lands in the brief it was requested for, even if you switch briefs meanwhile")
+    func diffFollowsRequestingBrief() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "first")
+        let firstID = m.selectedID!
+        await m.newBrief(title: "second")
+        m.select(firstID)
+        m.contextSource = BriefContextSource(
+            roots: { [URL(fileURLWithPath: "/w")] }, search: { _ in [] },
+            workingDiff: { _ in try await Task.sleep(for: .milliseconds(150)); return "+slow" })
+        async let adding: Void = m.addWorkingDiff()
+        try await Task.sleep(for: .milliseconds(30))
+        m.select(m.briefs.first { $0.id != firstID }!.id)
+        try await adding
+        #expect(m.briefs.first { $0.id == firstID }?.contextItems.count == 1)
+        #expect(m.selected?.contextItems.isEmpty == true)
+    }
+
+    @Test("with several projects every project's changes are added; a project that is not a repo is skipped")
+    func multiRootDiff() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.contextSource = BriefContextSource(
+            roots: { [URL(fileURLWithPath: "/a"), URL(fileURLWithPath: "/b"), URL(fileURLWithPath: "/c")] },
+            search: { _ in [] },
+            workingDiff: { root in
+                if root.lastPathComponent == "b" { throw GitDiffError.notARepository }
+                return "+change in \(root.lastPathComponent)"
+            })
+        try await m.addWorkingDiff()
+        #expect(m.selected?.contextItems.count == 2)
+    }
+
+    @Test("if no project has a usable repository, the reason is reported")
+    func multiRootAllFail() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.contextSource = BriefContextSource(roots: { [URL(fileURLWithPath: "/a")] }, search: { _ in [] },
+                                             workingDiff: { _ in throw GitDiffError.notARepository })
+        await #expect(throws: GitDiffError.notARepository) { try await m.addWorkingDiff() }
+    }
+
+    @Test("a failing search is reported to the caller")
+    func searchFailure() async {
+        struct Down: Error {}
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.contextSource = BriefContextSource(roots: { [URL(fileURLWithPath: "/w")] }, search: { _ in throw Down() },
+                                             workingDiff: { _ in "" })
+        await #expect(throws: Down.self) { _ = try await m.searchContext("x") }
     }
 }

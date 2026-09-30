@@ -84,4 +84,13 @@ struct ContextItemFactoryTests {
         let d = ContextItemFactory.diff("+new line", ref: "working changes")
         #expect(d.kind == .gitDiff && d.mode == .inline && d.priority > 0)
     }
+
+    @Test("a directory or special file is rejected without being read")
+    func notRegular() throws {
+        let root = try makeRoot()
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        #expect(throws: ContextItemError.unreadable) {
+            try ContextItemFactory.file(at: root.appendingPathComponent("sub"), roots: [root], surface: .other, provenance: "")
+        }
+    }
 }

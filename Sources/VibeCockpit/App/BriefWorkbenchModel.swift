@@ -111,8 +111,11 @@ public final class BriefWorkbenchModel {
     }
 
     /// Adds items; one with an id already present is refreshed in place and keeps its include switch.
-    public func addContext(_ items: [ContextItem]) {
-        mutate { brief in
+    public func addContext(_ items: [ContextItem]) { addContext(items, to: nil) }
+
+    /// `id` pins the target brief; nil means whichever is selected now.
+    private func addContext(_ items: [ContextItem], to id: String?) {
+        mutate(id: id) { brief in
             for var item in items {
                 if let i = brief.contextItems.firstIndex(where: { $0.id == item.id }) {
                     item.included = brief.contextItems[i].included
@@ -139,14 +142,15 @@ public final class BriefWorkbenchModel {
         }
     }
 
-    /// Search hits for `query`, as items ready to add. Empty when there is no index.
-    public func searchContext(_ query: String) async -> [ContextItem] {
+    /// Search hits for `query`, as items ready to add. Empty when there is no index; throws if search itself failed.
+    public func searchContext(_ query: String) async throws -> [ContextItem] {
         guard let source = contextSource, let brief = selected else { return [] }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         let roots = await source.roots()
+        let hits = try await source.search(trimmed)
         var seen = Set<String>()
-        return await source.search(trimmed).map {
+        return hits.map {
             ContextItemFactory.hit(filePath: $0.filePath, kind: $0.declarationKind, content: $0.content,
                                    query: trimmed, roots: roots, surface: brief.target.surface)
         }.filter { seen.insert($0.id).inserted }
@@ -154,18 +158,39 @@ public final class BriefWorkbenchModel {
 
     public func addFile(_ url: URL) async throws {
         guard let source = contextSource, let brief = selected else { throw ContextItemError.noWorkspace }
+        let id = brief.id, surface = brief.target.surface
         let roots = await source.roots()
         guard !roots.isEmpty else { throw ContextItemError.noWorkspace }
-        addContext([try ContextItemFactory.file(at: url, roots: roots, surface: brief.target.surface, provenance: "picked file")])
+        // Reading happens off the main actor so a big or slow file cannot freeze typing.
+        let item = try await Task.detached {
+            try ContextItemFactory.file(at: url, roots: roots, surface: surface, provenance: "picked file")
+        }.value
+        addContext([item], to: id)
     }
 
+    /// Adds the uncommitted changes of every project that has a repository. The result goes to the brief
+    /// that was selected when this was called, however long git takes.
     public func addWorkingDiff() async throws {
-        guard let source = contextSource, selected != nil, let root = await source.roots().first else {
-            throw ContextItemError.noWorkspace
+        guard let source = contextSource, let id = selectedID else { throw ContextItemError.noWorkspace }
+        let roots = await source.roots()
+        guard !roots.isEmpty else { throw ContextItemError.noWorkspace }
+        var items: [ContextItem] = []
+        var firstError: Error?
+        var sawEmpty = false
+        for root in roots {
+            do {
+                let diff = try await source.workingDiff(root)
+                if diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { sawEmpty = true; continue }
+                items.append(ContextItemFactory.diff(diff, ref: "uncommitted changes in \(root.lastPathComponent)"))
+            } catch {
+                firstError = firstError ?? error
+            }
         }
-        let diff = try await source.workingDiff(root)
-        guard !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ContextItemError.noChanges }
-        addContext([ContextItemFactory.diff(diff, ref: "uncommitted changes in \(root.lastPathComponent)")])
+        if items.isEmpty {
+            if let firstError, !sawEmpty { throw firstError }
+            throw ContextItemError.noChanges
+        }
+        addContext(items, to: id)
     }
 
     /// Replaces the selected brief wholesale (used by later context and version features).
@@ -173,8 +198,8 @@ public final class BriefWorkbenchModel {
         mutate { $0 = brief; $0.updatedAt = Date() }
     }
 
-    private func mutate(_ change: (inout Brief) -> Void) {
-        guard let i = briefs.firstIndex(where: { $0.id == selectedID }) else { return }
+    private func mutate(id: String? = nil, _ change: (inout Brief) -> Void) {
+        guard let i = briefs.firstIndex(where: { $0.id == (id ?? selectedID) }) else { return }
         change(&briefs[i])
         recompile()
         scheduleSave(id: briefs[i].id)

@@ -28,4 +28,18 @@ struct WorkspaceSearchTests {
         await search.unregister(id: "ok")
         #expect(await search.search("q", limit: 5).isEmpty)
     }
+
+    @Test("if every project fails the search throws instead of looking empty")
+    func allFail() async {
+        struct Boom: Error {}
+        let search = WorkspaceSearch()
+        await search.register(id: "a") { _ in throw Boom() }
+        await search.register(id: "b") { _ in throw Boom() }
+        await #expect(throws: WorkspaceSearchError.allFailed) { try await search.searchOrThrow("q", limit: 5) }
+    }
+
+    @Test("no projects registered is an empty result, not an error")
+    func none() async throws {
+        #expect(try await WorkspaceSearch().searchOrThrow("q", limit: 5).isEmpty)
+    }
 }
