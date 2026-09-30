@@ -64,3 +64,13 @@ Key finding: with one free-text input and instant compile, the brief ≈ input +
 - **D8 Compile.** Context items are included whenever `item.included` (there's no context toggle any more). Item rendering and `</file` neutralization are unchanged.
 - **D9 MCP contract.** `get_brief` still returns only the compiled prompt: MCP clients rely on "ready to follow". `list_briefs` marks edited briefs with "· brief edited".
 
+
+
+## Amendment 2026-09-30: Improve flow
+
+Supersedes decision 3 ("keep Sidecar rail: Ask me / Critique / Paste reply"):
+
+- Ask me and Critique are removed from the UI. Paste reply stays. The interview/critique operations stay in `BriefSidecar` for `KnowledgeEval` and `VibeBench`.
+- Cmd+Return in the Input runs Improve (same sheet as the Improve button). Plain Return stays a newline.
+- A feedback bar under the brief edits the body directly from a plain-language instruction (`BriefSidecar.edit`), with Undo (`BriefFeedbackModel`). Edits that drop code, paths, quoted text or numbers are refused.
+- A brainstorm banner above the rail shows up to 2 questions and 2 tips (`BriefSidecar.brainstorm`), refreshed after a 2 s debounce once the brief is edited, and on demand.

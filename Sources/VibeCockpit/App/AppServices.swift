@@ -59,6 +59,8 @@ public final class AppServices {
     /// Save/insert/improve prompts from the chat box.
     public let promptStudio: PromptStudioModel
     public let sidecar: BriefSidecarModel
+    public let feedback: BriefFeedbackModel
+    public let improve = BriefImproveModel()
     /// The sidecar model's lasting knowledge (accepted-brief history, packs) and its opt-in.
     public let knowledge: KnowledgeModel
     private let knowledgeStore: KnowledgeStore
@@ -119,7 +121,7 @@ public final class AppServices {
         let knowledge = KnowledgeModel(store: knowledgeStore)
         self.knowledge = knowledge
         let retriever = knowledge.retriever
-        self.sidecar = BriefSidecarModel(sidecar: BriefSidecar(guidance: { brief, _ in await retriever.guidance(for: brief) }) { messages in
+        let briefSidecar = BriefSidecar(guidance: { brief, _ in await retriever.guidance(for: brief) }) { messages in
             // Room for the reply too; a request the local model can't hold fails with a sentence, not a stack.
             if let limit = await inference.localContextLimit(),
                InferenceService.estimateTokens(messages) + BriefSidecar.generationOptions.maxTokens > limit {
@@ -134,7 +136,9 @@ public final class AppServices {
                 if case .token(let t) = event { out += t }
             }
             return out
-        })
+        }
+        self.sidecar = BriefSidecarModel(sidecar: briefSidecar)
+        self.feedback = BriefFeedbackModel(sidecar: briefSidecar, workbench: self.briefs)
         let briefModel = self.briefs
         briefModel.onBriefAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }
         self.sidecar.onAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }
