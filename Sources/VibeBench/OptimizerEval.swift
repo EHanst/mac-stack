@@ -48,7 +48,7 @@ enum OptimizerEval {
                                 options: GenerationOptions(maxTokens: PromptOptimizer.outputCap(mode: m, servedLocally: true), sampling: params, cacheSnapshots: false)) {
                                 if case .token(let t) = e { raw += t; tokens += 1 }
                             }
-                        } catch { raw = "" }
+                        } catch { print("    generation error: \(error)"); raw = "" }
                         return raw
                     }
                     var raw = await pass(messages)
@@ -60,6 +60,11 @@ enum OptimizerEval {
                         if retried.rejection == nil { r = retried; raw = second; repaired = true }
                     }
                     let secs = Date().timeIntervalSince(start)
+                    if ProcessInfo.processInfo.environment["EVAL_MEM"] != nil {
+                        let b = await provider.budgetInputs()
+                        func g(_ x: Int) -> String { String(format: "%.2f", Double(x) / 1_073_741_824) }
+                        print("    mem: ws \(g(b.workingSet)) weights \(g(b.weights)) active \(g(b.active)) cache \(g(b.cache)) avail \(g(b.available)) → \(await provider.contextVerdict())")
+                    }
                     let outcome: String
                     if let rej = r.rejection {
                         outcome = rej.missing.isEmpty ? "rejected:\(rej.reason.prefix(40))" : "rejected:dropped-literal"

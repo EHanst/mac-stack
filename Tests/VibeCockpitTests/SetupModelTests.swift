@@ -51,7 +51,7 @@ struct SetupModelTests {
         await m.waitUntilIdle()
         #expect(m.phase == .finished)
         #expect(m.fraction == 1)
-        #expect(await calls.installed == ["bonsai-27b", "bge-small-en-v1.5"])
+        #expect(await calls.installed == ["qwen3.5-4b-optiq", "bge-small-en-v1.5"])
         #expect(await calls.finished == 1)
     }
 
@@ -110,7 +110,7 @@ struct SetupModelTests {
     @Test("with everything already installed there is nothing to download but setup still completes")
     func nothingToDownload() async {
         let calls = Calls()
-        let plan = SetupPlan.make(for: capableMac, installed: ["bonsai-27b", "bge-small-en-v1.5"])
+        let plan = SetupPlan.make(for: capableMac, installed: ["qwen3.5-4b-optiq", "bge-small-en-v1.5"])
         let m = model(plan, calls: calls)
         m.start()
         await m.waitUntilIdle()
@@ -122,12 +122,12 @@ struct SetupModelTests {
     @Test("cloud-only and blocked plans never start an install")
     func noStart() async {
         let calls = Calls()
-        let lowRAM = HardwareProfile(chipName: "Apple M1", physicalMemoryBytes: 8 << 30, isAppleSilicon: true, freeDiskBytes: 500_000_000_000)
+        let lowRAM = HardwareProfile(chipName: "Apple M1", physicalMemoryBytes: 4 << 30, isAppleSilicon: true, freeDiskBytes: 500_000_000_000)
         let cloud = model(SetupPlan.make(for: lowRAM), calls: calls)
         cloud.start(); await cloud.waitUntilIdle()
         #expect(cloud.phase == .ready)
 
-        let lowDisk = HardwareProfile(chipName: "Apple M3", physicalMemoryBytes: 18 << 30, isAppleSilicon: true, freeDiskBytes: 2_000_000_000)
+        let lowDisk = HardwareProfile(chipName: "Apple M3", physicalMemoryBytes: 18 << 30, isAppleSilicon: true, freeDiskBytes: 1_000_000_000)
         let blocked = model(SetupPlan.make(for: lowDisk), calls: calls)
         blocked.start(); await blocked.waitUntilIdle()
         #expect(blocked.phase == .ready)
@@ -142,7 +142,7 @@ struct SetupModelTests {
         })
         m.start(); m.start(); m.start()
         await m.waitUntilIdle()
-        #expect(await calls.installed == ["bonsai-27b", "bge-small-en-v1.5"])
+        #expect(await calls.installed == ["qwen3.5-4b-optiq", "bge-small-en-v1.5"])
     }
 
     @Test("context description is a rounded, human-readable estimate")
@@ -150,7 +150,7 @@ struct SetupModelTests {
         let m = model(SetupPlan.make(for: capableMac), calls: Calls())
         #expect(m.contextDescription?.hasPrefix("about ") == true)
         #expect(m.contextDescription?.hasSuffix(" words") == true)
-        let cloud = model(SetupPlan.make(for: HardwareProfile(chipName: "x", physicalMemoryBytes: 8 << 30, isAppleSilicon: true, freeDiskBytes: nil)), calls: Calls())
+        let cloud = model(SetupPlan.make(for: HardwareProfile(chipName: "x", physicalMemoryBytes: 4 << 30, isAppleSilicon: true, freeDiskBytes: nil)), calls: Calls())
         #expect(cloud.contextDescription == nil)
     }
 }

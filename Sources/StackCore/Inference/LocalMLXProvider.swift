@@ -66,7 +66,14 @@ public actor LocalMLXProvider: ModelProvider {
             workingSetBytes: GPU.maxRecommendedWorkingSetBytes() ?? Int(ProcessInfo.processInfo.physicalMemory) * 3 / 4,
             weightBytes: weightBytes > 0 ? weightBytes : onDiskWeightBytes(),
             currentActiveBytes: model != nil ? Memory.activeMemory : 0,
-            availableSystemBytes: SystemMemory.availableBytes())
+            // Our own buffer cache is memory we can hand back (`Memory.clearCache`), so it counts as available.
+            availableSystemBytes: SystemMemory.availableBytes().map { $0 + (model != nil ? Memory.cacheMemory : 0) })
+    }
+
+    /// Raw inputs of `contextVerdict`, for diagnosing a budget that refuses (bytes).
+    public func budgetInputs() -> (workingSet: Int, weights: Int, active: Int, cache: Int, available: Int) {
+        (GPU.maxRecommendedWorkingSetBytes() ?? 0, weightBytes, model != nil ? Memory.activeMemory : 0,
+         Memory.cacheMemory, SystemMemory.availableBytes() ?? -1)
     }
 
     public func maxContextTokens() async -> Int? {
@@ -208,9 +215,15 @@ public actor LocalMLXProvider: ModelProvider {
         let (mdl, tok) = try await ensureLoaded()
 
         let (promptIds, boundaries) = tokenize(messages, with: tok)
-        let verdict = contextVerdict()
-        let limit: Int
+        var verdict = contextVerdict()
+        var limit: Int
         switch verdict { case .ok(let n), .belowFloor(let n): limit = n }
+        if promptIds.count > limit {
+            // Give back our cached buffers before refusing; on a tight Mac they are the difference.
+            Memory.clearCache()
+            verdict = contextVerdict()
+            switch verdict { case .ok(let n), .belowFloor(let n): limit = n }
+        }
         if promptIds.count > limit {
             throw LocalModelError.contextTooLarge(promptTokens: promptIds.count, limit: limit)
         }

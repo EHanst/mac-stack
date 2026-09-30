@@ -21,7 +21,27 @@ public actor ModelRegistry {
         }
     }
 
+    /// The local chat model to use first (and the only one to load at startup) when several are
+    /// installed. Nil = no preference, alphabetical.
+    public private(set) var preferredLocalID: ProviderID?
+
     public init() {}
+
+    /// Prefer the tier-recommended model among those installed here; see `ModelCatalog.recommendedChat`.
+    public func choosePreferredLocal(ramBytes: UInt64) {
+        let installed = Set(providers.keys.compactMap { id -> String? in
+            ModelCatalog.chatModels.first { Self.providerID(for: $0) == id }?.id
+        })
+        guard !installed.isEmpty else { preferredLocalID = nil; return }
+        let pick = ModelCatalog.recommendedChat(forRAM: ramBytes, installed: installed)
+        let id = Self.providerID(for: pick)
+        preferredLocalID = providers[id] == nil ? nil : id
+    }
+
+    /// `local:<folder>` for a catalog entry, matching how discovery names providers.
+    public static func providerID(for entry: ModelCatalogEntry) -> ProviderID {
+        "local:" + (entry.installSubpath as NSString).lastPathComponent
+    }
 
     /// Discover providers from:
     /// 1. Local model directory (scanned for config.json bundles)

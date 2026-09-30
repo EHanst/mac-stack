@@ -343,8 +343,27 @@ struct ModelCatalogTests {
     @Test("install locations match what discovery and LocalEmbedder already scan")
     func layout() {
         #expect(ModelCatalog.bonsai27B.installSubpath == "Models/Bonsai-27B")
+        #expect(ModelCatalog.qwen35_4b.installSubpath == "Models/Qwen3.5-4B-OptiQ-4bit")
         #expect(ModelCatalog.bgeSmall.installSubpath == "Models/Embedders/BAAI--bge-small-en-v1.5")
         #expect(LocalEmbedder.defaultDirectory().path.hasSuffix(ModelCatalog.bgeSmall.installSubpath))
+    }
+
+    @Test("the 4B is offered from 8 GB, fetches its MTP head, and never the vision tower")
+    func qwenMetadata() {
+        let q = ModelCatalog.qwen35_4b
+        #expect(q.minimumRAMBytes == 8 << 30)
+        #expect(q.include.contains("optiq/mtp.safetensors"))
+        #expect(!q.include.contains { $0.contains("vision") })
+        #expect(q.contextBudget == .qwen35_4b)
+    }
+
+    @Test("tier default: 4B below 24 GB, 27B from 24 GB, an installed model wins")
+    func tiers() {
+        let g: UInt64 = 1 << 30
+        #expect(ModelCatalog.recommendedChat(forRAM: 16 * g).id == "qwen3.5-4b-optiq")
+        #expect(ModelCatalog.recommendedChat(forRAM: 24 * g).id == "bonsai-27b")
+        #expect(ModelCatalog.recommendedChat(forRAM: 36 * g, installed: ["qwen3.5-4b-optiq"]).id == "qwen3.5-4b-optiq")
+        #expect(ModelCatalog.recommendedChat(forRAM: 8 * g, installed: ["bonsai-27b"]).id == "qwen3.5-4b-optiq")
     }
 
     @Test("Bonsai is offered from 16 GB and carries its licence and attribution")

@@ -73,3 +73,42 @@ struct RouterTests {
         #expect(Router.plan(policy: .localFirst, request: req, candidates: all).first == "local:bonsai")
     }
 }
+
+@Suite("Preferred local model")
+struct PreferredLocalTests {
+    private let gib: UInt64 = 1 << 30
+    private func registry() async -> ModelRegistry {
+        let r = ModelRegistry()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("router-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("model.safetensors").path, contents: Data())
+        await r.register(LocalMLXProvider(id: "local:Bonsai-27B", modelDirectory: dir))
+        await r.register(LocalMLXProvider(id: "local:Qwen3.5-4B-OptiQ-4bit", modelDirectory: dir))
+        return r
+    }
+
+    @Test("an 18 GB Mac with both installed prefers the 4B and routes to it first")
+    func smallMac() async {
+        let r = await registry()
+        await r.choosePreferredLocal(ramBytes: 18 * gib)
+        #expect(await r.preferredLocalID == "local:Qwen3.5-4B-OptiQ-4bit")
+        let order = await r.route(policy: .localFirst, request: RoutingRequest(task: .textGeneration))
+        #expect(order.first == "local:Qwen3.5-4B-OptiQ-4bit")
+        #expect(order.contains("local:Bonsai-27B"))
+    }
+
+    @Test("a 36 GB Mac prefers the 27B")
+    func bigMac() async {
+        let r = await registry()
+        await r.choosePreferredLocal(ramBytes: 36 * gib)
+        #expect(await r.preferredLocalID == "local:Bonsai-27B")
+    }
+
+    @Test("no catalog model installed means no preference")
+    func none() async {
+        let r = ModelRegistry()
+        await r.register(LocalMLXProvider(id: "local:custom", modelDirectory: URL(fileURLWithPath: "/nonexistent")))
+        await r.choosePreferredLocal(ramBytes: 18 * gib)
+        #expect(await r.preferredLocalID == nil)
+    }
+}

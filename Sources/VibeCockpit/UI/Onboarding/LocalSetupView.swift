@@ -10,7 +10,7 @@ struct LocalSetupView: View {
     let onChooseCloud: () -> Void
 
     private var plan: SetupPlan { setup.plan }
-    private var chat: ModelCatalogEntry { ModelCatalog.bonsai27B }
+    private var chat: ModelCatalogEntry { plan.chat ?? ModelCatalog.bonsai27B }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {

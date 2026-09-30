@@ -56,6 +56,8 @@ public struct SetupPlan: Sendable, Equatable {
     public let approximateContextWords: Int?
     /// Set when local setup can't proceed as things stand (e.g. not enough disk space).
     public let blocker: String?
+    /// The chat model this plan installs or uses (nil when cloud-only).
+    public var chat: ModelCatalogEntry? = nil
 
     /// Working set macOS gives the GPU, as a fraction of RAM. Measured 0.74 on an 18 GB M3 Pro;
     /// assumed for other sizes.
@@ -64,11 +66,15 @@ public struct SetupPlan: Sendable, Equatable {
     public static func make(
         for hardware: HardwareProfile,
         installed: Set<String> = [],
-        chat: ModelCatalogEntry = ModelCatalog.bonsai27B,
+        chat chatOverride: ModelCatalogEntry? = nil,
         embedder: ModelCatalogEntry = ModelCatalog.bgeSmall,
-        budget: ContextBudget = .bonsai27B2bit,
-        weightBytes: Int = Int(7.14 * Double(1 << 30))
+        budget budgetOverride: ContextBudget? = nil,
+        weightBytes weightOverride: Int? = nil
     ) -> SetupPlan {
+        let chat = chatOverride
+            ?? ModelCatalog.recommendedChat(forRAM: hardware.physicalMemoryBytes, installed: installed)
+        let budget = budgetOverride ?? chat.contextBudget
+        let weightBytes = weightOverride ?? chat.residentWeightBytes
         func cloud(_ headline: String, _ detail: String) -> SetupPlan {
             SetupPlan(mode: .cloudOnly, headline: headline, detail: detail, downloads: [],
                       downloadBytes: 0, approximateContextWords: nil, blocker: nil)
@@ -103,7 +109,7 @@ public struct SetupPlan: Sendable, Equatable {
                      Double(bytes) / 1_000_000_000)
         return SetupPlan(mode: .local, headline: "Run the AI on this Mac", detail: detail,
                          downloads: downloads, downloadBytes: bytes,
-                         approximateContextWords: words, blocker: blocker)
+                         approximateContextWords: words, blocker: blocker, chat: chat)
     }
 
     /// Whole minutes a download of `downloadBytes` takes at `megabitsPerSecond`.
