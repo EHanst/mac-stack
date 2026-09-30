@@ -287,6 +287,7 @@ public final class AppServices {
             infos.append(info)
         }
         coordinator.send(.modelsRefreshed(infos))
+        infos = ModelListing.visible(infos)
         for info in infos {
             coordinator.send(.providerStatusChanged(info.id, info.health))
         }
