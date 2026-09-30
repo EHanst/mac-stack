@@ -15,26 +15,21 @@ struct BriefVersionsSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Versions").font(.mtTitleMedium)
-            if brief.versions.isEmpty {
-                Text("Versions are saved when you copy or export.")
-                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-            } else {
-                HStack(alignment: .top, spacing: 12) {
-                    List(selection: $selection) {
-                        ForEach(Array(brief.versions.enumerated().reversed()), id: \.offset) { index, version in
-                            Text(version.date.formatted(date: .abbreviated, time: .shortened)).tag(Optional(index))
-                        }
+            HStack(alignment: .top, spacing: 12) {
+                List(selection: $selection) {
+                    ForEach(Array(brief.versions.enumerated().reversed()), id: \.offset) { index, version in
+                        Text(version.date.formatted(date: .abbreviated, time: .shortened)).tag(Optional(index))
                     }
-                    .frame(width: 180)
-                    ScrollView { detail }.frame(maxWidth: .infinity, alignment: .topLeading)
                 }
+                .frame(width: 180)
+                ScrollView { detail }.frame(maxWidth: .infinity, alignment: .topLeading)
             }
             HStack {
                 Spacer()
                 Button("Close", action: onClose)
                 Button("Restore this version") { if let selection { onRestore(selection); onClose() } }
                     .buttonStyle(MTFilledButtonStyle())
-                    .disabled(selection == nil || !brief.versions.indices.contains(selection ?? -1))
+                    .disabled(!brief.versions.indices.contains(selection ?? -1))
             }
         }
         .padding(16)
@@ -51,7 +46,7 @@ struct BriefVersionsSheet: View {
                     ForEach(rows) { row in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(BriefWorkbenchView.title(row.kind)).font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                            diffText(row.segments).font(.mtBodyMedium)
+                            Self.diffText(row.segments).font(.mtBodyMedium)
                         }
                     }
                 }
@@ -71,6 +66,5 @@ struct BriefVersionsSheet: View {
             }
         }
     }
-    private func diffText(_ segments: [WordDiff.Segment]) -> Text { Self.diffText(segments) }
 }
 #endif

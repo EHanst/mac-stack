@@ -49,7 +49,7 @@ public final class BriefWorkbenchModel {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         let first = text.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
-        var brief = Brief.new(title: String(first.prefix(40)).trimmingCharacters(in: .whitespaces),
+        var brief = Brief.new(title: String(ContextRedactor.redact(first).text.prefix(40)).trimmingCharacters(in: .whitespaces),
                               target: .make(modelFamily: "claude", surface: .claudeCode))
         brief.setText(text, for: .goal)
         await insert(brief)
@@ -128,7 +128,14 @@ public final class BriefWorkbenchModel {
         let goal = brief.sections.first { $0.kind == .goal }
         guard goal?.enabled == true, !(goal?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               brief.versions.last?.sections != brief.sections else { return }
-        mutate(id: brief.id) { $0.snapshot() }
+        snapshotIfChanged(id: brief.id)
+    }
+
+    /// Like `saveVersion` but with no goal requirement: used before an edit that would overwrite text,
+    /// where losing it is worse than keeping an odd version.
+    public func snapshotIfChanged(id: String) {
+        guard let brief = briefs.first(where: { $0.id == id }), brief.versions.last?.sections != brief.sections else { return }
+        mutate(id: id) { $0.snapshot() }
     }
 
     /// Puts an older version's sections back. The current sections are saved first so restoring can be undone.

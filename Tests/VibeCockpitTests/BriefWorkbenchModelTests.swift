@@ -465,4 +465,27 @@ struct BriefWorkbenchModelTests {
         #expect(m.selected?.text(of: .goal) == "Continue this work.")
         #expect(m.selected?.text(of: .context) == "- Sources/A.swift")
     }
+
+    @Test("restoring at the version cap keeps the restored text and the current text")
+    func restoreAtCap() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        for i in 0..<Brief.maxVersions { m.setText("g\(i)", for: .goal); m.saveVersion() }
+        m.setText("current", for: .goal)
+        m.restoreVersion(0)
+        #expect(m.selected?.text(of: .goal) == "g0")
+        #expect(m.selected?.versions.count == Brief.maxVersions)
+        #expect(m.selected?.versions.last?.sections.first { $0.kind == .goal }?.text == "current")
+    }
+
+    @Test("a secret on the clipboard is not in the title or the export file name")
+    func clipboardSecretTitle() async throws {
+        let (m, _) = make()
+        await m.newBrief(fromClipboard: "Deploy with AKIAIOSFODNN7EXAMPLE now")
+        #expect(m.selected?.title.contains("AKIAIOSFODNN7EXAMPLE") == false)
+        let root = try tempRoot()
+        _ = m.exportSelected(to: root)
+        let files = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".vibe/briefs").path)
+        #expect(files.allSatisfy { !$0.lowercased().contains("akiaiosfodnn7example") })
+    }
 }

@@ -223,6 +223,33 @@ struct BriefSidecarModelTests {
         #expect(m.continuationPhase == .failed(SidecarError.unusable.errorDescription!))
         #expect(wb.briefs.count == 1)
     }
+
+    @Test("deleting the brief while a revise call runs applies nothing and leaves no stale cards")
+    func deleteDuringRevise() async {
+        let wb = await workbench()
+        let gate = AsyncGate()
+        let m = model { await gate.wait(); return "<revision><goal>Better</goal></revision>" }
+        m.run(.revise, brief: wb.selected!, reply: "r")
+        await wb.deleteSelected()
+        await gate.open()
+        await settle(m)
+        if let r = m.result?.revisions.first { m.acceptRevision(r, in: wb) }
+        #expect(wb.briefs.isEmpty)
+    }
+
+    @Test("accepting a revision keeps an undo even when the goal was disabled meanwhile")
+    func acceptKeepsUndoWithGoalOff() async {
+        let wb = await workbench()
+        let m = model { "<revision><constraints>Retry 3 times</constraints></revision>" }
+        wb.setText("old rule", for: .constraints)
+        m.run(.revise, brief: wb.selected!, reply: "r")
+        await settle(m)
+        wb.setEnabled(false, for: .goal)
+        m.acceptRevision(m.result!.revisions[0], in: wb)
+        #expect(wb.selected?.text(of: .constraints) == "Retry 3 times")
+        #expect(wb.selected?.versions.last?.sections.first { $0.kind == .constraints }?.text == "old rule")
+    }
+
 }
 
 private actor AsyncGate {

@@ -108,6 +108,11 @@ public final class AppServices {
             defaults: defaults)
         let studio = self.promptStudio
         self.sidecar = BriefSidecarModel(sidecar: BriefSidecar { messages in
+            // Room for the reply too; a request the local model can't hold fails with a sentence, not a stack.
+            if let limit = await inference.localContextLimit(),
+               InferenceService.estimateTokens(messages) + BriefSidecar.generationOptions.maxTokens > limit {
+                throw SidecarError.tooLong
+            }
             let pin = await MainActor.run { studio.optimizerPin }
             let stream = try await inference.generate(
                 messages: messages, tools: [], options: BriefSidecar.generationOptions,

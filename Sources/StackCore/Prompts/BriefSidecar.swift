@@ -41,13 +41,14 @@ public struct SidecarResult: Sendable, Equatable {
 }
 
 public enum SidecarError: Error, Equatable, LocalizedError {
-    case emptyGoal, emptyReply, emptySession, unusable
+    case emptyGoal, emptyReply, emptySession, unusable, tooLong
     public var errorDescription: String? {
         switch self {
         case .emptyGoal: "Write a goal first."
         case .emptyReply: "Paste the answer first."
         case .emptySession: "Paste the session first."
         case .unusable: "The model's summary wasn't usable. Try again or paste less."
+        case .tooLong: "That is too much text for the local model. Paste less."
         }
     }
 }
@@ -67,7 +68,7 @@ public struct BriefSidecar: Sendable {
     private static let sections = BriefSection.Kind.allCases.map(\.rawValue).joined(separator: ", ")
 
     /// Local calls here must not store their prompt in the prefix cache: that would evict the chat's.
-    public static let generationOptions = GenerationOptions(maxTokens: 700, cacheSnapshots: false)
+    public static let generationOptions = GenerationOptions(maxTokens: 1500, cacheSnapshots: false)
 
     /// Constant across briefs and calls, so the local model's cached prefix is reused.
     public static let systemPrompt = """
@@ -107,11 +108,18 @@ public struct BriefSidecar: Sendable {
         var tail = ""
         if operation == .revise, let reply {
             // The end of an answer holds its conclusion, so that is what survives the cut.
-            tail = "\n<reply>\n\(fence(ContextRedactor.redact(String(reply.suffix(maxReplyChars))).text))\n</reply>\n"
+            tail = "\n<reply>\n\(fence(redactedTail(reply, limit: maxReplyChars)))\n</reply>\n"
         }
         return [Message(role: .system, content: systemPrompt),
                 Message(role: .user, content: "<brief>\n\(body)</brief>\n\(tail)\n\(ask)")]
     }
+
+    /// The last `limit` characters after redaction. Cutting first could split a secret so neither half
+    /// matches; the margin keeps whatever the pre-cut splits outside the final window.
+    private static func redactedTail(_ text: String, limit: Int) -> String {
+        String(ContextRedactor.redact(String(text.suffix(limit + redactMargin))).text.suffix(limit))
+    }
+    private static let redactMargin = 4_096
 
     private static let ownTags = (["brief", "attached", "questions", "findings", "reply", "revision"] + BriefSection.Kind.allCases.map(\.rawValue))
         .joined(separator: "|")
@@ -180,8 +188,13 @@ public struct BriefSidecar: Sendable {
                                                         options: [.dotMatchesLineSeparators, .caseInsensitive]),
                       let m = re.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
                       let r = Range(m.range(at: 1), in: body) else { continue }
-                let text = body[r].trimmingCharacters(in: .whitespacesAndNewlines)
+                var text = body[r].trimmingCharacters(in: .whitespacesAndNewlines)
                 let original = brief?.text(of: kind) ?? ""
+                // Only what the model was shown can be rewritten: not a disabled section, and not one whose
+                // secrets it saw as placeholders (applying would replace the real value with the placeholder).
+                if let brief, let section = brief.sections.first(where: { $0.kind == kind }),
+                   !section.enabled || ContextRedactor.redact(original).count > 0 { continue }
+                text = text.replacingOccurrences(of: "\u{200B}", with: "")
                 guard !text.isEmpty, text != original.trimmingCharacters(in: .whitespacesAndNewlines),
                       !personaWords.contains(where: { text.lowercased().contains($0) }) else { continue }
                 result.revisions.append(.init(id: UUID().uuidString, section: kind, original: original, proposed: text))
@@ -194,10 +207,16 @@ public struct BriefSidecar: Sendable {
     /// Redacted, size-capped pieces of a pasted session, as untrusted "tool output" for the summarizer.
     /// Over the cap, the start and (mostly) the end are kept.
     public static func sessionChunks(_ pasted: String) -> [Message] {
-        var text = ContextRedactor.redact(pasted).text
+        var text = pasted
         if text.count > maxSessionChars {
-            let head = maxSessionChars / 4
-            text = String(text.prefix(head)) + "\n[…]\n" + String(text.suffix(maxSessionChars - head))
+            // Redact only what survives the cut (plus a margin, so a secret split by the pre-cut can't leak),
+            // then cut to the final size. A multi-MB paste must not cost seconds of regex work.
+            let head = maxSessionChars / 4, tail = maxSessionChars - head
+            let start = ContextRedactor.redact(String(text.prefix(head + redactMargin))).text
+            let end = ContextRedactor.redact(String(text.suffix(tail + redactMargin))).text
+            text = String(start.prefix(head)) + "\n[…]\n" + String(end.suffix(tail))
+        } else {
+            text = ContextRedactor.redact(text).text
         }
         var chunks: [String] = []
         var current = ""

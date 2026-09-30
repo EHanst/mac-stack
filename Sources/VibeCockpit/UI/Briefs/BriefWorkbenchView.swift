@@ -41,6 +41,10 @@ struct BriefWorkbenchView: View {
                        onClose: { continuing = false })
         }
         .task { await model.reload() }
+        .onChange(of: model.selectedID) {
+            clipboardNote = nil
+            if case .failed = services.sidecar.continuationPhase { services.sidecar.cancelContinuation() }
+        }
         .onDisappear { Task { await model.flushNow() } }
     }
 
@@ -81,8 +85,11 @@ struct BriefWorkbenchView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
         case .failed(let message):
-            Text(message).font(.mtBodySmall).foregroundStyle(Color.mtError)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
+            HStack(spacing: 8) {
+                Text(message).font(.mtBodySmall).foregroundStyle(Color.mtError)
+                Button { services.sidecar.cancelContinuation() } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
         case .idle:
             EmptyView()
         }

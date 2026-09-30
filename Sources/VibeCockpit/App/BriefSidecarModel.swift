@@ -15,6 +15,11 @@ public final class BriefSidecarModel {
         case failed(String)
     }
 
+    public enum ContinuationPhase: Equatable {
+        case idle, running
+        case failed(String)
+    }
+
     public private(set) var phase: Phase = .idle
     public private(set) var result: SidecarResult?
     /// The brief the cards belong to; the view shows them only while this is selected.
@@ -22,7 +27,7 @@ public final class BriefSidecarModel {
 
     private let sidecar: BriefSidecar
     /// Progress of "new brief from a pasted session", which has no brief yet to attach cards to.
-    public private(set) var continuationPhase: Phase = .idle
+    public private(set) var continuationPhase: ContinuationPhase = .idle
 
     private var task: Task<Void, Never>?
     private var generation = 0
@@ -85,7 +90,7 @@ public final class BriefSidecarModel {
             result?.note = "That section changed since the suggestion. Run it again."
             return
         }
-        workbench.saveVersion(id: id)
+        workbench.snapshotIfChanged(id: id)
         workbench.setText(r.proposed, for: r.section, briefID: id)
     }
 
@@ -96,7 +101,7 @@ public final class BriefSidecarModel {
         continuationTask?.cancel()
         continuationGeneration += 1
         let mine = continuationGeneration
-        continuationPhase = .running(.revise)
+        continuationPhase = .running
         continuationTask = Task { [sidecar] in
             do {
                 let draft = try await sidecar.continuation(from: pasted)

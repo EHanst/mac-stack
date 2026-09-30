@@ -97,6 +97,8 @@ struct CompiledPromptPane: View {
                 if exportRoots.isEmpty { Text("Add a project first") }
             }
             .disabled(empty)
+            // Menus can't run code when they open; hovering the label comes first, so refresh then.
+            .onHover { if $0 { Task { exportRoots = await model.exportRoots() } } }
             Button("Versions") { showVersions = true }
                 .disabled(model.selected?.versions.isEmpty ?? true)
         }
