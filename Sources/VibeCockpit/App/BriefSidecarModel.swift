@@ -21,12 +21,17 @@ public final class BriefSidecarModel {
     public private(set) var briefID: String?
 
     private let sidecar: BriefSidecar
+    /// Progress of "new brief from a pasted session", which has no brief yet to attach cards to.
+    public private(set) var continuationPhase: Phase = .idle
+
     private var task: Task<Void, Never>?
     private var generation = 0
+    private var continuationTask: Task<Void, Never>?
+    private var continuationGeneration = 0
 
     public init(sidecar: BriefSidecar) { self.sidecar = sidecar }
 
-    public func run(_ operation: SidecarOperation, brief: Brief) {
+    public func run(_ operation: SidecarOperation, brief: Brief, reply: String? = nil) {
         task?.cancel()
         generation += 1
         let mine = generation
@@ -35,7 +40,7 @@ public final class BriefSidecarModel {
         briefID = brief.id
         task = Task { [sidecar] in
             do {
-                let out = try await sidecar.run(brief: brief, operation: operation)
+                let out = try await sidecar.run(brief: brief, operation: operation, reply: reply)
                 guard mine == self.generation else { return }
                 self.result = out
                 self.phase = .idle
@@ -68,6 +73,52 @@ public final class BriefSidecarModel {
         guard let id = briefID, let addition = f.addition, result?.findings.contains(f) == true else { return }
         workbench.append(addition, to: f.section, briefID: id)
         result?.findings.removeAll { $0.id == f.id }
+    }
+
+    /// Applies a proposed rewrite to the brief it was made for, if that section is still as it was.
+    /// The text before the rewrite is saved as a version first, so it can be restored.
+    public func acceptRevision(_ r: SidecarRevision, in workbench: BriefWorkbenchModel) {
+        guard let id = briefID, result?.revisions.contains(r) == true,
+              let brief = workbench.briefs.first(where: { $0.id == id }) else { return }
+        result?.revisions.removeAll { $0.id == r.id }
+        guard brief.text(of: r.section) == r.original else {
+            result?.note = "That section changed since the suggestion. Run it again."
+            return
+        }
+        workbench.saveVersion(id: id)
+        workbench.setText(r.proposed, for: r.section, briefID: id)
+    }
+
+    public func dismiss(revisionID: String) { result?.revisions.removeAll { $0.id == revisionID } }
+
+    /// Summarizes a pasted session into a new brief. Nothing is created unless the model's summary is usable.
+    public func continueFromSession(_ pasted: String, in workbench: BriefWorkbenchModel) {
+        continuationTask?.cancel()
+        continuationGeneration += 1
+        let mine = continuationGeneration
+        continuationPhase = .running(.revise)
+        continuationTask = Task { [sidecar] in
+            do {
+                let draft = try await sidecar.continuation(from: pasted)
+                guard mine == self.continuationGeneration else { return }
+                await workbench.newBrief(title: draft.title, goal: draft.goal, context: draft.context)
+                guard mine == self.continuationGeneration else { return }
+                self.clear()
+                self.continuationPhase = .idle
+            } catch is CancellationError {
+                // cancelContinuation() already reset the state.
+            } catch {
+                guard mine == self.continuationGeneration else { return }
+                self.continuationPhase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    public func cancelContinuation() {
+        continuationGeneration += 1
+        continuationTask?.cancel()
+        continuationTask = nil
+        continuationPhase = .idle
     }
 
     public func dismiss(questionID: String) { result?.questions.removeAll { $0.id == questionID } }

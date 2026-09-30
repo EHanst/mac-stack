@@ -76,6 +76,12 @@ public final class BriefWorkbenchModel {
         mutate { $0.setText(text, for: kind) }
     }
 
+    /// Sets a section of a named brief, which need not be the selected one. No-op if it no longer exists.
+    public func setText(_ text: String, for kind: BriefSection.Kind, briefID: String) {
+        guard briefs.contains(where: { $0.id == briefID }) else { return }
+        mutate(id: briefID) { $0.setText(text, for: kind) }
+    }
+
     public func setEnabled(_ on: Bool, for kind: BriefSection.Kind) {
         mutate { brief in
             if let i = brief.sections.firstIndex(where: { $0.kind == kind }) { brief.sections[i].enabled = on }

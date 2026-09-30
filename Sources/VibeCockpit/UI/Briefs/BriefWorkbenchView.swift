@@ -12,12 +12,14 @@ struct BriefWorkbenchView: View {
     @State private var creating = false
     @State private var improving = false
     @State private var clipboardNote: String?
+    @State private var continuing = false
 
     private var model: BriefWorkbenchModel { services.briefs }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            continuationStatus
             if let clipboardNote {
                 Text(clipboardNote).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
@@ -31,6 +33,13 @@ struct BriefWorkbenchView: View {
         }
         .background(Color.mtSurface)
         .sheet(isPresented: $improving) { improveSheet }
+        .sheet(isPresented: $continuing) {
+            ReplySheet(title: "Continue from a session",
+                       prompt: "Paste a long session. The sidecar summarizes it into a new brief; the paste is not kept.",
+                       action: "Make brief",
+                       onSubmit: { services.sidecar.continueFromSession($0, in: model) },
+                       onClose: { continuing = false })
+        }
         .task { await model.reload() }
         .onDisappear { Task { await model.flushNow() } }
     }
@@ -47,6 +56,7 @@ struct BriefWorkbenchView: View {
             Menu {
                 Button("New brief") { creating = true }
                 Button("New brief from clipboard") { fromClipboard() }
+                Button("New brief from a pasted session…") { continuing = true }
             } label: { Label("New brief", systemImage: "plus") }
                 .menuStyle(.button)
             Button(role: .destructive) { Task { await model.deleteSelected(); if model.selected == nil || model.selectedID != services.sidecar.briefID { services.sidecar.clear() } } } label: { Image(systemName: "trash") }
@@ -58,6 +68,23 @@ struct BriefWorkbenchView: View {
             TextField("What is it for?", text: $newTitle)
             Button("Create") { let t = newTitle; newTitle = ""; Task { await model.newBrief(title: t) } }
             Button("Cancel", role: .cancel) { newTitle = "" }
+        }
+    }
+
+    @ViewBuilder private var continuationStatus: some View {
+        switch services.sidecar.continuationPhase {
+        case .running:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Summarizing the session…").font(.mtBodySmall)
+                Button("Cancel") { services.sidecar.cancelContinuation() }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
+        case .failed(let message):
+            Text(message).font(.mtBodySmall).foregroundStyle(Color.mtError)
+                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
+        case .idle:
+            EmptyView()
         }
     }
 

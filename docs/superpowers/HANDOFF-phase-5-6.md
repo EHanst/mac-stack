@@ -6,15 +6,8 @@
 - Spec: `docs/superpowers/specs/2026-09-29-prompt-sidecar-design.md`. Plans: `docs/superpowers/plans/2026-09-30-prompt-sidecar-phase-{2,3,4}-*.md` (follow their style: Header, Global Constraints, Rulings, Review Focus, tasks with tests first).
 - Start from a fresh branch off `main`. `/noob` (user command, `~/.claude/commands/noob.md`) lands branches safely.
 
-## Remaining work
-Phase 5:
-1. Export button in the compiled pane: menu "Save to project" listing `contextSource.roots()` -> `BriefExporter.export`; show the path or error in one sentence.
-2. Versions: `Brief.snapshot()` and `versions` already exist in the model. Add `BriefWorkbenchModel.saveVersion()` (skip if sections equal the last version), call it on Copy and export; `restoreVersion(_:)`; a Versions sheet showing per-section `WordDiff.segments` against the current text, with Restore. Tests first.
-3. Clipboard capture: "New brief from clipboard" (goal = clipboard text, redacted only at compile time). Global hotkey (Carbon `RegisterEventHotKey`) is optional; skipped so far because it is hard to test.
-Phase 6:
-4. Reply loop: paste the frontier model's answer, sidecar proposes a revision of the brief (same `BriefSidecar` pattern: constant system prompt, `BriefSidecar.generationOptions` with `cacheSnapshots: false`, proposal cards, never auto-apply).
-5. Continuation brief: compress a long pasted session into a new brief via `CompactionSummarizer`.
-Then: final Opus whole-branch review, fix Critical/Important/Minor (user wants minors fixed too), PR, `/noob`.
+## Status
+Phase 5 and 6 are implemented on `feat/sidecar-phase-5-6` (plan: `docs/superpowers/plans/2026-09-30-prompt-sidecar-phase-5-6-versions-export-reply.md`): Save to project, versions with diff/restore, new brief from clipboard, reply loop (`SidecarOperation.revise`), continuation brief from a pasted session. The global hotkey was skipped (untestable Carbon registration).
 
 ## Open items
 - VibeBench TTFT check after sidecar calls (spec: <=10% regression) has not been run; needs a loaded model.
