@@ -7,6 +7,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -16,6 +20,9 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
 
     steps:
       - name: Checkout
@@ -33,7 +40,7 @@ jobs:
           swift --version
 
       - name: Build libgit2
-        run: brew install cmake && ./scripts/build-libgit2.sh
+        run: brew install cmake && ./Scripts/build-libgit2.sh
 
       # Cache the SPM build artefacts between runs.
       - name: Cache SPM build
@@ -42,30 +49,20 @@ jobs:
           path: |
             .build
             ~/.swiftpm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-spm-
-
-      - name: Clean build artifacts
-        run: swift package clean
 
       - name: Resolve dependencies
         run: swift package resolve
 
-      - name: Build (debug)
-        run: swift build 2>&1 | tee /tmp/build-debug.log
-        env:
-          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
-
       - name: Run tests
-        run: swift test --parallel 2>&1 | tee /tmp/test-results.log
-        env:
-          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+        run: set -o pipefail; swift test --parallel 2>&1 | tee /tmp/test-results.log
 
+      # Release build only matters for what ships from main; PRs skip it.
       - name: Build (release)
+        if: github.event_name != 'pull_request'
         run: swift build -c release
-        env:
-          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
 
       - name: Upload build logs on failure
         if: failure()
@@ -74,3 +71,12 @@ jobs:
           name: build-logs
           path: /tmp/*.log
           retention-days: 3
+
+  # Stable single check name for `gh pr merge` / branch protection to key on.
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.build-and-test.result }}" = "success"

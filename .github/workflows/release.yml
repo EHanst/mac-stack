@@ -1,5 +1,5 @@
 # Triggered by a version tag (e.g. v1.2.3). Builds, signs, notarizes and publishes the DMG.
-# Untested until the secrets exist: run `DRY_RUN=1 ./scripts/release.sh` locally first.
+# Untested until the secrets exist: run `DRY_RUN=1 ./Scripts/release.sh` locally first.
 #
 # Required repository secrets:
 #   DEVELOPER_ID_P12_BASE64   - base64 of the exported "Developer ID Application" certificate (.p12)
@@ -33,7 +33,7 @@ jobs:
           xcodebuild -version
 
       - name: Install build tools
-        run: brew install cmake xcodegen xcbeautify && ./scripts/build-libgit2.sh
+        run: brew install cmake xcodegen xcbeautify && ./Scripts/build-libgit2.sh
 
       - name: Import signing certificate
         env:
@@ -62,7 +62,7 @@ jobs:
           DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
           NOTARYTOOL_KEYCHAIN_PROFILE: notarytool
           VERSION: ${{ github.ref_name }}
-        run: VERSION="${VERSION#v}" ./scripts/release.sh
+        run: VERSION="${VERSION#v}" ./Scripts/release.sh
 
       - name: Locate DMG
         id: dmg

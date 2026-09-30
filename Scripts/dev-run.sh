@@ -16,4 +16,6 @@ APP=$(xcodebuild -scheme VibeCockpit -configuration Debug -showBuildSettings 2>/
 pkill -x VibeCockpit 2>/dev/null || true
 for _ in $(seq 20); do pgrep -x VibeCockpit >/dev/null || break; sleep 0.25; done
 for _ in 1 2 3; do open "$APP" 2>/dev/null && break; sleep 1; done
-echo "Launched $APP"
+for _ in $(seq 20); do pgrep -x VibeCockpit >/dev/null && { echo "Launched $APP"; exit 0; }; sleep 0.5; done
+echo "LAUNCH FAILED: VibeCockpit not running after open ($APP)" >&2
+exit 1

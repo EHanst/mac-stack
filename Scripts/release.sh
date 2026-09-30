@@ -2,8 +2,8 @@
 # Kokoro (VibeCockpit) release: archive -> sign (hardened runtime) -> DMG -> sign -> notarize -> staple -> verify.
 #
 #   DEVELOPER_ID_APPLICATION="Developer ID Application: Name (TEAMID)" \
-#   NOTARYTOOL_KEYCHAIN_PROFILE=notarytool VERSION=1.0.0 ./scripts/release.sh
-#   DRY_RUN=1 ./scripts/release.sh     # everything except a real identity and Apple's notary service
+#   NOTARYTOOL_KEYCHAIN_PROFILE=notarytool VERSION=1.0.0 ./Scripts/release.sh
+#   DRY_RUN=1 ./Scripts/release.sh     # everything except a real identity and Apple's notary service
 #
 # DRY_RUN signs ad hoc with the same hardened runtime + entitlements, builds the DMG, checks the
 # signature flags and entitlements, and launches the packaged app as a smoke test. It stops before
@@ -25,7 +25,7 @@ if [ -n "$DRY_RUN" ]; then
 fi
 
 echo "==> Cleaning"; rm -rf build; mkdir -p build/export
-echo "==> libgit2";  ./scripts/build-libgit2.sh
+echo "==> libgit2";  ./Scripts/build-libgit2.sh
 echo "==> Xcode project"; xcodegen generate >/dev/null
 
 echo "==> Archiving $VERSION ($BUILD_NUMBER)"
