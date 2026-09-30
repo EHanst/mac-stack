@@ -14,13 +14,19 @@ public struct CodeChunk: Sendable, Hashable {
 
     public init(filePath: String, declarationKind: String,
                 startLine: Int, endLine: Int, content: String) {
-        self.id = UUID()
+        let hash = Data(SHA256.hash(data: Data(content.utf8)))
         self.filePath = filePath
         self.declarationKind = declarationKind
         self.startLine = startLine
         self.endLine = endLine
         self.content = content
-        self.contentHash = Data(SHA256.hash(data: Data(content.utf8)))
+        self.contentHash = hash
+        // Same file + same text = same id, so re-indexing keeps rows (and their embeddings) instead of duplicating them.
+        var seed = Data(filePath.utf8)
+        seed.append(0)
+        seed.append(hash)
+        let d = Array(SHA256.hash(data: seed))
+        self.id = UUID(uuid: (d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], d[12], d[13], d[14], d[15]))
     }
 }
 

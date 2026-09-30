@@ -18,12 +18,7 @@ public actor EmbeddingScheduler {
     }
 
     public func schedule(_ chunks: [CodeChunk]) async {
-        var needsEmbed: [CodeChunk] = []
-        for chunk in chunks {
-            if await store.cachedEmbedding(for: chunk.contentHash) == nil {
-                needsEmbed.append(chunk)
-            }
-        }
+        let needsEmbed = (try? await store.chunksNeedingEmbedding(chunks)) ?? chunks
         pending.append(contentsOf: needsEmbed)
         kickoff()
     }

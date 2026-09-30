@@ -11,6 +11,7 @@ public actor IndexingPipeline {
     private let logger = Logger(subsystem: "com.vibecockpit", category: "IndexingPipeline")
 
     private var embeddingScheduler: EmbeddingScheduler?
+    private var watcher: WorkspaceWatcher?
 
     public init(store: VectorStore, registry: ModelRegistry) {
         self.chunker = ASTChunker()
@@ -27,15 +28,17 @@ public actor IndexingPipeline {
     }
 
     /// Index a single file. Uses content-hash cache to skip unchanged declarations.
-    public func index(fileURL: URL) async throws {
+    public func index(fileURL rawURL: URL) async throws {
+        let fileURL = rawURL.canonicalPath
         let chunks = try await chunker.chunks(for: fileURL)
-        try await store.upsertChunks(chunks)
+        try await store.syncFile(fileURL.path, chunks: chunks)
         try await embedNew(chunks: chunks)
         logger.debug("Indexed \(chunks.count) chunks from \(fileURL.lastPathComponent, privacy: .public)")
     }
 
     /// Re-index all Swift files in a workspace root.
-    public func reindexWorkspace(_ rootURL: URL) async throws {
+    public func reindexWorkspace(_ rawRoot: URL) async throws {
+        let rootURL = rawRoot.canonicalPath
         let start = Date()
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
@@ -53,6 +56,7 @@ public actor IndexingPipeline {
             }
             try await group.waitForAll()
         }
+        try await store.pruneFiles(under: rootURL.path, keeping: Set(swiftURLs.map(\.path)))
         logger.info("Workspace indexed: \(swiftURLs.count) files in \(Date().timeIntervalSince(start), privacy: .public)s")
     }
 
@@ -76,7 +80,31 @@ public actor IndexingPipeline {
         }
     }
 
+    /// Forget everything stored for a deleted file (or every file under a deleted folder).
+    public func remove(path: String) async throws {
+        try await store.removeFiles(at: URL(fileURLWithPath: path).canonicalPath.path)
+    }
+
+    /// Keep the index current: re-index files as they change under `rootURL`, drop ones that vanish.
+    public func watch(_ rawRoot: URL) {
+        let rootURL = rawRoot.canonicalPath
+        watcher?.stop()
+        let pipeline = self
+        watcher = WorkspaceWatcher(root: rootURL) { changed in
+            for url in changed {
+                if url.pathExtension == "swift" {
+                    if FileManager.default.fileExists(atPath: url.path) { try? await pipeline.index(fileURL: url) }
+                    else { try? await pipeline.remove(path: url.path) }
+                } else if url.pathExtension.isEmpty, !FileManager.default.fileExists(atPath: url.path) {
+                    try? await pipeline.remove(path: url.path)   // a deleted or moved folder
+                }
+            }
+        }
+    }
+
     public func close() async throws {
+        watcher?.stop()
+        watcher = nil
         try await store.close()
     }
 
@@ -89,12 +117,7 @@ public actor IndexingPipeline {
         }
         // Legacy path: inline batching when no scheduler is configured
         guard let provider = await registry.preferredProvider(for: .embedding) else { return }
-        var needsEmbedding: [CodeChunk] = []
-        for chunk in chunks {
-            if await store.cachedEmbedding(for: chunk.contentHash) == nil {
-                needsEmbedding.append(chunk)
-            }
-        }
+        let needsEmbedding = try await store.chunksNeedingEmbedding(chunks)
         guard !needsEmbedding.isEmpty else { return }
         let batchSize = 32
         var offset = 0

@@ -123,3 +123,76 @@ struct IndexingPipelineTests {
         await pipeline.prefetch(fileURL: file)
     }
 }
+
+@Suite("Index freshness")
+struct IndexFreshnessTests {
+
+    private func setup() async throws -> (root: URL, pipeline: IndexingPipeline, store: VectorStore) {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("fresh_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = VectorStore(dbURL: root.appendingPathComponent(".vc/index.sqlite"))
+        let pipeline = IndexingPipeline(store: store, registry: ModelRegistry())
+        try await pipeline.open()
+        return (root, pipeline, store)
+    }
+
+    private func count(_ pipeline: IndexingPipeline, _ word: String) async throws -> Int {
+        try await pipeline.search(query: word, topK: 50).filter { $0.content.contains(word) }.count
+    }
+
+    @Test("re-indexing an unchanged file does not duplicate its chunks")
+    func noDuplicates() async throws {
+        let (root, pipeline, _) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("A.swift")
+        try "struct Zebrafish { var x = 1 }".write(to: file, atomically: true, encoding: .utf8)
+        for _ in 0..<3 { try await pipeline.index(fileURL: file) }
+        #expect(try await count(pipeline, "Zebrafish") == 1)
+    }
+
+    @Test("editing a file replaces the old declaration")
+    func editReplaces() async throws {
+        let (root, pipeline, _) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("A.swift")
+        try "struct Zebrafish { var x = 1 }".write(to: file, atomically: true, encoding: .utf8)
+        try await pipeline.index(fileURL: file)
+        try "struct Narwhalfish { var y = 2 }".write(to: file, atomically: true, encoding: .utf8)
+        try await pipeline.index(fileURL: file)
+        #expect(try await count(pipeline, "Zebrafish") == 0)
+        #expect(try await count(pipeline, "Narwhalfish") == 1)
+    }
+
+    @Test("deleting a file removes it; reindexWorkspace prunes files deleted while offline")
+    func deletion() async throws {
+        let (root, pipeline, _) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = root.appendingPathComponent("A.swift"), b = root.appendingPathComponent("B.swift")
+        try "struct Zebrafish {}".write(to: a, atomically: true, encoding: .utf8)
+        try "struct Narwhalfish {}".write(to: b, atomically: true, encoding: .utf8)
+        try await pipeline.reindexWorkspace(root)
+        try await pipeline.remove(path: a.path)
+        #expect(try await count(pipeline, "Zebrafish") == 0)
+        try FileManager.default.removeItem(at: b)
+        try await pipeline.reindexWorkspace(root)
+        #expect(try await count(pipeline, "Narwhalfish") == 0)
+    }
+
+    @Test("the watcher indexes a new file and drops a deleted one")
+    func watcher() async throws {
+        let (root, pipeline, _) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let real = root.resolvingSymlinksInPath()
+        await pipeline.watch(real)
+        try await Task.sleep(for: .milliseconds(500))
+        let file = real.appendingPathComponent("W.swift")
+        try "struct Zebrafish {}".write(to: file, atomically: true, encoding: .utf8)
+        var found = 0
+        for _ in 0..<40 where found == 0 { try await Task.sleep(for: .milliseconds(100)); found = try await count(pipeline, "Zebrafish") }
+        #expect(found == 1)
+        try FileManager.default.removeItem(at: file)
+        for _ in 0..<40 where found != 0 { try await Task.sleep(for: .milliseconds(100)); found = try await count(pipeline, "Zebrafish") }
+        #expect(found == 0)
+        try await pipeline.close()
+    }
+}
