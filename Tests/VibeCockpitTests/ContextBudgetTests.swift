@@ -75,3 +75,34 @@ struct ContextBudgetTests {
                 < tokens(b.verdict(workingSetBytes: ws, weightBytes: weights)))
     }
 }
+
+@Suite struct ContextBudgetModelSelectionTests {
+    private func directory(config: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try config.write(to: dir.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+        return dir
+    }
+
+    @Test func recognisesTheMeasured4B() throws {
+        let dir = try directory(config: #"{"text_config": {"num_hidden_layers": 32, "hidden_size": 2560}}"#)
+        #expect(ContextBudget.forModel(at: dir) == .qwen35_4b)
+    }
+
+    @Test func unknownShapesAndMissingConfigsGetTheConservativeBudget() throws {
+        let other = try directory(config: #"{"num_hidden_layers": 64, "hidden_size": 5120}"#)
+        #expect(ContextBudget.forModel(at: other) == .bonsai27B2bit)
+        #expect(ContextBudget.forModel(at: URL(fileURLWithPath: "/nonexistent")) == .bonsai27B2bit)
+    }
+
+    @Test func the4BFitsALongContextOnA16GBMacAndAUsefulOneOn8() {
+        let weights = 3_300_000_000
+        func tokens(_ ramGB: Int) -> Int {
+            switch ContextBudget.qwen35_4b.verdict(workingSetBytes: ramGB * 1_073_741_824 * 74 / 100, weightBytes: weights) {
+            case .ok(let n), .belowFloor(let n): n
+            }
+        }
+        #expect(tokens(16) == 64_000)
+        #expect(tokens(8) > 8_000)
+    }
+}

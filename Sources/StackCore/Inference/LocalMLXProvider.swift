@@ -47,7 +47,7 @@ public actor LocalMLXProvider: ModelProvider {
     /// Bytes of model weights once loaded (0 before load).
     public private(set) var weightBytes = 0
     /// Memory model used to keep prompts inside what this Mac can safely hold.
-    public var budget = ContextBudget.bonsai27B2bit
+    public var budget: ContextBudget
 
     /// How much prompt fits right now, given this Mac's GPU working set, what we already hold,
     /// and what other apps have left free. A Metal out-of-memory error aborts the whole
@@ -104,6 +104,7 @@ public actor LocalMLXProvider: ModelProvider {
     public init(id: ProviderID, modelDirectory: URL) {
         self.id = id
         self.modelDirectory = modelDirectory
+        self.budget = ContextBudget.forModel(at: modelDirectory)
     }
 
     private func _loadModel() async throws {
