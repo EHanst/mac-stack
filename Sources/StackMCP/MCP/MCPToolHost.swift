@@ -11,15 +11,32 @@ public final class ScopeBox: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Set<ClientScope>
     private var who: ClientIdentity
+    private var noRoots = false
     public init(_ scopes: Set<ClientScope>, identity: ClientIdentity = .unknownLocalApp) { value = scopes; who = identity }
     /// Who is on the other end (a local tool learns its name when it introduces itself).
     public var identity: ClientIdentity {
         get { lock.withLock { who } }
         set { lock.withLock { who = newValue } }
     }
+    /// Set once the client failed to answer a roots request; we don't ask again on this connection.
+    public var rootsUnsupported: Bool {
+        get { lock.withLock { noRoots } }
+        set { lock.withLock { noRoots = newValue } }
+    }
     public var scopes: Set<ClientScope> {
         get { lock.withLock { value } }
         set { lock.withLock { value = newValue } }
+    }
+}
+
+/// Resumes a continuation exactly once, whichever of two racing tasks gets there first.
+private final class OneShot<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Never>?
+    init(_ c: CheckedContinuation<T, Never>) { continuation = c }
+    func resume(_ value: T) {
+        let c = lock.withLock { () -> CheckedContinuation<T, Never>? in defer { continuation = nil }; return continuation }
+        c?.resume(returning: value)
     }
 }
 
@@ -35,6 +52,7 @@ public actor MCPToolHost {
     private var projectTools: (@Sendable () async -> [any AgentToolHandler])?
     private var externalTools: (@Sendable () async -> [any AgentToolHandler])?
     private var promptProvider: (@Sendable () async -> [SavedPrompt])?
+    private var workspaceOpener: (@Sendable (URL) async throws -> Void)?
     private let log = Logger(subsystem: "com.vibecockpit", category: "MCPToolHost")
 
     /// `gate` decides whether an app may change files or run commands; without one those are refused.
@@ -74,6 +92,15 @@ public actor MCPToolHost {
 
     public func setExternalTools(_ provider: (@Sendable () async -> [any AgentToolHandler])?) { externalTools = provider }
 
+    /// Called when a client works in a folder that isn't an open project; opens it as one.
+    public func setWorkspaceOpener(_ opener: (@Sendable (URL) async throws -> Void)?) { workspaceOpener = opener }
+
+    fileprivate func openWorkspace(_ url: URL) async -> Bool {
+        guard let workspaceOpener else { return false }
+        do { try await workspaceOpener(url); return true }
+        catch { log.error("couldn't open \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)"); return false }
+    }
+
     /// The saved prompts offered to apps allowed to read them (MCP `prompts/list` and `prompts/get`).
     public func setPromptProvider(_ provider: (@Sendable () async -> [SavedPrompt])?) { promptProvider = provider }
 
@@ -82,7 +109,8 @@ public actor MCPToolHost {
     public func allTools() async -> [any AgentToolHandler] {
         var tools: [any AgentToolHandler] = []
         if let inference {
-            tools += [ListModelsTool(inference: inference), ChatTool(inference: inference), EmbedTool(inference: inference),
+            let gateway = QueryGateway(inference: inference)
+            tools += [ListModelsTool(gateway: gateway), ChatTool(gateway: gateway), EmbedTool(gateway: gateway),
                        OptimizePromptTool(inference: inference)]
         }
         return tools + workspaceTools + (await projectTools?() ?? []) + (await externalTools?() ?? [])
@@ -112,6 +140,38 @@ public actor MCPToolHost {
             values["date"] = f.string(from: Date())
         }
         return PromptTemplate.render(p.body, values: values)
+    }
+
+    private static func isBlank(_ v: Value?) -> Bool {
+        guard let v else { return true }
+        if case .string(let s) = v { return s.isEmpty }
+        return false
+    }
+
+    /// The folders the connected app says it is working in. Empty if it doesn't offer any.
+    private static func rootPaths(of server: Server, scopes: ScopeBox) async -> [String] {
+        // A client that answers "not supported" is remembered and not asked again. One that hasn't
+        // answered in 5s (a slow start, or a client ignoring the request, which can't be cancelled) is
+        // not remembered: this call goes on without a folder hint and the next call asks again.
+        guard !scopes.rootsUnsupported else { return [] }
+        let outcome: Result<[Root], Error>? = await withCheckedContinuation { continuation in
+            let once = OneShot(continuation)
+            Task {
+                do { once.resume(.success(try await server.listRoots())) }
+                catch { once.resume(.failure(error)) }
+            }
+            Task { try? await Task.sleep(for: .seconds(5)); once.resume(nil) }
+        }
+        var roots: [Root] = []
+        switch outcome {
+        case .success(let r)?: roots = r
+        case .failure?: scopes.rootsUnsupported = true
+        case nil: break
+        }
+        return roots.compactMap { r in
+            guard let url = URL(string: r.uri), url.isFileURL, !url.path.isEmpty else { return nil }
+            return url.path
+        }
     }
 
     /// A server for one client. `scopes` is consulted on every list and call.
@@ -153,7 +213,7 @@ public actor MCPToolHost {
 
         await server.withMethodHandler(CallTool.self) { params in
             let tools = await host.allTools()
-            guard let handler = tools.first(where: { $0.toolDefinition.name == params.name }) else {
+            guard var handler = tools.first(where: { $0.toolDefinition.name == params.name }) else {
                 throw MCPError.methodNotFound("Unknown tool: \(params.name)")
             }
             guard scopes.scopes.contains(handler.requiredScope) else {
@@ -161,20 +221,45 @@ public actor MCPToolHost {
                     content: [.text(text: "This app isn't allowed to \(handler.requiredScope.title.lowercased()). Change its permissions in VibeCockpit.", annotations: nil, _meta: nil)],
                     isError: true)
             }
+            // Project tools default to the folder the calling app is working in (its MCP "roots").
+            var arguments = params.arguments ?? [:]
+            if let routed = handler as? WorkspaceRoutedTool, Self.isBlank(arguments["workspace"]) {
+                switch routed.match(rootPaths: await Self.rootPaths(of: server, scopes: scopes)) {
+                case .matched(let id)?:
+                    arguments["workspace"] = .string(id)
+                case .unmatched(let paths)?:
+                    // The client is working in a folder VibeCockpit doesn't have open yet: open it, then use it.
+                    var opened = false
+                    for path in paths where await host.openWorkspace(URL(fileURLWithPath: path)) { opened = true }
+                    if opened, let fresh = await host.allTools().first(where: { $0.toolDefinition.name == params.name }),
+                       let freshRouted = fresh as? WorkspaceRoutedTool, case .matched(let id)? = freshRouted.match(rootPaths: paths) {
+                        handler = fresh
+                        arguments["workspace"] = .string(id)
+                        break
+                    }
+                    return CallTool.Result(
+                        content: [.text(text: "'\(paths.joined(separator: ", "))' isn't an open project in VibeCockpit. Add it in the app, or name an open project with the 'workspace' argument.", annotations: nil, _meta: nil)],
+                        isError: true)
+                case nil:
+                    break
+                }
+            }
+            let target = handler   // fixed from here on (it may have been replaced after opening a folder)
+            let callArguments = arguments
             // Write and exec always ask an outside app; after web/other-program content, "Always allow" no longer counts.
             if let refusal = await toolGuard.refusal(
-                for: handler, arguments: params.arguments ?? [:], client: scopes.identity,
+                for: target, arguments: callArguments, client: scopes.identity,
                 context: untrusted, alwaysAsk: true) {
                 return CallTool.Result(content: [.text(text: refusal, annotations: nil, _meta: nil)], isError: true)
             }
             let opID = OperationID()
-            let task = Task<[Tool.Content], Error> { try await handler.execute(arguments: params.arguments ?? [:]) }
+            let task = Task<[Tool.Content], Error> { try await target.execute(arguments: callArguments) }
             if let runtime {
                 await runtime.trackTask(opID, task: Task<Void, Error> { _ = try await task.value })
             }
             func finish() async { if let runtime { await runtime.removeTask(opID) } }
             do {
-                let content = toolGuard.filter(try await task.value, from: handler, context: untrusted)
+                let content = toolGuard.filter(try await task.value, from: target, context: untrusted)
                 await finish()
                 return CallTool.Result(content: content)
             } catch is CancellationError {

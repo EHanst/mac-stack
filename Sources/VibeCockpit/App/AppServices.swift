@@ -115,6 +115,7 @@ public final class AppServices {
         Task {
             await host.setExternalTools { await externals.tools() }
             await host.setProjectTools { await workspaces.tools() }
+            await host.setWorkspaceOpener { try await workspaces.add($0) }
             // Other apps see your own prompts plus project prompts you approved; nothing else.
             await host.setPromptProvider { await promptLibrary.userPrompts() + projectPrompts.approvedPrompts() }
         }

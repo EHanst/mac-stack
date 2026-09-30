@@ -57,3 +57,16 @@ When generating implementations:
 * Wrap the execution in `posix_spawnp` using a dynamic Darwin Seatbelt profile string that denies network access and restricts file modifications strictly to `NSTemporaryDirectory()` and the project cache.
 * Capture `stdout` and `stderr` asynchronously through non-blocking Swift file handles.
 * Emit compiler diagnostics directly back into an `AsyncStream` without spawning secondary terminal windows or invoking external shell wrappers.
+
+---
+
+### 5. USING THE VIBECOCKPIT MCP TOOLS (STANDING PRACTICE FOR CLAUDE CODE)
+
+Registered in `.mcp.json` as `vibecockpit` (stdio shim `.build/release/vibe-mcp` → the running app's socket). Requires the app to be running; every model query goes through `QueryGateway` (`Sources/StackCore/Inference/QueryGateway.swift`), which validates, limits and routes via `Router` and throws only `QueryError`.
+
+* **`search_code` (RAG):** use it first for "where/how is X implemented" questions about this repo, before grep. It only works when this repo is attached as a workspace in the app (check `list_workspaces`; a different project's workspace returns "No results found", which means nothing about this repo); if absent, fall back to grep and say so. Do **not** use it for an exact symbol or string you can grep, for a file you already know the path of, or for anything you just edited (the index can lag).
+* **`chat`:** for cheap local side-questions (summarise, classify). Never for work whose correctness matters more than its privacy, and never as a substitute for reading code.
+* **`embed`, `list_models`:** on demand only (similarity checks; checking what is loaded).
+* **`optimize_prompt`:** only when the user asks to rewrite a prompt.
+* If a tool errors, report the `QueryError` message; don't retry in a loop. The local model can be unavailable under memory pressure (`list_models` shows why).
+* **Which project a tool uses:** project tools (`search_code`, `read_file`, …) default to the folder the calling app is working in, taken from its MCP roots (Claude Code sends its working directory). Pass `workspace` only to override. If that folder isn't open yet, VibeCockpit opens it as a project automatically (persisted; never `/` or the whole home folder) and uses it. Nothing is silently redirected to another project. Clients that don't send roots keep the old rule: the only open project, else `workspace` is needed.

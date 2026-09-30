@@ -29,6 +29,7 @@ public struct APIServerConfiguration: Sendable {
 public struct StackAPIServer: Sendable {
 
     let inference: InferenceService
+    let gateway: QueryGateway
     let clients: ClientRegistry
     let mcpSessions: MCPHTTPSessions?
     let configuration: APIServerConfiguration
@@ -37,6 +38,7 @@ public struct StackAPIServer: Sendable {
     public init(inference: InferenceService, clients: ClientRegistry, mcp: MCPHTTPSessions? = nil,
                 configuration: APIServerConfiguration = .init()) {
         self.inference = inference
+        self.gateway = QueryGateway(inference: inference)
         self.clients = clients
         self.mcpSessions = mcp
         self.configuration = configuration
@@ -96,7 +98,7 @@ public struct StackAPIServer: Sendable {
 
     private func models(context: APIRequestContext) async throws -> Response {
         _ = try context.require(.models)
-        let entries = await inference.availableModels().map {
+        let entries = await gateway.models().map {
             OpenAIModelList.Entry(id: $0.id, ownedBy: $0.isLocal ? "this-mac" : "cloud")
         }
         return Self.json(OpenAIModelList.json(entries))
@@ -108,9 +110,9 @@ public struct StackAPIServer: Sendable {
         _ = try context.require(.embeddings)
         let req = try await body(OpenAIEmbeddingsRequest.self, from: request)
         let texts = try req.texts()
-        let result = try await inference.embed(texts, pin: Self.pin(for: req.model))
+        let result = try await gateway.embed(EmbedQuery(texts: texts, model: req.model, origin: .http))
         let tokens = InferenceService.estimateTokens(texts.map { Message(role: .user, content: $0) })
-        return Self.json(OpenAIEmbeddingsResponse.json(vectors: result.vectors, model: result.provider, promptTokens: tokens))
+        return Self.json(OpenAIEmbeddingsResponse.json(vectors: result.vectors, model: result.model, promptTokens: tokens))
     }
 
     // MARK: /v1/chat/completions
