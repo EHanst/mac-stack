@@ -4,10 +4,48 @@ import VibeCockpitCore
 import AppKit
 import SwiftUI
 
-/// The app is the AI endpoint other tools use, so closing the window must not stop it: it keeps
-/// running (and the model stays loaded) from the menu bar until the user chooses Quit.
+/// The app is the AI endpoint other tools use, so closing the window or pressing Cmd-Q must not
+/// stop it: it keeps running (and the model stays loaded) from the menu bar, with no Dock icon,
+/// until the user chooses Quit in the menu bar.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by the menu-bar Quit item, the one in-app way to stop the app.
+    static var quitRequested = false
+    private static let mainWindowTitle = "VibeCockpit"
+    /// `keyQuitReason` ('why?') on the quit Apple event; says whether the system is logging out etc.
+    private static let quitReasonKeyword: AEKeyword = 0x7768_793F
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let code = NSAppleEventManager.shared().currentAppleEvent?
+            .paramDescriptor(forKeyword: Self.quitReasonKeyword)?.enumCodeValue
+        switch QuitPolicy.decide(explicitQuit: Self.quitRequested, reason: QuitReason(appleEventCode: code)) {
+        case .terminate:
+            return .terminateNow
+        case .hideAndKeepRunning:
+            for window in NSApp.windows where window.title == Self.mainWindowTitle { window.close() }
+            return .terminateCancel
+        }
+    }
+
+    /// Dock icon (and Cmd-Tab entry) only while the main window is open; otherwise menu bar only.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        for name in [NSWindow.didBecomeMainNotification, NSWindow.willCloseNotification] {
+            // Re-check after the event settles: a window that is closing is still visible inside willClose.
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                Task { @MainActor in Self.syncActivationPolicy() }
+            }
+        }
+    }
+
+    private static func syncActivationPolicy() {
+        let windowOpen = NSApp.windows.contains { $0.title == mainWindowTitle && $0.isVisible }
+        let wanted: NSApplication.ActivationPolicy = windowOpen ? .regular : .accessory
+        guard NSApp.activationPolicy() != wanted else { return }
+        NSApp.setActivationPolicy(wanted)
+        if windowOpen { NSApp.activate(ignoringOtherApps: true) }
+    }
 }
 
 /// Set once at launch. macOS marks a login-item launch on the "open application" Apple event.
