@@ -40,6 +40,40 @@ struct BriefTests {
         #expect(brief.isEdited == false)
     }
 
+    private func v1Brief(contextEnabled: Bool) throws -> Brief {
+        let items = try JSONEncoder().encode([ContextItem(id: "i", kind: .file, ref: "A.swift", text: "let a = 1",
+                                                          mode: .inline, included: true)])
+        let json = """
+        {
+          "id": "abc", "schemaVersion": 1, "title": "Old", "workspace": null,
+          "target": {"modelFamily":"claude","surface":"claudeCode","tokenBudget":20000},
+          "sections": [
+            {"kind":"goal","text":"Fix login","enabled":true},
+            {"kind":"context","text":"Some context","enabled":\(contextEnabled)}
+          ],
+          "contextItems": \(String(decoding: items, as: UTF8.self)),
+          "versions": [],
+          "createdAt": "2026-09-30T00:00:00Z", "updatedAt": "2026-09-30T00:00:00Z"
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(Brief.self, from: json)
+    }
+
+    @Test("v1 migration with the context section switched off excludes the context items")
+    func v1MigrationContextDisabled() throws {
+        let brief = try v1Brief(contextEnabled: false)
+        #expect(brief.contextItems.count == 1)
+        #expect(brief.contextItems[0].included == false)
+    }
+
+    @Test("v1 migration with the context section on keeps the context items as they were")
+    func v1MigrationContextEnabled() throws {
+        let brief = try v1Brief(contextEnabled: true)
+        #expect(brief.contextItems[0].included == true)
+    }
+
     @Test("v2 round-trips input, body, and inputAtEdit both nil and non-nil")
     func v2Codable() throws {
         let encoder = JSONEncoder()

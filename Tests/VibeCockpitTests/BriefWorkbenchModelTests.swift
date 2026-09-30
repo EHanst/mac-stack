@@ -324,9 +324,26 @@ struct BriefWorkbenchModelTests {
         await m.newBrief(title: "t", input: "Fix login")
         m.saveVersion(); m.saveVersion()
         #expect(m.selected?.versions.count == 1)
+        m.setInput("Fix login and logout")
+        m.saveVersion()
+        #expect(m.selected?.versions.count == 2)
     }
 
-    @Test("empty goal creates no version")
+    @Test("a body-only change is recorded as a new version")
+    func saveVersionBodyOnly() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Fix login")
+        m.saveVersion()
+        m.setBody("Fix login, edited")
+        m.saveVersion()
+        #expect(m.selected?.versions.count == 2)
+        m.setBody("Fix login, edited again")
+        m.saveVersion()
+        #expect(m.selected?.versions.count == 3)
+        #expect(m.selected?.input == "Fix login")
+    }
+
+    @Test("empty input creates no version")
     func noVersionWithoutGoal() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
@@ -458,6 +475,7 @@ struct BriefWorkbenchModelTests {
         for i in 0..<Brief.maxVersions { m.setInput("v\(i)"); m.saveVersion() }
         m.setInput("current")
         m.restoreVersion(0)
+        #expect(m.selected?.input == "v0")
         #expect(m.selected?.versions.last?.input == "current")
         #expect(m.selected?.versions.count == Brief.maxVersions)
     }
@@ -549,6 +567,15 @@ struct BriefWorkbenchModelTests {
         m.appendToBody("Final")
         #expect(m.selected?.body == "Start\n\nExtra\n\nFinal")
         #expect(m.selected?.inputAtEdit == "Start")
+    }
+
+    @Test("appendToBody onto an empty body adds no leading blank lines")
+    func appendsToEmptyBody() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Start")
+        m.setBody("")
+        m.appendToBody("Extra")
+        #expect(m.selected?.body == "Extra")
     }
 
     @Test("restoreVersion restores input, body, and inputAtEdit")

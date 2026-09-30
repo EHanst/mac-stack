@@ -90,7 +90,16 @@ public actor BriefStore {
         if let legacy = legacyFiles[brief.id] {
             let backup = directory.appendingPathComponent("\(brief.id).v1.json")
             if !FileManager.default.fileExists(atPath: backup.path) {
-                try FileManager.default.copyItem(at: legacy, to: backup)
+                // Data.write can't combine .atomic with .withoutOverwriting, so stage a temp file and move it in;
+                // moveItem refuses to replace an existing file, and a crash never leaves a partial backup.
+                let staged = directory.appendingPathComponent(".\(brief.id).v1.json.\(UUID().uuidString).tmp")
+                do {
+                    try Data(contentsOf: legacy).write(to: staged, options: .atomic)
+                    try FileManager.default.moveItem(at: staged, to: backup)
+                } catch {
+                    try? FileManager.default.removeItem(at: staged)
+                    throw error
+                }
             }
             legacyFiles[brief.id] = nil
         }

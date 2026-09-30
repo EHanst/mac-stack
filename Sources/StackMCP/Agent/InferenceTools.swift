@@ -122,7 +122,10 @@ public struct OptimizePromptTool: AgentToolHandler {
     public init(inference: InferenceService) { self.inference = inference }
 
     static func mode(from arguments: [String: Value]) throws -> OptimizeMode {
-        guard case .string(let m) = arguments["mode"] else { return .improve }
+        guard let raw = arguments["mode"] else { return .improve }
+        guard case .string(let m) = raw else {
+            throw AgentToolError.invalidArgument("mode", "must be improve, expand, or adapt")
+        }
         switch m {
         case "improve": return .improve
         case "expand": return .expand

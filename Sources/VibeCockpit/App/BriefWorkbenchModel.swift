@@ -157,7 +157,7 @@ public final class BriefWorkbenchModel {
                 brief.inputAtEdit = brief.input
                 brief.body = brief.input + (brief.input.isEmpty ? "" : "\n\n") + text
             } else {
-                brief.body! += "\n\n" + text
+                brief.body! += (brief.body!.isEmpty ? "" : "\n\n") + text
             }
             brief.updatedAt = Date()
         }
@@ -178,7 +178,7 @@ public final class BriefWorkbenchModel {
         await pendingSaves[id]?.value
         pendingSaves[id] = nil
         saveGeneration[id] = nil
-        do { try await store.delete(id: id) } catch let BriefStoreError.notFound { /* never reached disk */ }
+        do { try await store.delete(id: id) } catch BriefStoreError.notFound { /* never reached disk */ }
         catch { saveError = error.localizedDescription }
     }
 

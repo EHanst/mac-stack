@@ -123,6 +123,10 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
             input = Self.joinLegacy(legacySections)
             body = nil
             inputAtEdit = nil
+            // The old context section's switch also gated the attached items; keep them off.
+            if legacySections.first(where: { $0.kind == "context" })?.enabled == false {
+                for i in contextItems.indices { contextItems[i].included = false }
+            }
             versions = legacyVersions.map {
                 Version(date: $0.date, input: Self.joinLegacy($0.sections), body: nil, inputAtEdit: nil)
             }

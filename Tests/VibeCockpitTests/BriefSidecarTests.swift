@@ -148,6 +148,7 @@ struct BriefSidecarTests {
         let b = Brief.new(title: "t", input: "key AKIAIOSFODNN7EXAMPLE", target: .make(modelFamily: "claude", surface: .claudeCode))
         let r = BriefSidecar.parse("<revision>something else</revision>", operation: .revise, brief: b)
         #expect(r.revisions.isEmpty)
+        #expect(r.note == "Remove the secret from the brief to get a revision.")
     }
 
     @Test("prose or empty revision gives a note, not cards")

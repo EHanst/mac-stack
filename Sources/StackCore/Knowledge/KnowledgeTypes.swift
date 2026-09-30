@@ -5,7 +5,7 @@ public enum KnowledgeKind: String, Codable, Sendable, CaseIterable {
     case technique
     /// A quirk of a target model family or surface.
     case targetNote
-    /// An accepted brief: the sections the user settled on.
+    /// An accepted brief: the brief text the user settled on.
     case exemplar
     /// Phrasing for a verifiable constraint.
     case constraint

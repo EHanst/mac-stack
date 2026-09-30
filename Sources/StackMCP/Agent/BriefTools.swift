@@ -23,7 +23,7 @@ public struct ListBriefsTool: AgentToolHandler {
         guard !briefs.isEmpty else { return text("There are no briefs yet. Create one in Kokoro.") }
         let stamp = ISO8601DateFormatter()
         return text(briefs.map {
-            let edited = $0.body != nil ? " · edited" : ""
+            let edited = $0.body != nil ? " · brief edited" : ""
             return "\($0.id) — \($0.title) (\($0.target.surface.displayName), edited \(stamp.string(from: $0.updatedAt)))\(edited)"
         }.joined(separator: "\n"))
     }

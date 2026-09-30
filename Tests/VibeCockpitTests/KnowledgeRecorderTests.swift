@@ -22,7 +22,7 @@ struct KnowledgeRecorderTests {
         #expect(settings.acceptedBriefCount == 1)
     }
 
-    @Test("opted in: an exemplar with the brief's text, target and intent is stored")
+    @Test("opted in: an exemplar with the brief's text, target and intent is built")
     func exemplar() {
         let b = Brief.new(title: "t", input: "Add retry\nwith backoff", target: .make(modelFamily: "claude", surface: .claudeCode))
         let e = KnowledgeRecorder.exemplar(from: b, now: Date())

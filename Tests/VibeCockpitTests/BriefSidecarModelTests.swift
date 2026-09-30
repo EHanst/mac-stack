@@ -159,6 +159,57 @@ struct BriefSidecarModelTests {
         #expect(m.result?.note == "The brief changed since the suggestion. Run it again.")
     }
 
+    @Test("on an edited brief, accepting a revision writes body and leaves input alone")
+    func acceptRevisionOnEdited() async {
+        let wb = await workbench()
+        wb.setBody("Edited text")
+        let m = model { "<revision>Edited text, better</revision>" }
+        m.run(.revise, brief: wb.selected!, reply: "r")
+        await settle(m)
+        m.acceptRevision(m.result!.revisions[0], in: wb)
+        #expect(wb.selected?.body == "Edited text, better")
+        #expect(wb.selected?.input == "Add retry to uploads")
+    }
+
+    @Test("on an edited brief, accepting a finding writes body and leaves input alone")
+    func acceptFindingOnEdited() async {
+        let wb = await workbench()
+        wb.setBody("Edited text")
+        let m = model { "<findings>\n- No limit | add: Retry at most 3 times.\n</findings>" }
+        m.run(.critique, brief: wb.selected!)
+        await settle(m)
+        m.accept(m.result!.findings[0], in: wb)
+        #expect(wb.selected?.body == "Edited text\n\nRetry at most 3 times.")
+        #expect(wb.selected?.input == "Add retry to uploads")
+    }
+
+    @Test("a revision made while linked is refused once the brief is edited with different text")
+    func staleLinkedThenEdited() async {
+        let wb = await workbench()
+        let m = model { "<revision>Something new</revision>" }
+        m.run(.revise, brief: wb.selected!, reply: "r")
+        await settle(m)
+        wb.setBody("Hand edited")
+        m.acceptRevision(m.result!.revisions[0], in: wb)
+        #expect(wb.selected?.body == "Hand edited")
+        #expect(wb.selected?.input == "Add retry to uploads")
+        #expect(m.result?.note == "The brief changed since the suggestion. Run it again.")
+    }
+
+    @Test("a revision made while edited is refused once the brief is rebuilt from input")
+    func staleEditedThenRebuilt() async {
+        let wb = await workbench()
+        wb.setBody("Hand edited")
+        let m = model { "<revision>Something new</revision>" }
+        m.run(.revise, brief: wb.selected!, reply: "r")
+        await settle(m)
+        wb.rebuildFromInput()
+        m.acceptRevision(m.result!.revisions[0], in: wb)
+        #expect(wb.selected?.body == nil)
+        #expect(wb.selected?.input == "Add retry to uploads")
+        #expect(m.result?.note == "The brief changed since the suggestion. Run it again.")
+    }
+
     @Test("accepting after switching briefs edits the original brief only")
     func acceptOnOriginalBrief() async {
         let wb = await workbench()

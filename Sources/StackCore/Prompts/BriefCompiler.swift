@@ -145,7 +145,7 @@ public enum BriefCompiler {
     }
 
     /// Stops pasted file text from closing the `<file>` tag it sits in. Only `</file` is escaped,
-    /// so code such as `</div>` reaches the model unchanged. (The section-tag branch went with the sections.)
+    /// so code such as `</div>` reaches the model unchanged.
     private static func neutralize(_ text: String) -> String {
         text.replacingOccurrences(of: "</file", with: "<\\/file", options: .caseInsensitive)
     }

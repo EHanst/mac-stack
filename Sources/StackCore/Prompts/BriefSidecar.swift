@@ -178,7 +178,7 @@ public struct BriefSidecar: Sendable {
             // Only what the model was shown can be rewritten: not text whose secrets it saw as placeholders
             // (applying would replace the real value with the placeholder).
             if ContextRedactor.redact(original).count > 0 {
-                result.note = "The model didn't suggest anything."
+                result.note = "Remove the secret from the brief to get a revision."
                 return result
             }
             text = text.replacingOccurrences(of: "\u{200B}", with: "")

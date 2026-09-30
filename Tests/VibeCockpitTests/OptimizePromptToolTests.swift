@@ -25,4 +25,11 @@ struct OptimizePromptToolModeTests {
             _ = try OptimizePromptTool.mode(from: ["mode": .string("synthesize")])
         }
     }
+
+    @Test("a mode that is not a string is an invalidArgument error, not improve")
+    func nonString() {
+        #expect(throws: AgentToolError.self) {
+            _ = try OptimizePromptTool.mode(from: ["mode": .int(3)])
+        }
+    }
 }
