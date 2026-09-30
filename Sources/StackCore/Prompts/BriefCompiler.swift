@@ -2,7 +2,7 @@ import Foundation
 
 public struct BriefWarning: Sendable, Equatable {
     public enum Code: String, Sendable {
-        case emptyGoal, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, sectionsOverBudget
+        case emptyGoal, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, sectionsOverBudget, secretRedacted
     }
     public var code: Code
     public var message: String
@@ -20,8 +20,23 @@ public struct CompiledPrompt: Sendable, Equatable {
 /// same brief always compiles to the same text. Nothing is dropped without a warning.
 public enum BriefCompiler {
 
-    public static func compile(_ brief: Brief) -> CompiledPrompt {
+    public static func compile(_ original: Brief) -> CompiledPrompt {
         var warnings: [BriefWarning] = []
+        // Nothing leaves the app with a credential in it, whichever section or item it came from.
+        var brief = original
+        var redactions = 0
+        for i in brief.sections.indices {
+            let r = ContextRedactor.redact(brief.sections[i].text)
+            brief.sections[i].text = r.text; redactions += r.count
+        }
+        for i in brief.contextItems.indices {
+            let r = ContextRedactor.redact(brief.contextItems[i].text)
+            brief.contextItems[i].text = r.text; redactions += r.count
+        }
+        if redactions > 0 {
+            warnings.append(.init(code: .secretRedacted,
+                                  message: "\(redactions) secret\(redactions == 1 ? " was" : "s were") removed from the prompt.", itemID: nil))
+        }
         let structure = brief.target.structure
         let budget = brief.target.tokenBudget
 

@@ -228,4 +228,14 @@ struct BriefCompilerTests {
         #expect(compile(["a", "b"], budget: full - 1).includedItemIDs == ["b"])
         #expect(compile(["b", "a"], budget: full - 1).includedItemIDs == ["b"])
     }
+
+    @Test("seeded secrets never reach the compiled prompt, and a warning says so")
+    func secretsNeverCompiled() {
+        var b = brief()
+        b.setText("Fix the deploy. My key is sk-abcdefghijklmnopqrstuvwxyz123456", for: .goal)
+        b.contextItems = [ContextItem(kind: .file, ref: "env.swift", text: "let k = \"AKIAIOSFODNN7EXAMPLE\"", mode: .inline)]
+        let out = BriefCompiler.compile(b)
+        #expect(!out.text.contains("sk-abcdef") && !out.text.contains("AKIAIOSFODNN7EXAMPLE"))
+        #expect(out.warnings.contains { $0.code == .secretRedacted })
+    }
 }
