@@ -24,6 +24,11 @@ public final class BriefSidecarModel {
     public private(set) var result: SidecarResult?
     /// The brief the cards belong to; the view shows them only while this is selected.
     public private(set) var briefID: String?
+    /// Reports a brief the user accepted a revision for. The knowledge recorder listens.
+    public var onAccepted: (@MainActor (Brief) -> Void)?
+    /// Reports how the user treated this run's proposals, with the ids of the knowledge entries that were in its prompt.
+    public var onSignal: (@MainActor ([String], SignalOutcome) -> Void)?
+    private var signalled = false
 
     private let sidecar: BriefSidecar
     /// Progress of "new brief from a pasted session", which has no brief yet to attach cards to.
@@ -43,6 +48,7 @@ public final class BriefSidecarModel {
         phase = .running(operation)
         result = nil
         briefID = brief.id
+        signalled = false
         task = Task { [sidecar] in
             do {
                 let out = try await sidecar.run(brief: brief, operation: operation, reply: reply)
@@ -71,12 +77,14 @@ public final class BriefSidecarModel {
         let a = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let id = briefID, !a.isEmpty, result?.questions.contains(q) == true else { return }
         workbench.append("Q: \(q.text)\nA: \(a)", to: q.section, briefID: id)
+        signal(.accepted)
         result?.questions.removeAll { $0.id == q.id }
     }
 
     public func accept(_ f: SidecarFinding, in workbench: BriefWorkbenchModel) {
         guard let id = briefID, let addition = f.addition, result?.findings.contains(f) == true else { return }
         workbench.append(addition, to: f.section, briefID: id)
+        signal(.accepted)
         result?.findings.removeAll { $0.id == f.id }
     }
 
@@ -92,9 +100,23 @@ public final class BriefSidecarModel {
         }
         workbench.snapshotIfChanged(id: id)
         workbench.setText(r.proposed, for: r.section, briefID: id)
+        signal(.accepted)
+        if let updated = workbench.briefs.first(where: { $0.id == id }) { onAccepted?(updated) }
     }
 
-    public func dismiss(revisionID: String) { result?.revisions.removeAll { $0.id == revisionID } }
+    private func signal(_ outcome: SignalOutcome) {
+        guard !signalled, let ids = result?.guidanceIDs, !ids.isEmpty else { return }
+        signalled = true
+        onSignal?(ids, outcome)
+    }
+
+    /// A dismissal only counts as a rejection once nothing is left to act on and nothing was accepted.
+    private func settleAfterDismiss() {
+        guard let r = result, r.questions.isEmpty, r.findings.isEmpty, r.revisions.isEmpty else { return }
+        signal(.rejected)
+    }
+
+    public func dismiss(revisionID: String) { result?.revisions.removeAll { $0.id == revisionID }; settleAfterDismiss() }
 
     /// Summarizes a pasted session into a new brief. Nothing is created unless the model's summary is usable.
     public func continueFromSession(_ pasted: String, in workbench: BriefWorkbenchModel) {
@@ -126,6 +148,6 @@ public final class BriefSidecarModel {
         continuationPhase = .idle
     }
 
-    public func dismiss(questionID: String) { result?.questions.removeAll { $0.id == questionID } }
-    public func dismiss(findingID: String) { result?.findings.removeAll { $0.id == findingID } }
+    public func dismiss(questionID: String) { result?.questions.removeAll { $0.id == questionID }; settleAfterDismiss() }
+    public func dismiss(findingID: String) { result?.findings.removeAll { $0.id == findingID }; settleAfterDismiss() }
 }

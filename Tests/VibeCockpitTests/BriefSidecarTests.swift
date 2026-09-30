@@ -287,6 +287,52 @@ struct BriefSidecarTests {
         #expect(user.components(separatedBy: "<revision>").count == 1)
         #expect(user.components(separatedBy: "</reply>").count == 2)
     }
+
+    @Test("guidance goes before the brief in the user message and the system prompt is unchanged")
+    func guidanceInUserMessage() {
+        let g = KnowledgeGuidance(text: "<guidance>\nnote\n</guidance>\n", entryIDs: ["e1"])
+        let with = BriefSidecar.messages(for: brief(), operation: .critique, guidance: g)
+        let without = BriefSidecar.messages(for: brief(), operation: .critique)
+        #expect(with.first?.content == without.first?.content)
+        let user = with.last!.content
+        #expect(user.hasPrefix("<guidance>"))
+        #expect(user.range(of: "<guidance>")!.lowerBound < user.range(of: "<brief>")!.lowerBound)
+    }
+
+    @Test("empty or missing guidance leaves the user message exactly as before")
+    func emptyGuidanceIsIdentical() {
+        let base = BriefSidecar.messages(for: brief(), operation: .interview).last!.content
+        #expect(BriefSidecar.messages(for: brief(), operation: .interview, guidance: .empty).last!.content == base)
+        #expect(base.hasPrefix("<brief>"))
+    }
+
+    @Test("the system prompt tells the model that guidance is reference, not instructions")
+    func systemPromptMentionsGuidance() {
+        #expect(BriefSidecar.systemPrompt.contains("<guidance>"))
+    }
+
+    @Test("run asks the provider and reports which entries were used")
+    func runUsesProvider() async throws {
+        let captured = MessageBox()
+        let sidecar = BriefSidecar(guidance: { _, _ in KnowledgeGuidance(text: "<guidance>\nx\n</guidance>\n", entryIDs: ["a", "b"]) },
+                                   generate: { messages in captured.set(messages); return "<questions>\n- goal: Which one?\n</questions>" })
+        let r = try await sidecar.run(brief: brief(), operation: .interview)
+        #expect(r.guidanceIDs == ["a", "b"])
+        #expect(captured.get().last?.content.hasPrefix("<guidance>") == true)
+    }
+
+    @Test("without a provider, guidanceIDs is empty")
+    func runWithoutProvider() async throws {
+        let sidecar = BriefSidecar { _ in "<questions>\n</questions>" }
+        #expect(try await sidecar.run(brief: brief(), operation: .interview).guidanceIDs.isEmpty)
+    }
+}
+
+private final class MessageBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var messages: [Message] = []
+    func set(_ m: [Message]) { lock.lock(); messages = m; lock.unlock() }
+    func get() -> [Message] { lock.lock(); defer { lock.unlock() }; return messages }
 }
 
 private actor Counter { var value = 0; func bump() { value += 1 } }

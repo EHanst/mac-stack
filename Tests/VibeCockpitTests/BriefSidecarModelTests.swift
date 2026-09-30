@@ -250,6 +250,62 @@ struct BriefSidecarModelTests {
         #expect(wb.selected?.versions.last?.sections.first { $0.kind == .constraints }?.text == "old rule")
     }
 
+    @Test("accepting a finding sends one accepted signal with the guidance ids")
+    func acceptSignals() async {
+        let wb = await workbench()
+        let sidecar = BriefSidecar(guidance: { _, _ in KnowledgeGuidance(text: "<guidance>\nx\n</guidance>\n", entryIDs: ["g1"]) },
+                                   generate: { _ in "<findings>\n- constraints | No limit | add: Retry at most 3 times.\n- goal | Vague\n</findings>" })
+        let m = BriefSidecarModel(sidecar: sidecar)
+        var signals: [(ids: [String], outcome: SignalOutcome)] = []
+        m.onSignal = { signals.append(($0, $1)) }
+        m.run(.critique, brief: wb.selected!)
+        await settle(m)
+        m.accept(m.result!.findings[0], in: wb)
+        m.dismiss(findingID: m.result!.findings[0].id)
+        #expect(signals.count == 1)
+        #expect(signals.first?.outcome == .accepted && signals.first?.ids == ["g1"])
+    }
+
+    @Test("dismissing every card without accepting sends one rejected signal")
+    func rejectSignals() async {
+        let wb = await workbench()
+        let sidecar = BriefSidecar(guidance: { _, _ in KnowledgeGuidance(text: "<guidance>\nx\n</guidance>\n", entryIDs: ["g1"]) },
+                                   generate: { _ in "<findings>\n- goal | Vague\n- constraints | Missing\n</findings>" })
+        let m = BriefSidecarModel(sidecar: sidecar)
+        var outcomes: [SignalOutcome] = []
+        m.onSignal = { outcomes.append($1) }
+        m.run(.critique, brief: wb.selected!)
+        await settle(m)
+        m.dismiss(findingID: m.result!.findings[0].id)
+        #expect(outcomes.isEmpty)
+        m.dismiss(findingID: m.result!.findings[0].id)
+        #expect(outcomes == [.rejected])
+    }
+
+    @Test("no signal is sent when no guidance was used")
+    func noSignalWithoutGuidance() async {
+        let wb = await workbench()
+        let m = model { "<findings>\n- goal | Vague\n</findings>" }
+        var count = 0
+        m.onSignal = { _, _ in count += 1 }
+        m.run(.critique, brief: wb.selected!)
+        await settle(m)
+        m.dismiss(findingID: m.result!.findings[0].id)
+        #expect(count == 0)
+    }
+
+    @Test("accepting a revision reports the brief as accepted")
+    func revisionAccepted() async {
+        let wb = await workbench()
+        let m = model { "<revision>\n<goal>Add retry with backoff to uploads</goal>\n</revision>" }
+        var accepted = 0
+        m.onAccepted = { _ in accepted += 1 }
+        m.run(.revise, brief: wb.selected!, reply: "the answer")
+        await settle(m)
+        m.acceptRevision(m.result!.revisions[0], in: wb)
+        #expect(accepted == 1)
+    }
+
 }
 
 private actor AsyncGate {

@@ -20,6 +20,7 @@ struct BriefWorkbenchView: View {
         VStack(spacing: 0) {
             header
             continuationStatus
+            KnowledgePromptView()
             if let clipboardNote {
                 Text(clipboardNote).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)

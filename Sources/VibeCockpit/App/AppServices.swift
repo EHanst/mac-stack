@@ -59,6 +59,9 @@ public final class AppServices {
     /// Save/insert/improve prompts from the chat box.
     public let promptStudio: PromptStudioModel
     public let sidecar: BriefSidecarModel
+    /// The sidecar model's lasting knowledge (accepted-brief history, packs) and its opt-in.
+    public let knowledge: KnowledgeModel
+    private let knowledgeStore: KnowledgeStore
     let workspaceSearch: WorkspaceSearch
     public let briefs = BriefWorkbenchModel(store: BriefStore())
     /// Prompts committed inside project folders (`.vibe/prompts`); usable only after the user approves each.
@@ -107,7 +110,16 @@ public final class AppServices {
             projectPrompts: projectPrompts,
             defaults: defaults)
         let studio = self.promptStudio
-        self.sidecar = BriefSidecarModel(sidecar: BriefSidecar { messages in
+        let knowledgeStore = KnowledgeStore(
+            dbURL: KnowledgeStore.defaultURL(), dimension: LocalEmbedder.Config.bgeSmall.dimension,
+            embedder: KnowledgeEmbedder(
+                documents: { texts in try await AppServices.localEmbedder(in: registry).embed(texts) },
+                query: { text in try await AppServices.localEmbedder(in: registry).embedQuery(text) }))
+        self.knowledgeStore = knowledgeStore
+        let knowledge = KnowledgeModel(store: knowledgeStore)
+        self.knowledge = knowledge
+        let retriever = knowledge.retriever
+        self.sidecar = BriefSidecarModel(sidecar: BriefSidecar(guidance: { brief, _ in await retriever.guidance(for: brief) }) { messages in
             // Room for the reply too; a request the local model can't hold fails with a sentence, not a stack.
             if let limit = await inference.localContextLimit(),
                InferenceService.estimateTokens(messages) + BriefSidecar.generationOptions.maxTokens > limit {
@@ -124,6 +136,10 @@ public final class AppServices {
             return out
         })
         let briefModel = self.briefs
+        briefModel.onBriefAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }
+        self.sidecar.onAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }
+        self.sidecar.onSignal = { ids, outcome in Task { await knowledge.noteSignal(ids: ids, outcome: outcome) } }
+        Task { await knowledge.refresh(); await knowledgeStore.reembedMissing() }
         let externals = externalServers, requestLog = self.requestLog, governor = self.governor
         self.diagnostics = DiagnosticsModel(log: requestLog) {
             try await AppServices.makeSupportBundle(
@@ -666,11 +682,18 @@ public final class AppServices {
         }
     }
 
+    /// The installed offline embedder, or `noEmbedder` when there isn't one yet.
+    private static func localEmbedder(in registry: ModelRegistry) async throws -> LocalEmbedder {
+        guard let e = await registry.allProviders.compactMap({ $0 as? LocalEmbedder }).first else { throw KnowledgeError.noEmbedder }
+        return e
+    }
+
     /// Offline embeddings (bge-small) if installed; shares the GPU scheduler. Safe to call twice.
     private func registerEmbedderIfInstalled() async {
         let embedder = LocalEmbedder(scheduler: gpuScheduler)
         guard await embedder.isInstalled, await registry.provider(id: embedder.id) == nil else { return }
         await registry.register(embedder)
+        await knowledgeStore.reembedMissing()
         for provider in await registry.allProviders(with: .textGeneration) {
             await (provider as? LocalMLXProvider)?.reserveMemory(bytes: LocalEmbedder.residentBytesEstimate)
         }
