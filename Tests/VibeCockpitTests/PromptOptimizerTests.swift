@@ -181,7 +181,7 @@ struct PromptOptimizerTests {
         #expect(PromptOptimizer.outputCap(mode: .improve, servedLocally: false) == PromptOptimizer.maxOutputTokens)
     }
 
-@Test("expand depth follows the target unless overridden")
+    @Test("expand depth follows the target unless overridden")
     func expandDepth() {
         let small = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall), mode: .expand)
         let big = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .claude), mode: .expand)
