@@ -67,9 +67,9 @@ public struct SyntaxHighlighter {
     private let theme: Theme
     private let font: NSFont
 
-    public init(theme: Theme = .adaptive, font: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)) {
+    public init(theme: Theme = .adaptive, font: NSFont? = nil) {
         self.theme = theme
-        self.font = font
+        self.font = font ?? .monospacedSystemFont(ofSize: AppTypography.scaled(12), weight: .regular)
     }
 
     public func highlight(_ source: String, language: SourceLanguage) -> NSAttributedString {

@@ -204,13 +204,13 @@ private struct DiffLineRow: View {
         HStack(spacing: 0) {
             // Gutter
             Text(gutterSymbol)
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: AppTypography.scaled(11), design: .monospaced))
                 .foregroundStyle(gutterColor)
                 .frame(width: 20, alignment: .center)
                 .background(gutterBackground)
             // Line content
             Text(line.content)
-                .font(.system(size: 12, design: .monospaced))
+                .font(.system(size: AppTypography.scaled(12), design: .monospaced))
                 .foregroundStyle(lineColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 8)

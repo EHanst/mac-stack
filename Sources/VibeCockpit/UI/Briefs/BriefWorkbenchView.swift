@@ -10,7 +10,7 @@ struct BriefWorkbenchView: View {
     @Environment(AppServices.self) private var services
     @State private var newTitle = ""
     @State private var creating = false
-    @State private var improving = false
+    @State private var improvingKind: BriefSection.Kind?
     @State private var clipboardNote: String?
     @State private var continuing = false
 
@@ -33,7 +33,9 @@ struct BriefWorkbenchView: View {
             }
         }
         .background(Color.mtSurface)
-        .sheet(isPresented: $improving) { improveSheet }
+        .sheet(isPresented: Binding(get: { improvingKind != nil }, set: { if !$0 { improvingKind = nil } })) {
+            if let kind = improvingKind { improveSheet(kind) }
+        }
         .sheet(isPresented: $continuing) {
             ReplySheet(title: "Continue from a session",
                        prompt: "Paste a long session. The sidecar summarizes it into a new brief; the paste is not kept.",
@@ -135,15 +137,14 @@ struct BriefWorkbenchView: View {
                 Text(Self.title(kind)).font(.mtLabelLarge)
                 Text("~\(PromptTokens.estimate(section?.text ?? "")) tokens")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                if kind == .goal {
-                    Button("Improve") { improveGoal() }
-                        .disabled((section?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+                Button("Improve") { improve(kind) }
+                    .disabled((section?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Spacer()
                 Toggle("Include", isOn: Binding(get: { enabled }, set: { model.setEnabled($0, for: kind) }))
                     .toggleStyle(.switch).controlSize(.small).labelsHidden()
             }
-            TextEditor(text: Binding(get: { section?.text ?? "" }, set: { model.setText($0, for: kind) }))
+            SectionTextEditor(external: section?.text ?? "") { model.setText($0, for: kind) }
+                .id("\(model.selectedID ?? "")-\(kind.rawValue)")
                 .font(.mtBodyMedium)
                 .frame(minHeight: kind == .goal ? 110 : 70)
                 .scrollContentBackground(.hidden)
@@ -169,24 +170,25 @@ struct BriefWorkbenchView: View {
         }
     }
 
-    private var goalText: String { model.selected?.text(of: .goal) ?? "" }
+    private func text(of kind: BriefSection.Kind) -> String { model.selected?.text(of: kind) ?? "" }
 
-    private func improveGoal() {
-        services.promptStudio.startOptimize(draft: goalText, mode: .improve, intent: PromptEngineer.Intent.general.rawValue)
-        improving = true
+    private func improve(_ kind: BriefSection.Kind) {
+        services.promptStudio.startOptimize(draft: text(of: kind), mode: .improve, intent: PromptEngineer.Intent.general.rawValue)
+        improvingKind = kind
     }
 
-    private var improveSheet: some View {
-        OptimizeReviewSheet(
-            studio: services.promptStudio, draft: goalText,
-            onAccept: { model.setText($0, for: .goal); services.promptStudio.clearUndo(); improving = false },
-            onExpand: { services.promptStudio.startOptimize(draft: goalText, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
-            onSynthesize: { services.promptStudio.startOptimize(draft: goalText, mode: .synthesize, intent: PromptEngineer.Intent.general.rawValue) },
+    private func improveSheet(_ kind: BriefSection.Kind) -> some View {
+        let draft = text(of: kind)
+        return OptimizeReviewSheet(
+            studio: services.promptStudio, draft: draft,
+            onAccept: { model.setText($0, for: kind); services.promptStudio.clearUndo(); improvingKind = nil },
+            onExpand: { services.promptStudio.startOptimize(draft: draft, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
+            onSynthesize: { services.promptStudio.startOptimize(draft: draft, mode: .synthesize, intent: PromptEngineer.Intent.general.rawValue) },
             onAskQuestions: { questions in
-                model.setText(goalText + "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), for: .goal)
-                services.promptStudio.dismissReview(); improving = false
+                model.setText(draft + "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), for: kind)
+                services.promptStudio.dismissReview(); improvingKind = nil
             },
-            onClose: { services.promptStudio.dismissReview(); improving = false })
+            onClose: { services.promptStudio.dismissReview(); improvingKind = nil })
     }
 
     static func title(_ kind: BriefSection.Kind) -> String {
@@ -207,6 +209,37 @@ struct BriefWorkbenchView: View {
         case .examples: "A sample of what good looks like."
         case .outputFormat: "How the answer should be shaped."
         }
+    }
+}
+
+/// Keeps the text in local state while typing. Binding straight to the model made SwiftUI compare
+/// against a stale snapshot mid-keystroke and reset the selection to the end.
+private struct SectionTextEditor: View {
+    let external: String
+    let onChange: (String) -> Void
+    @State private var text: String
+    @State private var lastSent: String
+
+    init(external: String, onChange: @escaping (String) -> Void) {
+        self.external = external
+        self.onChange = onChange
+        _text = State(initialValue: external)
+        _lastSent = State(initialValue: external)
+    }
+
+    var body: some View {
+        TextEditor(text: $text)
+            .onChange(of: text) {
+                guard text != lastSent else { return }
+                lastSent = text
+                onChange(text)
+            }
+            .onChange(of: external) {
+                // Ignore the echo of our own edit; adopt real outside changes (Improve, Add, undo).
+                guard external != lastSent, external != text else { return }
+                lastSent = external
+                text = external
+            }
     }
 }
 #endif

@@ -14,11 +14,20 @@ enum AppTypography {
         AppFont(stored: UserDefaults.standard.string(forKey: AppFont.storageKey))
     }
 
+    /// Ratio of the system's preferred body size to macOS's default 13pt, so text follows the
+    /// user's system text-size setting. Read at draw time like `current`.
+    static var scale: CGFloat {
+        max(0.5, NSFont.preferredFont(forTextStyle: .body).pointSize / 13)
+    }
+
+    static func scaled(_ size: CGFloat) -> CGFloat { size * scale }
+
     static func font(size: CGFloat, weight: Font.Weight) -> Font {
         font(current, size: size, weight: weight)
     }
 
-    static func font(_ choice: AppFont, size: CGFloat, weight: Font.Weight) -> Font {
+    static func font(_ choice: AppFont, size rawSize: CGFloat, weight: Font.Weight) -> Font {
+        let size = scaled(rawSize)
         switch choice {
         case .osaka, .skia:
             if let family = choice.familyName, NSFont(name: family, size: size) != nil {
