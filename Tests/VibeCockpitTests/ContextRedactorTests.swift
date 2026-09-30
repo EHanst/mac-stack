@@ -33,4 +33,57 @@ struct ContextRedactorTests {
         let once = ContextRedactor.redact("k=AKIAIOSFODNN7EXAMPLE").text
         #expect(ContextRedactor.redact(once).text == once)
     }
+
+    @Test("common config shapes are redacted", arguments: [
+        "DB_PASSWORD=hunter2hunter2",
+        #"{"password": "hunter2hunter2"}"#,
+        "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "STRIPE_SECRET_KEY=sk_live_abcdefghijklmnopqrstuvwx",
+        #"let secretKey = "hunter2hunter2""#,
+        "SECRET_KEY=hunter2hunter2",
+        "authorization: bearer abcdefghijklmnopqrstuvwxyz0123",
+        "github_pat_11ABCDEFG0abcdefghijklmnop_qrstuvwxyz",
+        "SLACK=xoxb-1234567890-abcdefghij",
+        "creds: ASIAIOSFODNN7EXAMPLE",
+        #"password = "correct horse battery staple""#,
+        "GOOGLE=AIzaSyA-abcdefghijklmnopqrstuvwxyz012345",
+    ])
+    func moreShapes(sample: String) {
+        let out = ContextRedactor.redact(sample)
+        #expect(out.count >= 1, "not redacted: \(sample)")
+        #expect(out.text.contains("[redacted"))
+    }
+
+    @Test("identifiers that merely contain a keyword are left alone")
+    func noFalsePositives() {
+        let code = """
+        let tokenizer = Tokenizer.shared
+        var token: String
+        let secretary = Person(name: "Alex Doe")
+        cache.key(for: user)
+        let passwordField = makeField()
+        """
+        #expect(ContextRedactor.redact(code).count == 0)
+    }
+
+    @Test("a private key with no END line is still redacted")
+    func unterminatedKey() {
+        let out = ContextRedactor.redact("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nabcdefghijklmnopqrstuv")
+        #expect(out.count == 1 && !out.text.contains("MIIEvQ"))
+    }
+
+    @Test("many BEGIN lines with no END do not take quadratic time")
+    func noBacktracking() {
+        let text = String(repeating: "-----BEGIN RSA PRIVATE KEY-----\n", count: 6_000)
+        let start = ContinuousClock.now
+        _ = ContextRedactor.redact(text)
+        #expect(ContinuousClock.now - start < .seconds(2))
+    }
+
+    @Test("a redacted value is not redacted again")
+    func stable() {
+        let once = ContextRedactor.redact(#"password = "hunter2hunter2""#)
+        let twice = ContextRedactor.redact(once.text)
+        #expect(twice.count == 0 && twice.text == once.text)
+    }
 }
