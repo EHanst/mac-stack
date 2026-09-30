@@ -346,14 +346,20 @@ public actor LocalMLXProvider: ModelProvider {
 
         // Speculative decoding drafts one token ahead with the MTP head and checks it with a two-token
         // pass, which is only exact for greedy choice; near-greedy rewrite settings are treated as greedy.
-        let speculate = tuning.speculative && mtp != nil && cache.mtp != nil
-            && sampling.temperature <= 0.25 && sampling.presencePenalty == 0
+        let greedyLike = sampling.temperature <= 0.25 && sampling.presencePenalty == 0
+        // Other settings use rejection sampling against the model's own (top-k) distribution, which keeps
+        // the output distribution exactly what plain sampling would give.
+        let sampledSpec = !greedyLike && sampling.temperature > 0 && sampling.topK > 0
+        let speculate = tuning.speculative && mtp != nil && cache.mtp != nil && (greedyLike || sampledSpec)
         lastSpeculation = nil
 
         if speculate, let mtp, let mtpCache = cache.mtp {
             var cycles = 0, accepted = 0
             let first = mdl.decodeStep(MLXArray([promptIds[lastIndex]])[.newAxis], cache: cache)
-            let firstToken = argMax(first.logits, axis: -1)
+            let firstToken = greedyLike
+                ? argMax(first.logits, axis: -1)
+                : TokenSampler.sample(first.logits, sampling, seen: seen)
+            if let current = seen { seen = maximum(current, TokenSampler.oneHot(firstToken, vocab: mdl.config.vocabSize)) }
             MLX.eval([firstToken, first.hidden] + cache.stateArrays)
             var curId = firstToken.item(Int.self)
             var pendingHidden = first.hidden          // [1, n, H]: hidden state of each not-yet-drafted-from position
@@ -375,25 +381,53 @@ public actor LocalMLXProvider: ModelProvider {
                                                    limit: tuning.draftVocabulary), axis: -1)
                 let verifyInput = concatenated([MLXArray([Int32(curId)]), draft.asType(.int32)], axis: 0)[.newAxis]
                 let verified = mdl.decodeStep(verifyInput, cache: cache, captureMid: true)
-                let chosen = argMax(verified.logits, axis: -1)          // model's own pick after each of the two
-                MLX.eval([chosen, draft, verified.hidden] + cache.stateArrays + cache.midArrays)
-                let draftId = draft.item(Int.self)
-                let picks = chosen.asArray(Int32.self)
+                let draftId: Int
+                var picks: [Int32] = []
+                var dist0: (candidates: [Int32], probs: [Float])?
+                var dist1: (candidates: [Int32], probs: [Float])?
+                var seen1: MLXArray?
+                if greedyLike {
+                    let chosen = argMax(verified.logits, axis: -1)          // model's own pick after each of the two
+                    MLX.eval([chosen, draft, verified.hidden] + cache.stateArrays + cache.midArrays)
+                    draftId = draft.item(Int.self)
+                    picks = chosen.asArray(Int32.self)
+                } else {
+                    // `seen` already holds `curId`; the second row also sees the draft.
+                    seen1 = seen.map { maximum($0, TokenSampler.oneHot(draft, vocab: mdl.config.vocabSize)) }
+                    let rows = TokenSampler.distribution(
+                        verified.logits, sampling,
+                        seen: seen.map { concatenated([$0, seen1!], axis: 0) })          // one pass for both rows
+                    MLX.eval([rows.candidates, rows.probs, draft, verified.hidden]
+                             + cache.stateArrays + cache.midArrays)
+                    draftId = draft.item(Int.self)
+                    let ids = rows.candidates.asArray(Int32.self), ps = rows.probs.asArray(Float.self)
+                    let k = ids.count / 2
+                    dist0 = (Array(ids[0 ..< k]), Array(ps[0 ..< k]))
+                    dist1 = (Array(ids[k...]), Array(ps[k...]))
+                }
+
+                let accept: Bool
+                if greedyLike { accept = Int(picks[0]) == draftId }
+                else {
+                    accept = Float.random(in: 0 ..< 1) < SpeculativeRule.acceptanceProbability(draft: draftId, in: dist0!)
+                }
 
                 cycles += 1
-                if Int(picks[0]) == draftId {
+                if accept {
                     accepted += 1
                     generated += 1
                     if eosIds.contains(draftId) { finish = .stop; stopped = true; break }
                     let t = detok.append(draftId)
                     if !t.isEmpty, emit(t) { finish = .stop; stopped = true; break }
                     if generated >= maxTokens { break }
-                    curId = Int(picks[1])
+                    curId = greedyLike ? Int(picks[1]) : SpeculativeRule.draw(dist1!, u: Float.random(in: 0 ..< 1))
+                    if let s1 = seen1 { seen = maximum(s1, TokenSampler.oneHot(MLXArray([Int32(curId)]), vocab: mdl.config.vocabSize)) }
                     pendingHidden = verified.hidden
                     pendingTokens = [Int32(draftId), Int32(curId)]
                 } else {
                     mdl.rollBackLast(cache: cache)
-                    curId = Int(picks[0])
+                    curId = greedyLike ? Int(picks[0]) : SpeculativeRule.draw(dist0!, excluding: draftId, u: Float.random(in: 0 ..< 1))
+                    if let s = seen { seen = maximum(s, TokenSampler.oneHot(MLXArray([Int32(curId)]), vocab: mdl.config.vocabSize)) }
                     pendingHidden = verified.hidden[0..., 0..<1]
                     pendingTokens = [Int32(curId)]
                 }

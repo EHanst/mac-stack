@@ -71,6 +71,7 @@ struct Options {
             case "--text-test": textTest = true
             case "--studio-test": studioTest = true
             case "--optimizer-eval": optimizerEval = true
+            case "--sampler-bench": SamplerBench.run(); exit(0)
             case "--eval-json": if let v = it.next() { evalJSON = URL(fileURLWithPath: v) }
             case "--mtp-probe": mtpProbe = true
             case "--mtp-check": mtpCheck = true

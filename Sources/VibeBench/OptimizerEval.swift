@@ -1,4 +1,6 @@
 import Foundation
+import MLX
+import MLXRandom
 import StackCore
 
 /// Quality gate for a local model doing prompt rewrites: runs a fixed set of literal-heavy drafts
@@ -30,6 +32,8 @@ enum OptimizerEval {
         }
         let context = OptimizeContext(profile: .localSmall)
         var rows: [[String: Any]] = []
+        var specCycles = 0, specAccepted = 0
+        defer { if specCycles > 0 { print("  draft acceptance: \(specAccepted * 100 / specCycles)% over \(specCycles) cycles") } }
         var tally: [String: [String: Int]] = [:]
         print("[optimizer eval] sampling=\(sampling) · \(drafts.count) drafts × modes \(modes.joined(separator: ",")) × \(repeats) run(s)")
         for modeName in modes {
@@ -60,6 +64,9 @@ enum OptimizerEval {
                         if retried.rejection == nil { r = retried; raw = second; repaired = true }
                     }
                     let secs = Date().timeIntervalSince(start)
+                    if let spec = await provider.lastSpeculationForBench(), spec.cycles > 0 {
+                        specCycles += spec.cycles; specAccepted += spec.accepted
+                    }
                     if ProcessInfo.processInfo.environment["EVAL_MEM"] != nil {
                         let b = await provider.budgetInputs()
                         func g(_ x: Int) -> String { String(format: "%.2f", Double(x) / 1_073_741_824) }
@@ -90,5 +97,30 @@ enum OptimizerEval {
             try? data.write(to: json)
             print("  wrote \(json.path)")
         }
+    }
+}
+
+enum SamplerBench {
+    static func run() {
+        let v = 248_320
+        let logits = MLXRandom.normal([1, v]) * 3
+        let seen = MLXArray.zeros([1, v])
+        MLX.eval(logits, seen)
+        func time(_ name: String, _ f: () -> [MLXArray]) {
+            for _ in 0..<3 { MLX.eval(f()) }
+            let n = 30
+            let t = Date()
+            for _ in 0..<n { MLX.eval(f()) }
+            print(String(format: "  %-28@ %.2f ms", name as NSString, Date().timeIntervalSince(t) * 1000 / Double(n)))
+        }
+        let p = SamplingParameters.bonsaiInstruct
+        time("argMax") { [argMax(logits, axis: -1)] }
+        time("top(k=20) values") { [top(logits, k: 20, axis: -1)] }
+        time("argPartition(k=20)") { [argPartition(-logits, kth: 19, axis: -1)] }
+        time("penalty only") { [logits - 1.5 * seen] }
+        time("full sample (chat)") { [TokenSampler.sample(logits, p, seen: seen)] }
+        time("full sample (no penalty)") { [TokenSampler.sample(logits, SamplingParameters(temperature: 0.7, topK: 20, topP: 0.8), seen: nil)] }
+        let tok = MLXArray([Int32(5)])
+        time("oneHot") { [TokenSampler.oneHot(tok, vocab: v)] }
     }
 }
