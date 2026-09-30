@@ -23,7 +23,7 @@ struct AssistantCard: View {
                     .font(.mtTitleSmall)
                     .foregroundStyle(Color.mtOnSurface)
                 MTDivider()
-                Toggle("Friendly personality", isOn: $persona)
+                Toggle("Personality", isOn: $persona)
                 HStack {
                     Text("Call me").font(.mtLabelLarge).foregroundStyle(Color.mtOnSurfaceVariant)
                     TextField("Nothing in particular", text: $addressName)

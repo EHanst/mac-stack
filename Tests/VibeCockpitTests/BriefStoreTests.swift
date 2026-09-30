@@ -91,13 +91,19 @@ struct BriefStoreTests {
         #expect(!FileManager.default.fileExists(atPath: copy.path))
     }
 
-    @Test("markdown export is the compiled prompt")
+    @Test("export is a Markdown file: a title, any warnings, then the compiled prompt")
     func export() async throws {
         let s = store()
-        let b = brief("Exp")
+        var b = brief("Exp")
+        b.target.tokenBudget = 20
+        b.contextItems = [ContextItem(id: "big", kind: .file, ref: "Big.swift", text: String(repeating: "x", count: 500), mode: .inline)]
         try await s.save(b)
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).md")
         try await s.exportMarkdown(id: b.id, to: out)
-        #expect(try String(contentsOf: out, encoding: .utf8) == BriefCompiler.compile(b).text)
+        let text = try String(contentsOf: out, encoding: .utf8)
+        let compiled = BriefCompiler.compile(b)
+        #expect(text.hasPrefix("# Exp\n"))
+        #expect(text.contains(compiled.text))
+        #expect(compiled.warnings.allSatisfy { text.contains($0.message) } && !compiled.warnings.isEmpty)
     }
 }

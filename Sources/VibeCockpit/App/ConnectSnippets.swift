@@ -17,7 +17,7 @@ public enum ConnectSnippets {
         return [
             ConnectSnippet(
                 id: "claude-desktop", title: "Claude Desktop",
-                instructions: "Open Claude Desktop → Settings → Developer → Edit Config, add this under \"mcpServers\", then restart it. No key needed: it talks to VibeCockpit over a private file on this Mac.",
+                instructions: "Open Claude Desktop → Settings → Developer → Edit Config, add this under \"mcpServers\", then restart it. No key needed: it talks to Kokoro over a private file on this Mac.",
                 text: """
                 {
                   "mcpServers": {
@@ -43,7 +43,7 @@ public enum ConnectSnippets {
                 """),
             ConnectSnippet(
                 id: "openai-python", title: "OpenAI SDK (Python)",
-                instructions: "Any tool or script that uses the OpenAI library can point at VibeCockpit instead. Replace YOUR_KEY with a key you made above.",
+                instructions: "Any tool or script that uses the OpenAI library can point at Kokoro instead. Replace YOUR_KEY with a key you made above.",
                 text: """
                 from openai import OpenAI
 

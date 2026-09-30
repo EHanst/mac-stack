@@ -92,7 +92,13 @@ public actor BriefStore {
     public func exportMarkdown(id: String, to url: URL) throws {
         load()
         guard let brief = briefs[id] else { throw BriefStoreError.notFound(id) }
-        try Data(BriefCompiler.compile(brief).text.utf8).write(to: url, options: .atomic)
+        let compiled = BriefCompiler.compile(brief)
+        var out = "# \(brief.title)\n\n"
+        if !compiled.warnings.isEmpty {
+            out += "Warnings:\n" + compiled.warnings.map { "- \($0.message)" }.joined(separator: "\n") + "\n\n"
+        }
+        out += "---\n\n" + compiled.text + "\n"
+        try Data(out.utf8).write(to: url, options: .atomic)
     }
 
     /// Ids become file names, so only letters, digits, `-` and `_` are accepted (a UUID qualifies).

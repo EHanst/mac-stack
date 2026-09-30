@@ -30,9 +30,11 @@ public enum BriefCompiler {
             warnings.append(.init(code: .emptyGoal, message: "Say what you want done.", itemID: nil))
         }
 
+        // Switching the Context section off takes its items with it.
+        let contextOn = brief.sections.first { $0.kind == .context }?.enabled ?? true
         var items: [ContextItem] = []
-        for item in brief.contextItems where item.included {
-            if item.mode == .reference && item.ref.trimmingCharacters(in: .whitespaces).isEmpty {
+        for item in brief.contextItems where item.included && contextOn {
+            if item.mode == .reference && hasNoPath(item) {
                 warnings.append(.init(code: .referenceWithoutPath, message: "A context item has no path, so it was left out.", itemID: item.id))
             } else {
                 items.append(item)
@@ -41,6 +43,10 @@ public enum BriefCompiler {
         // Files before diffs: the diff is the part most likely to change between drafts.
         items.sort { ($0.kind == .gitDiff ? 1 : 0) < ($1.kind == .gitDiff ? 1 : 0) }
 
+        func byImportance(_ a: ContextItem, _ b: ContextItem) -> Bool {
+            a.priority != b.priority ? a.priority < b.priority : a.id < b.id
+        }
+
         func render(_ items: [ContextItem]) -> String {
             renderText(brief, items: items, structure: structure)
         }
@@ -48,11 +54,12 @@ public enum BriefCompiler {
         var text = render(items)
         var tokens = PromptTokens.estimate(text)
 
-        // 1. Over budget: point at files instead of pasting them, least important first.
-        if tokens > budget {
-            for id in items.filter({ $0.mode == .inline }).sorted(by: { $0.priority < $1.priority }).map(\.id) {
+        // 1. Over budget: point at files instead of pasting them, least important first. Only for a
+        // target that can read the repo itself, and only for things that have a path.
+        if tokens > budget, brief.target.surface.defaultContextMode == .reference {
+            for id in items.filter({ $0.mode == .inline && $0.kind != .gitDiff && $0.kind != .snippet }).sorted(by: byImportance).map(\.id) {
                 guard tokens > budget, let i = items.firstIndex(where: { $0.id == id }) else { continue }
-                if items[i].ref.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+                if hasNoPath(items[i]) { continue }
                 items[i].mode = .reference
                 warnings.append(.init(code: .itemDowngraded, message: "\(items[i].ref) is referenced by path to fit the budget.", itemID: id))
                 text = render(items); tokens = PromptTokens.estimate(text)
@@ -60,7 +67,7 @@ public enum BriefCompiler {
         }
         // 2. Still over: drop the least important items.
         if tokens > budget {
-            for id in items.sorted(by: { $0.priority < $1.priority }).map(\.id) {
+            for id in items.sorted(by: byImportance).map(\.id) {
                 guard tokens > budget, let i = items.firstIndex(where: { $0.id == id }) else { continue }
                 let dropped = items.remove(at: i)
                 warnings.append(.init(code: .itemDropped, message: "\(dropped.ref) was left out to fit the budget.", itemID: id))
@@ -76,6 +83,20 @@ public enum BriefCompiler {
         return CompiledPrompt(text: text, tokens: tokens, warnings: warnings, includedItemIDs: items.map(\.id))
     }
 
+    private static func hasNoPath(_ item: ContextItem) -> Bool {
+        item.ref.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// A path is shown on one line: a newline in a file name must not start a new line of the prompt.
+    private static func oneLine(_ s: String) -> String {
+        s.replacingOccurrences(of: "\r\n", with: " ").replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+    }
+
+    private static func attribute(_ s: String) -> String {
+        oneLine(s).replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+    }
+
     // MARK: Rendering
 
     private static let order: [BriefSection.Kind] = [.goal, .context, .constraints, .examples, .outputFormat]
@@ -85,7 +106,7 @@ public enum BriefCompiler {
         for kind in order {
             var body = brief.sections.first { $0.kind == kind && $0.enabled }?.text
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if kind == .context, !items.isEmpty {
+            if kind == .context, !items.isEmpty, brief.sections.first(where: { $0.kind == .context })?.enabled ?? true {
                 let rendered = items.map { renderItem($0, structure: structure) }.joined(separator: "\n")
                 body = body.isEmpty ? rendered : body + "\n" + rendered
             }
@@ -120,14 +141,14 @@ public enum BriefCompiler {
     }
 
     private static func renderItem(_ item: ContextItem, structure: ModelPromptProfile.Structure) -> String {
-        if item.mode == .reference { return "See \(item.ref)" }
+        if item.mode == .reference { return "See \(oneLine(item.ref))" }
         switch structure {
         case .xmlTags:
-            return "<file path=\"\(item.ref.replacingOccurrences(of: "\"", with: "&quot;"))\">\n\(neutralize(item.text, keepingKnownTags: false))\n</file>"
+            return "<file path=\"\(attribute(item.ref))\">\n\(neutralize(item.text, keepingKnownTags: false))\n</file>"
         case .markdown, .plainNumbered:
             var fence = "```"
             while item.text.contains(fence) { fence += "`" }
-            return "\(item.ref):\n\(fence)\n\(item.text)\n\(fence)"
+            return "\(oneLine(item.ref)):\n\(fence)\n\(item.text)\n\(fence)"
         }
     }
 
@@ -138,11 +159,9 @@ public enum BriefCompiler {
         if keepingKnownTags {
             // Only the file wrapper is ours inside a section, so protect closing tags inside inlined files
             // by leaving user prose alone but escaping stray closers of the section tags themselves.
-            var out = text
-            for kind in BriefSection.Kind.allCases {
-                out = out.replacingOccurrences(of: "</\(kind.rawValue.lowercased())>", with: "<\\/\(kind.rawValue.lowercased())>")
-            }
-            return out
+            return text.replacingOccurrences(
+                of: #"</\s*(goal|context|constraints|examples|outputformat)\s*>"#, with: #"<\\/$1>"#,
+                options: [.regularExpression, .caseInsensitive])
         }
         return text.replacingOccurrences(of: "</file", with: "<\\/file", options: .caseInsensitive)
     }

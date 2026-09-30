@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# VibeCockpit release: archive -> sign (hardened runtime) -> DMG -> sign -> notarize -> staple -> verify.
+# Kokoro (VibeCockpit) release: archive -> sign (hardened runtime) -> DMG -> sign -> notarize -> staple -> verify.
 #
 #   DEVELOPER_ID_APPLICATION="Developer ID Application: Name (TEAMID)" \
 #   NOTARYTOOL_KEYCHAIN_PROFILE=notarytool VERSION=1.0.0 ./scripts/release.sh
@@ -61,7 +61,7 @@ kill $SMOKE_PID 2>/dev/null || true; wait $SMOKE_PID 2>/dev/null || true; rm -rf
 
 echo "==> Creating DMG"
 STAGE=$(mktemp -d); cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "VibeCockpit" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null; rm -rf "$STAGE"
+hdiutil create -volname "Kokoro" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null; rm -rf "$STAGE"
 codesign --force $TIMESTAMP --sign "$IDENTITY" "$DMG"
 codesign --verify --strict "$DMG"
 

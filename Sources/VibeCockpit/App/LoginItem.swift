@@ -63,9 +63,9 @@ public final class LoginItemModel {
         }
         status = controller.status
         if status == .requiresApproval {
-            message = "Approve VibeCockpit in System Settings → General → Login Items to finish."
+            message = "Approve Kokoro in System Settings → General → Login Items to finish."
         } else if on && status == .unavailable {
-            message = "Launch at login works once VibeCockpit is installed in your Applications folder."
+            message = "Launch at login works once Kokoro is installed in your Applications folder."
         }
     }
 }

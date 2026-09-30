@@ -156,7 +156,7 @@ public struct ListWorkspacesTool: AgentToolHandler {
     let workspaces: [WorkspaceRecord]
     public let toolDefinition = Tool(
         name: "list_workspaces",
-        description: "List the projects open in VibeCockpit. Other tools take a 'workspace' argument naming one of these.",
+        description: "List the projects open in Kokoro. Other tools take a 'workspace' argument naming one of these.",
         inputSchema: .object(["type": "object", "properties": .object([:])]))
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         [.text(workspaces.map { "\($0.id): \($0.name) — \($0.path)" }.joined(separator: "\n"))]

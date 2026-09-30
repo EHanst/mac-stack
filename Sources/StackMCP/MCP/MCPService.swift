@@ -247,7 +247,7 @@ struct SnapshotCreateTool: AgentToolHandler {
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         let message: String
         if case .string(let m) = arguments["message"] { message = m }
-        else { message = "VibeCockpit snapshot" }
+        else { message = "Kokoro snapshot" }
 
         let ref = try await manager.createSnapshot(message: message)
         return [.text(text: "Snapshot \(ref.oid) — \(ref.message)", annotations: nil, _meta: nil)]
