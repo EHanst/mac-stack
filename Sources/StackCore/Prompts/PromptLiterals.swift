@@ -50,7 +50,9 @@ public enum PromptLiterals {
               literal.count > 2, literal.last == first
         else { return false }
         let inner = String(literal.dropFirst().dropLast())
-        return inner.count >= 4 && rewritten.contains(inner)
+        guard inner.count >= 4 else { return false }
+        // Quoted prose may be recapitalized when the rewrite moves it; code is case-sensitive.
+        return first == "\"" ? rewritten.localizedCaseInsensitiveContains(inner) : rewritten.contains(inner)
     }
 
     private static func matches(_ re: NSRegularExpression?, in text: String) -> [String] {
