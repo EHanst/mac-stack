@@ -70,7 +70,7 @@ struct HadamardMeta: @unchecked Sendable {
 
 // MARK: - Layer helpers
 
-private final class Qwen35RMSNorm: Module, UnaryLayer, @unchecked Sendable {
+final class Qwen35RMSNorm: Module, UnaryLayer, @unchecked Sendable {
     let weight: MLXArray
     let eps: Float
     init(weight: MLXArray, eps: Float) { self.weight = weight; self.eps = eps; super.init() }
@@ -423,6 +423,17 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
         }
         cache.advance(by: L)
         return h
+    }
+
+    // Pieces the multi-token-prediction head builds on.
+    /// Pre-final-norm hidden states `[B, L, hidden]` for `tokens`, updating `cache`.
+    func hiddenStates(_ tokens: MLXArray, cache: Qwen35Cache) -> MLXArray { hidden(tokens, cache: cache) }
+    func finalNorm(_ h: MLXArray) -> MLXArray { norm(h) }
+    func embed(_ tokens: MLXArray) -> MLXArray { embedTokens(tokens) }
+    /// Vocabulary logits for already final-normed hidden states `[..., hidden]`.
+    func logits(fromNormed h: MLXArray) -> MLXArray {
+        if let head = lmHead { return head(h) }
+        return lmHeadEmbed!.asLMHead(h)
     }
 
     /// Feed tokens through the model only to populate `cache` (no final norm / LM head).

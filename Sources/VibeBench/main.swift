@@ -6,7 +6,8 @@ import StackCore
 import MLXNN
 
 // vibe-bench — performance harness for the local model.
-//   swift run -c release VibeBench --optimizer-eval [--modes improve,synthesize] [--repeats 1] [--eval-json out.json] [--sampling rewrite|chat|greedy] [--no-repair]   (rewrite quality gate)
+//   swift run -c release VibeBench --optimizer-eval [--modes improve,synthesize] [--repeats 1] [--eval-json out.json] [--sampling rewrite|chat|greedy] [--no-repair]
+//   swift run -c release VibeBench --mtp-probe   (MTP head draft-acceptance, Qwen3.5 packs with optiq/mtp.safetensors)   (rewrite quality gate)
 //   swift run -c release VibeBench --idle-cancel-test   (reply after a background re-read is cancelled part-way)
 //   swift run -c release VibeBench --long-chat-test [--ceiling 6000]   (real chat: cache hits, compaction, summaries)
 //   swift run -c release VibeBench --knowledge-eval   (sidecar critique with vs without retrieved guidance; text search only)
@@ -37,6 +38,7 @@ struct Options {
     var evalJSON: URL?
     var evalSampling = "rewrite"
     var evalRepair = true
+    var mtpProbe = false
     var sidecarTest = false
     var knowledgeEval = false
     var compactionTest = false
@@ -67,6 +69,7 @@ struct Options {
             case "--studio-test": studioTest = true
             case "--optimizer-eval": optimizerEval = true
             case "--eval-json": if let v = it.next() { evalJSON = URL(fileURLWithPath: v) }
+            case "--mtp-probe": mtpProbe = true
             case "--no-repair": evalRepair = false
             case "--sampling": if let v = it.next() { evalSampling = v }
             case "--modes": if let v = it.next() { evalModes = v.split(separator: ",").map(String.init) }
@@ -380,6 +383,25 @@ func run() async throws {
                 let stats = await provider.lastStats
                 print("  chunk \(chunk) · \(name) (\(stats?.promptTokens ?? 0) tok): \(text.replacingOccurrences(of: "\n", with: "⏎").prefix(150))")
             }
+        }
+        print("")
+    }
+
+    if opts.mtpProbe {
+        print("[mtp probe] does the MTP head's guess match the main model's greedy next-next token?")
+        let file = opts.model.appendingPathComponent("optiq/mtp.safetensors")
+        var totals: [String: (Int, Int)] = [:]
+        for mode in [OptimizeMode.improve, .synthesize] {
+            for (_, draft) in OptimizerEval.drafts.prefix(6) {
+                let messages = PromptOptimizer.requestMessages(draft: draft, context: OptimizeContext(profile: .localSmall), mode: mode, useSharedPrefix: false)
+                for r in try await provider.debugMTPProbe(messages: messages, count: 200, mtpFile: file) {
+                    let t = totals[r.variant] ?? (0, 0)
+                    totals[r.variant] = (t.0 + r.matched, t.1 + r.total)
+                }
+            }
+        }
+        for (k, v) in totals.sorted(by: { $0.key < $1.key }) {
+            print("  \(k): \(v.0)/\(v.1) = \(fmt(Double(v.0) / Double(max(1, v.1)) * 100, 1))%")
         }
         print("")
     }

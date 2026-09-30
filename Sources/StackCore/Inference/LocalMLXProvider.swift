@@ -362,7 +362,7 @@ public actor LocalMLXProvider: ModelProvider {
         continuation.finish()
     }
 
-    private func ensureLoaded() async throws -> (Qwen35ForCausalLM, any Tokenizer) {
+    func ensureLoaded() async throws -> (Qwen35ForCausalLM, any Tokenizer) {
         if let m = model, let t = tokenizer { return (m, t) }
 
         logger.info("Loading model from \(self.modelDirectory.lastPathComponent, privacy: .public)")
@@ -442,6 +442,9 @@ public actor LocalMLXProvider: ModelProvider {
             .write(to: tmp.appendingPathComponent("tokenizer_config.json"))
         return try await AutoTokenizer.from(modelFolder: tmp)
     }
+
+    func loadQuantConfigForProbe() -> QuantConfig { loadQuantConfig(from: modelDirectory) }
+    func loadConfigForProbe() throws -> Qwen35Config { try loadConfig(from: modelDirectory) }
 
     private func loadQuantConfig(from dir: URL) -> QuantConfig {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("config.json")),
