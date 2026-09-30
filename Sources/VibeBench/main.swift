@@ -29,6 +29,7 @@ struct Options {
     var apiTest = false
     var textTest = false
     var studioTest = false
+    var sidecarTest = false
     var compactionTest = false
     var longChatTest = false
     var idleCancelTest = false
@@ -55,6 +56,7 @@ struct Options {
             case "--api-test": apiTest = true
             case "--text-test": textTest = true
             case "--studio-test": studioTest = true
+            case "--sidecar-test": sidecarTest = true
             case "--compaction-test": compactionTest = true
             case "--long-chat-test": longChatTest = true
             case "--idle-cancel-test": idleCancelTest = true
@@ -389,6 +391,41 @@ func run() async throws {
         await run("no Improve call (baseline)", sharing: nil)
         await run("Improve as a separate prompt", sharing: false)
         await run("Improve continuing the conversation", sharing: true)
+        print("")
+    }
+
+    // ── Brief sidecar: do interview / critique / revise calls cost the chat its cached prefix? ─────
+    if opts.sidecarTest {
+        print("[sidecar test] next chat turn after a sidecar call, ~\(opts.warmPrefix) tok of conversation")
+        let chatSystem = Message(role: .system, content: "You are Kokoro, the assistant inside VibeCockpit, a native macOS app for building Swift/macOS software with a local model. You are warm, upbeat and a little playful. Substance comes first: be correct, concise and safe.")
+        let q1 = Message(role: .user, content: makePrompt(tokens: opts.warmPrefix, nonce: 7_000))
+        let q2 = Message(role: .user, content: "Now list the first two notes.")
+        var brief = Brief.new(title: "Retry uploads", target: .make(modelFamily: "claude", surface: .claudeCode))
+        brief.setText("Add a retry with backoff to the upload call in Sources/App/Uploader.swift so flaky networks stop failing the sync.", for: .goal)
+        brief.setText("Keep the public API unchanged.", for: .constraints)
+
+        func run(_ label: String, _ op: SidecarOperation?) async -> Double {
+            await provider.clearPromptCache()
+            let first = await measure(provider, [chatSystem, q1], gen: 24, timeout: opts.timeout)
+            let a1 = Message(role: .assistant, content: first.text)
+            if let op {
+                let messages = BriefSidecar.messages(for: brief, operation: op,
+                                                     reply: op == .revise ? "It retried but never backed off, and the build broke in Uploader.swift." : nil)
+                let m = await measure(provider, messages, gen: BriefSidecar.generationOptions.maxTokens, timeout: opts.timeout, cacheSnapshots: false)
+                print("  \(label): sidecar TTFT \(fmt(m.ttft, 2)) s, \(m.stats?.generatedTokens ?? 0) tok | \(m.text.replacingOccurrences(of: "\n", with: "⏎").prefix(160))")
+            }
+            let next = await measure(provider, [chatSystem, q1, a1, q2], gen: 24, timeout: opts.timeout)
+            if let st = next.stats {
+                print("    next chat : TTFT \(fmt(next.ttft, 2)) s | prompt \(st.promptTokens), cached \(st.cachedTokens), prefilled \(st.prefilledTokens)")
+            }
+            return next.ttft
+        }
+        let base = await run("baseline (no sidecar call)", nil)
+        for (label, op) in [("interview", SidecarOperation.interview), ("critique", .critique), ("revise", .revise)] {
+            let t = await run(label, op)
+            let pct = base > 0 ? (t - base) / base * 100 : .nan
+            print("    next-turn TTFT vs baseline: \(fmt(pct, 1))% (\(pct <= 10 ? "OK" : "OVER the 10% limit"))")
+        }
         print("")
     }
 
