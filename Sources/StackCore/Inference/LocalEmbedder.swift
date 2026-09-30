@@ -39,6 +39,8 @@ public actor LocalEmbedder: ModelProvider {
     /// Approximate resident cost, reserved from the chat model's memory budget.
     public static let residentBytesEstimate = 300 << 20
 
+    public static let defaultID: ProviderID = "local:embed-bge-small-en-v1.5"
+
     public nonisolated let id: ProviderID
     public nonisolated let capabilities: ProviderCapabilities = [.embedding]
     public nonisolated let dimension: Int
@@ -55,7 +57,7 @@ public actor LocalEmbedder: ModelProvider {
     private let logger = Logger(subsystem: "com.vibecockpit", category: "LocalEmbedder")
 
     public init(
-        id: ProviderID = "local:embed-bge-small-en-v1.5",
+        id: ProviderID = LocalEmbedder.defaultID,
         modelDirectory: URL = LocalEmbedder.defaultDirectory(),
         config: Config = .bgeSmall,
         scheduler: InferenceScheduler

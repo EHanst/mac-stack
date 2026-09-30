@@ -136,6 +136,128 @@ public actor VectorStore {
         }
     }
 
+    /// Makes the stored chunks for one file match `chunks`: new declarations are added, ones that
+    /// no longer exist are removed (with their text-search and vector rows), unchanged ones are left alone.
+    public func syncFile(_ path: String, chunks: [CodeChunk]) throws {
+        guard let db = writeDB else { throw StoreError.openFailed("Not open") }
+        try exec(db: db, sql: "BEGIN IMMEDIATE;")
+        do {
+            let keep = Set(chunks.map { $0.id.uuidString })
+            var existing: [String: (rowid: Int64, content: String)] = [:]
+            var sel: OpaquePointer?
+            sqlite3_prepare_v2(db, "SELECT id, rowid, content FROM chunks WHERE file_path = ?;", -1, &sel, nil)
+            sqlite3_bind_text(sel, 1, path, -1, SQLITE_TRANSIENT)
+            while sqlite3_step(sel) == SQLITE_ROW {
+                existing[String(cString: sqlite3_column_text(sel, 0))] =
+                    (sqlite3_column_int64(sel, 1), String(cString: sqlite3_column_text(sel, 2)))
+            }
+            sqlite3_finalize(sel)
+            for (id, row) in existing where !keep.contains(id) { deleteRow(db: db, id: id, rowid: row.rowid, content: row.content) }
+            var seen = Set<String>()
+            for chunk in chunks {
+                let id = chunk.id.uuidString
+                guard existing[id] == nil, seen.insert(id).inserted else { continue }
+                insertRow(db: db, chunk: chunk)
+            }
+            try exec(db: db, sql: "COMMIT;")
+        } catch {
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+            throw error
+        }
+    }
+
+    /// Drops everything stored for a file, or for every file under it when `path` is a folder.
+    public func removeFiles(at path: String) throws {
+        guard let db = writeDB else { throw StoreError.openFailed("Not open") }
+        try removeRows(db: db, where: "file_path = ?1 OR substr(file_path, 1, length(?1) + 1) = ?1 || '/'", bind: path)
+    }
+
+    /// Drops stored files under `root` that are not in `keep` (files deleted while nothing was watching).
+    public func pruneFiles(under root: String, keeping keep: Set<String>) throws {
+        guard let db = writeDB else { throw StoreError.openFailed("Not open") }
+        var stored: [String] = []
+        var stmt: OpaquePointer?
+        sqlite3_prepare_v2(db, "SELECT DISTINCT file_path FROM chunks WHERE substr(file_path, 1, length(?1) + 1) = ?1 || '/';", -1, &stmt, nil)
+        sqlite3_bind_text(stmt, 1, root, -1, SQLITE_TRANSIENT)
+        while sqlite3_step(stmt) == SQLITE_ROW { stored.append(String(cString: sqlite3_column_text(stmt, 0))) }
+        sqlite3_finalize(stmt)
+        for path in stored where !keep.contains(path) { try removeFiles(at: path) }
+    }
+
+    /// The chunks that still need a model call. Chunks that already have a vector are skipped, and
+    /// ones whose text was embedded before reuse the cached vector.
+    public func chunksNeedingEmbedding(_ chunks: [CodeChunk]) throws -> [CodeChunk] {
+        guard let db = writeDB else { throw StoreError.openFailed("Not open") }
+        var needed: [CodeChunk] = []
+        for chunk in chunks {
+            let id = chunk.id.uuidString
+            var has: OpaquePointer?
+            sqlite3_prepare_v2(db, "SELECT 1 FROM chunk_embeddings WHERE chunk_id = ?;", -1, &has, nil)
+            sqlite3_bind_text(has, 1, id, -1, SQLITE_TRANSIENT)
+            let alreadyEmbedded = sqlite3_step(has) == SQLITE_ROW
+            sqlite3_finalize(has)
+            if alreadyEmbedded { continue }
+            if let cached = cachedEmbedding(for: chunk.contentHash) {
+                try storeEmbedding(cached, for: chunk.id, contentHash: chunk.contentHash)
+            } else {
+                needed.append(chunk)
+            }
+        }
+        return needed
+    }
+
+    private func removeRows(db: OpaquePointer, where clause: String, bind: String) throws {
+        try exec(db: db, sql: "BEGIN IMMEDIATE;")
+        var sel: OpaquePointer?
+        sqlite3_prepare_v2(db, "SELECT id, rowid, content FROM chunks WHERE \(clause);", -1, &sel, nil)
+        sqlite3_bind_text(sel, 1, bind, -1, SQLITE_TRANSIENT)
+        var rows: [(String, Int64, String)] = []
+        while sqlite3_step(sel) == SQLITE_ROW {
+            rows.append((String(cString: sqlite3_column_text(sel, 0)), sqlite3_column_int64(sel, 1),
+                         String(cString: sqlite3_column_text(sel, 2))))
+        }
+        sqlite3_finalize(sel)
+        for (id, rowid, content) in rows { deleteRow(db: db, id: id, rowid: rowid, content: content) }
+        try exec(db: db, sql: "COMMIT;")
+    }
+
+    private func deleteRow(db: OpaquePointer, id: String, rowid: Int64, content: String) {
+        var fts: OpaquePointer?
+        sqlite3_prepare_v2(db, "INSERT INTO chunk_fts(chunk_fts, rowid, chunk_id, content) VALUES('delete', ?, ?, ?);", -1, &fts, nil)
+        sqlite3_bind_int64(fts, 1, rowid)
+        sqlite3_bind_text(fts, 2, id, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(fts, 3, content, -1, SQLITE_TRANSIENT)
+        sqlite3_step(fts)
+        sqlite3_finalize(fts)
+        for sql in ["DELETE FROM chunk_embeddings WHERE chunk_id = ?;", "DELETE FROM chunks WHERE id = ?;"] {
+            var stmt: OpaquePointer?
+            sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+            sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+        }
+    }
+
+    private func insertRow(db: OpaquePointer, chunk: CodeChunk) {
+        var stmt: OpaquePointer?
+        sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO chunks(id, file_path, decl_kind, content, content_hash) VALUES(?, ?, ?, ?, ?);", -1, &stmt, nil)
+        let id = chunk.id.uuidString
+        sqlite3_bind_text(stmt, 1, id, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, chunk.filePath, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, chunk.declarationKind, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 4, chunk.content, -1, SQLITE_TRANSIENT)
+        chunk.contentHash.withUnsafeBytes { ptr in
+            sqlite3_bind_blob(stmt, 5, ptr.baseAddress, Int32(chunk.contentHash.count), SQLITE_TRANSIENT)
+        }
+        sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+        var fts: OpaquePointer?
+        sqlite3_prepare_v2(db, "INSERT INTO chunk_fts(rowid, chunk_id, content) SELECT rowid, id, content FROM chunks WHERE id = ?;", -1, &fts, nil)
+        sqlite3_bind_text(fts, 1, id, -1, SQLITE_TRANSIENT)
+        sqlite3_step(fts)
+        sqlite3_finalize(fts)
+    }
+
     public func storeEmbedding(_ embedding: [Float], for chunkID: UUID, contentHash: Data) throws {
         guard let db = writeDB else { throw StoreError.openFailed("Not open") }
         let sql = "INSERT OR REPLACE INTO chunk_embeddings(chunk_id, embedding) VALUES(?, ?)"

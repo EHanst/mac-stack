@@ -171,6 +171,7 @@ public final class AppServices {
                     Task.detached(priority: .background) {
                         try? await pipeline.reindexWorkspace(workspaceURL)
                     }
+                    await pipeline.watch(workspaceURL)
                 }
             } catch {
                 logger.error("IndexingPipeline open failed: \(error.localizedDescription, privacy: .public)")
@@ -286,6 +287,7 @@ public final class AppServices {
             )
             infos.append(info)
         }
+        infos = ModelListing.visible(infos)
         coordinator.send(.modelsRefreshed(infos))
         for info in infos {
             coordinator.send(.providerStatusChanged(info.id, info.health))
@@ -348,6 +350,7 @@ public final class AppServices {
         let pipeline = IndexingPipeline(store: VectorStore(dbURL: indexDir.appendingPathComponent("\(record.id).db")), registry: registry)
         try await pipeline.open()
         Task.detached(priority: .background) { try? await pipeline.reindexWorkspace(url) }
+        await pipeline.watch(url)
         let context = WorkspaceContext(root: url, workspaceID: WorkspaceID(rawValue: record.id), policy: .default)
         let runtime = ToolRuntime(boundary: WorkspaceBoundary(context: context), buildRunner: runner,
                                   gitManager: git, pipeline: pipeline)
