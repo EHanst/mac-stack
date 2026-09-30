@@ -55,14 +55,40 @@ struct BriefStoreTests {
         #expect(await fresh.all().map(\.title) == ["Good"])
     }
 
-    @Test("a hostile id cannot write outside the folder")
+    @Test("an id that isn't a plain name is refused, so nothing is written outside the folder")
     func pathSafety() async throws {
         let s = store()
-        var b = brief("Evil"); b.id = "../../escape"
-        try await s.save(b)
+        for bad in ["../../escape", "a/b", "", "a.b"] {
+            var b = brief("Evil"); b.id = bad
+            await #expect(throws: BriefStoreError.self) { try await s.save(b) }
+        }
         let escaped = s.directory.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("escape.json")
         #expect(!FileManager.default.fileExists(atPath: escaped.path))
-        #expect(await s.all().count == 1)
+        #expect(await s.all().isEmpty)
+    }
+
+    @Test("two ids that differ only by case cannot overwrite each other's file")
+    func caseCollision() async throws {
+        let s = store()
+        var a = brief("A"); a.id = "abc"
+        var b = brief("B"); b.id = "ABC"
+        try await s.save(a)
+        await #expect(throws: BriefStoreError.self) { try await s.save(b) }
+        #expect(await s.brief(id: "abc")?.title == "A")
+    }
+
+    @Test("a copied file with the same id is ignored, and delete removes the brief for good")
+    func copiedFile() async throws {
+        let s = store()
+        let b = brief("Orig")
+        try await s.save(b)
+        let copy = s.directory.appendingPathComponent("\(b.id) copy.json")
+        try FileManager.default.copyItem(at: s.directory.appendingPathComponent("\(b.id).json"), to: copy)
+        let fresh = BriefStore(directory: s.directory)
+        #expect(await fresh.all().count == 1)
+        try await fresh.delete(id: b.id)
+        #expect(await BriefStore(directory: s.directory).all().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: copy.path))
     }
 
     @Test("markdown export is the compiled prompt")

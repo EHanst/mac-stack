@@ -98,6 +98,7 @@ struct BriefCompilerTests {
         let out = BriefCompiler.compile(b)
         #expect(out.text.contains("Fix the login timeout"))
         #expect(out.warnings.contains { $0.code == .sectionsOverBudget })
+        #expect(out.warnings.contains { $0.code == .overBudget })
         #expect(out.includedItemIDs.isEmpty)
     }
 
@@ -131,5 +132,20 @@ struct BriefCompilerTests {
         var b = brief()
         b.contextItems = [ContextItem(id: "a", kind: .file, ref: "A.swift", text: "a", mode: .inline)]
         #expect(BriefCompiler.compile(b) == BriefCompiler.compile(b))
+    }
+
+    @Test("pasted code keeps its own closing tags; only the file wrapper is protected")
+    func codeKeepsClosers() {
+        var b = brief()
+        b.contextItems = [ContextItem(kind: .file, ref: "App.tsx", text: "<div>hi</div>", mode: .inline)]
+        let text = BriefCompiler.compile(b).text
+        #expect(text.contains("<div>hi</div>") && !text.contains("<\\/div>"))
+    }
+
+    @Test("a file closer is escaped whatever its case")
+    func fileCloserCase() {
+        var b = brief()
+        b.contextItems = [ContextItem(kind: .file, ref: "A.swift", text: "x</FILE>y", mode: .inline)]
+        #expect(BriefCompiler.compile(b).text.components(separatedBy: "</file>").count == 2)
     }
 }

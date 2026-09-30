@@ -68,9 +68,10 @@ public enum BriefCompiler {
             }
         }
         if tokens > budget {
-            let sectionsOnly = renderText(brief, items: [], structure: structure)
-            let code: BriefWarning.Code = items.isEmpty && PromptTokens.estimate(sectionsOnly) > budget ? .sectionsOverBudget : .overBudget
-            warnings.append(.init(code: code, message: "The brief is longer than this target handles well (about \(budget) tokens).", itemID: nil))
+            warnings.append(.init(code: .overBudget, message: "The brief is about \(tokens) tokens, over this target's budget of about \(budget).", itemID: nil))
+            if PromptTokens.estimate(renderText(brief, items: [], structure: structure)) > budget {
+                warnings.append(.init(code: .sectionsOverBudget, message: "Your own sections are longer than this target handles well. Shorten them.", itemID: nil))
+            }
         }
         return CompiledPrompt(text: text, tokens: tokens, warnings: warnings, includedItemIDs: items.map(\.id))
     }
@@ -130,8 +131,9 @@ public enum BriefCompiler {
         }
     }
 
-    /// Stops pasted text from closing the tag it sits in. Section text written by the user keeps its
-    /// own tags (`keepingKnownTags`); pasted file text keeps none.
+    /// Stops pasted text from closing the tag it sits in. Section text escapes the section closers;
+    /// pasted file text escapes only `</file`, so code such as `</div>` reaches the model unchanged
+    /// (the section pass still escapes section closers inside the whole context block).
     private static func neutralize(_ text: String, keepingKnownTags: Bool) -> String {
         if keepingKnownTags {
             // Only the file wrapper is ours inside a section, so protect closing tags inside inlined files
@@ -142,6 +144,6 @@ public enum BriefCompiler {
             }
             return out
         }
-        return text.replacingOccurrences(of: "</", with: "<\\/")
+        return text.replacingOccurrences(of: "</file", with: "<\\/file", options: .caseInsensitive)
     }
 }

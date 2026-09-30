@@ -3,7 +3,13 @@ import os
 
 public enum BriefStoreError: LocalizedError, Equatable {
     case notFound(String)
-    public var errorDescription: String? { "That brief no longer exists." }
+    case invalidID(String)
+    public var errorDescription: String? {
+        switch self {
+        case .notFound: "That brief no longer exists."
+        case .invalidID: "That brief can't be saved: its id isn't a plain name."
+        }
+    }
 }
 
 /// The user's briefs: one JSON file each, so they are easy to back up and diff. Same shape as
@@ -11,6 +17,8 @@ public enum BriefStoreError: LocalizedError, Equatable {
 public actor BriefStore {
     public nonisolated let directory: URL
     private var briefs: [String: Brief] = [:]
+    /// Every file each brief was read from or written to, so delete removes copies too.
+    private var files: [String: Set<URL>] = [:]
     private var loaded = false
     private let logger = Logger(subsystem: "com.vibecockpit", category: "BriefStore")
 
@@ -34,15 +42,16 @@ public actor BriefStore {
         guard !loaded else { return }
         loaded = true
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        for file in files where file.pathExtension == "json" {
+        let entries = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        for file in entries where file.pathExtension == "json" {
             do {
                 let brief = try Self.decoder.decode(Brief.self, from: Data(contentsOf: file))
                 guard brief.schemaVersion <= Brief.currentVersion else {
                     logger.error("skipping newer brief \(file.lastPathComponent, privacy: .public)")
                     continue
                 }
-                briefs[brief.id] = brief
+                files[brief.id, default: []].insert(file)
+                if briefs[brief.id] == nil { briefs[brief.id] = brief }
             } catch {
                 logger.error("skipping unreadable brief \(file.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -58,16 +67,26 @@ public actor BriefStore {
 
     public func save(_ brief: Brief) throws {
         load()
+        guard Self.isPlainName(brief.id) else { throw BriefStoreError.invalidID(brief.id) }
+        // Names are compared case-insensitively because the volume usually is.
+        if briefs.keys.contains(where: { $0 != brief.id && $0.lowercased() == brief.id.lowercased() }) {
+            throw BriefStoreError.invalidID(brief.id)
+        }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Self.encoder.encode(brief).write(to: url(for: brief.id), options: .atomic)
+        let target = url(for: brief.id)
+        try Self.encoder.encode(brief).write(to: target, options: .atomic)
         briefs[brief.id] = brief
+        files[brief.id, default: []].insert(target)
     }
 
     public func delete(id: String) throws {
         load()
         guard briefs[id] != nil else { throw BriefStoreError.notFound(id) }
-        try? FileManager.default.removeItem(at: url(for: id))
+        for file in files[id] ?? [] where FileManager.default.fileExists(atPath: file.path) {
+            try FileManager.default.removeItem(at: file)
+        }
         briefs[id] = nil
+        files[id] = nil
     }
 
     public func exportMarkdown(id: String, to url: URL) throws {
@@ -76,10 +95,10 @@ public actor BriefStore {
         try Data(BriefCompiler.compile(brief).text.utf8).write(to: url, options: .atomic)
     }
 
-    /// The id becomes a file name, so anything that isn't a plain name is flattened: an id can never
-    /// point outside the folder.
-    private func url(for id: String) -> URL {
-        let safe = String(id.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "-" || $0 == "_" ? Character($0) : "_" })
-        return directory.appendingPathComponent(safe + ".json")
+    /// Ids become file names, so only letters, digits, `-` and `_` are accepted (a UUID qualifies).
+    static func isPlainName(_ id: String) -> Bool {
+        !id.isEmpty && id.unicodeScalars.allSatisfy { ($0.isASCII && CharacterSet.alphanumerics.contains($0)) || $0 == "-" || $0 == "_" }
     }
+
+    private func url(for id: String) -> URL { directory.appendingPathComponent(id + ".json") }
 }
