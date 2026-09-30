@@ -16,9 +16,19 @@ struct BriefVersionsSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Versions").font(.mtTitleMedium)
             HStack(alignment: .top, spacing: 12) {
-                List(selection: $selection) {
-                    ForEach(Array(brief.versions.enumerated().reversed()), id: \.offset) { index, version in
-                        Text(version.date.formatted(date: .abbreviated, time: .shortened)).tag(Optional(index))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(brief.versions.enumerated().reversed()), id: \.offset) { index, version in
+                            Button { selection = index } label: {
+                                Text(version.date.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.mtBodyMedium)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 8).padding(.vertical, 6)
+                                    .background(selection == index ? Color.mtPrimary.opacity(0.2) : Color.clear)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
                 .frame(width: 180)
