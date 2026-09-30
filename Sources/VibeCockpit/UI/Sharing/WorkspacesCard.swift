@@ -14,8 +14,7 @@ struct WorkspacesCard: View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Label("Projects", systemImage: "folder")
-                        .font(.mtTitleSmall).foregroundStyle(Color.mtOnSurface)
+                    MTCardTitle("Projects", icon: "folder", tint: .warning)
                     Spacer()
                     Button("Add project…") { pick() }.buttonStyle(MTOutlinedButtonStyle())
                 }

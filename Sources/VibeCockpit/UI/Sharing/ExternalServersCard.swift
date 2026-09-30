@@ -18,8 +18,7 @@ struct ExternalServersCard: View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Label("Tools from other MCP servers", systemImage: "puzzlepiece.extension")
-                        .font(.mtTitleSmall).foregroundStyle(Color.mtOnSurface)
+                    MTCardTitle("Tools from other MCP servers", icon: "puzzlepiece.extension", tint: .accent)
                     Spacer()
                     Button(adding ? "Cancel" : "Add server") { adding.toggle() }
                         .buttonStyle(MTOutlinedButtonStyle())

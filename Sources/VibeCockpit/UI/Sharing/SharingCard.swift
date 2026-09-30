@@ -22,9 +22,7 @@ struct SharingCard: View {
     private var card: some View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Share with other apps", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.mtTitleSmall)
-                    .foregroundStyle(Color.mtOnSurface)
+                MTCardTitle("Share with other apps", icon: "point.3.connected.trianglepath.dotted", tint: .info)
                 MTDivider()
                 toggleRow
                 if case .running = sharing.status { addressRow }

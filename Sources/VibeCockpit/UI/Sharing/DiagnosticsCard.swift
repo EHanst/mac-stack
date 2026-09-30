@@ -15,8 +15,7 @@ struct DiagnosticsCard: View {
         MTCard {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Label("Speed & support", systemImage: "stethoscope")
-                        .font(.mtTitleSmall).foregroundStyle(Color.mtOnSurface)
+                    MTCardTitle("Speed & support", icon: "stethoscope", tint: .success)
                     Spacer()
                     Button("Refresh") { Task { await model.reload() } }.buttonStyle(MTOutlinedButtonStyle())
                     Button("Export support bundle…") { export() }.buttonStyle(MTFilledButtonStyle())

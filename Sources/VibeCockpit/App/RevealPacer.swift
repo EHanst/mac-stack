@@ -11,8 +11,8 @@ public struct RevealPacer: Equatable, Sendable {
     public static let maxRate = 400.0
     public static let maxLag = 0.30         // seconds; time constant for draining a backlog
     public static let settleRate = 700.0    // once the stream has ended
-    public static let fadeDuration = 0.22   // seconds each glyph takes to fade in
-    public static let edgeRange = 12.0...90.0
+    public static let fadeDuration = 0.9    // seconds each glyph takes to fade in: slow enough to see
+    public static let edgeRange = 24.0...400.0
     public static let maxStep = 0.1         // a stalled frame never jumps the cursor further than this
 
     /// Cursor position, in glyphs from the start of the text.
@@ -47,14 +47,13 @@ public struct RevealPacer: Equatable, Sendable {
     public func finishTarget(count: Int) -> Double { Double(count) + edgeWidth }
 }
 
-/// Per-glyph opacity for a cursor position: a soft leading edge with an ease-out.
+/// Per-glyph opacity for a cursor position: a wide, soft leading edge on a smooth ease-in-out.
 /// Glyphs reveal from the surface they sit on (opacity 0) to their text color (opacity 1),
 /// so it reads the same in light and dark themes.
 public enum RevealCurve {
     public static func opacity(position: Double, index: Double, edge: Double) -> Double {
         guard edge > 0 else { return position > index ? 1 : 0 }
         let t = min(max((position - index) / edge, 0), 1)
-        let inv = 1 - t
-        return 1 - inv * inv * inv      // ease-out cubic
+        return t * t * (3 - 2 * t)      // smoothstep: gentle start and finish, so the fade is visible
     }
 }
