@@ -58,6 +58,7 @@ public final class AppServices {
     public let promptLibrary: PromptLibrary
     /// Save/insert/improve prompts from the chat box.
     public let promptStudio: PromptStudioModel
+    public let briefs = BriefWorkbenchModel(store: BriefStore())
     /// Prompts committed inside project folders (`.vibe/prompts`); usable only after the user approves each.
     public let projectPrompts: WorkspacePromptStore
     public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
@@ -149,6 +150,7 @@ public final class AppServices {
             return self.optimizerPrefix(promptCount: coordinator.state.intentHistory.filter { $0.kind == .userPrompt }.count)
         }
         await promptStudio.reload()
+        await briefs.reload()
         await promptStudio.refreshModel()
 
         if let url = workspaceURL ?? detectWorkspaceURL() {
