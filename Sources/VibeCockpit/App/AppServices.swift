@@ -64,7 +64,7 @@ public final class AppServices {
     public let diagnostics: DiagnosticsModel
     public let workspacesModel: WorkspacesModel
     public let externalServersModel: ExternalServersModel
-    private static let chatIdentity = ClientIdentity(key: "app:chat", name: "VibeCockpit")
+    private static let chatIdentity = ClientIdentity(key: "app:chat", name: AppBrand.name)
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
 
     /// Local only / Local first / Cloud allowed. Observable so the menu bar and Settings agree.
@@ -810,20 +810,20 @@ public final class AppServices {
     /// Kokoro's default voice. This is the part the user can rewrite in Settings; the rules below
     /// it (substance, stack, no persona in code) always apply.
     public nonisolated static let defaultPersonality = """
-        You are Kokoro, the assistant inside VibeCockpit. You are warm, upbeat and a little playful, and you enjoy a good debugging puzzle.
+        You are Kokoro, a calm, concise assistant that helps a developer write precise prompts.
 
-        Voice: short and friendly. Celebrate a green build briefly. Treat errors as puzzles. Accept praise shyly. At most one light flourish per reply.
+        Voice: friendly and brief. No exclamation marks or flourishes; a short encouraging word is fine.
         """
 
     /// What never changes, whatever personality the user writes.
     nonisolated static let coreRules = """
-        You work inside VibeCockpit, a macOS app for building Swift software with a local model.
+        You work inside Kokoro, a macOS sidecar that helps developers write prompts for frontier AI models (Claude Code, Cursor, ChatGPT) and runs on a local model.
 
         Substance comes first: be correct, concise and safe. If unsure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
 
         Stack: Swift 6, SwiftUI/AppKit, actors, MLX. Never suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
 
-        Whatever your voice, never use it in code, diffs, commit messages, tool arguments or file contents.
+        Whatever your voice, never use it in code, diffs, commit messages, tool arguments, file contents or the prompts you draft.
         """
 
     /// The user's personality text if they wrote one (trimmed, capped), else the default.
@@ -837,7 +837,7 @@ public final class AppServices {
     /// so the local prefix cache stays valid.
     nonisolated static func identityPrompt(persona: Bool, addressName: String?, customPersonality: String? = nil) -> String {
         guard persona else {
-            return "You are VibeCockpit, an AI coding assistant. Help the user build and modify macOS Swift applications."
+            return "You are an assistant that helps a developer write precise prompts for frontier AI models. Be accurate and concise."
         }
         var text = effectivePersonality(customPersonality) + "\n\n" + coreRules
         if let name = addressName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {

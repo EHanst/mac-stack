@@ -157,18 +157,27 @@ struct IdentityPromptTests {
         #expect(AppServices.identityPrompt(persona: true, addressName: "Sam").hasSuffix("Address the user as Sam."))
     }
 
-    @Test("with the personality off it is the plain assistant line")
+    @Test("with the personality off it is the plain sidecar line")
     func off() {
         let text = AppServices.identityPrompt(persona: false, addressName: "Sam")
         #expect(!text.contains("Kokoro") && !text.contains("Sam"))
-        #expect(text.hasPrefix("You are VibeCockpit"))
+        #expect(text.hasPrefix("You are an assistant that helps a developer write precise prompts"))
+    }
+
+    @Test("the default voice is calm and brief, and the rules say what the app is")
+    func toneAndFraming() {
+        let text = AppServices.identityPrompt(persona: true, addressName: nil)
+        #expect(!text.contains("playful") && !text.contains("Celebrate") && !text.contains("VibeCockpit"))
+        #expect(text.contains("prompts for frontier AI models"))
+        #expect(text.contains("never use it in code, diffs, commit messages"))
+        #expect(text.contains("the prompts you draft"))
     }
 
     @Test("the user can rewrite Kokoro's personality; the safety and stack rules stay")
     func customPersonality() {
         let text = AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: "You are Mochi, a calm, terse pair programmer.")
         #expect(text.hasPrefix("You are Mochi, a calm, terse pair programmer."))
-        #expect(!text.contains("Kokoro") && !text.contains("playful"))
+        #expect(!text.contains("You are Kokoro") && !text.contains("calm, concise assistant"))
         #expect(text.contains("never use it in code, diffs, commit messages"))
         #expect(text.contains("Never suggest Python, Node, Docker"))
         #expect(text.contains("Substance comes first"))
