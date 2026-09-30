@@ -38,8 +38,32 @@ public final class BriefWorkbenchModel {
 
     public func newBrief(title: String) async {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let brief = Brief.new(title: name.isEmpty ? "Untitled brief" : name,
+        await insert(Brief.new(title: name.isEmpty ? "Untitled brief" : name,
+                               target: .make(modelFamily: "claude", surface: .claudeCode)))
+    }
+
+    /// The clipboard text becomes the goal as it is; redaction happens when the prompt is compiled,
+    /// exported or sent to the model. False when there is nothing to use.
+    @discardableResult
+    public func newBrief(fromClipboard text: String) async -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        let first = text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
+        var brief = Brief.new(title: String(first.prefix(40)).trimmingCharacters(in: .whitespaces),
                               target: .make(modelFamily: "claude", surface: .claudeCode))
+        brief.setText(text, for: .goal)
+        await insert(brief)
+        return true
+    }
+
+    public func newBrief(title: String, goal: String, context: String) async {
+        var brief = Brief.new(title: title, target: .make(modelFamily: "claude", surface: .claudeCode))
+        brief.setText(goal, for: .goal)
+        brief.setText(context, for: .context)
+        await insert(brief)
+    }
+
+    private func insert(_ brief: Brief) async {
         briefs.insert(brief, at: 0)
         selectedID = brief.id
         recompile()
@@ -87,6 +111,54 @@ public final class BriefWorkbenchModel {
         }
         let out = BriefCompiler.compile(brief)
         return out.warnings.contains { $0.code == .emptyGoal } ? "" : out.text
+    }
+
+    // MARK: Versions
+
+    /// Records the current sections as a version unless nothing changed since the last one or there is no goal.
+    /// `id` pins the brief; nil means the selected one.
+    public func saveVersion(id: String? = nil) {
+        guard let brief = briefs.first(where: { $0.id == (id ?? selectedID) }) else { return }
+        let goal = brief.sections.first { $0.kind == .goal }
+        guard goal?.enabled == true, !(goal?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              brief.versions.last?.sections != brief.sections else { return }
+        mutate(id: brief.id) { $0.snapshot() }
+    }
+
+    /// Puts an older version's sections back. The current sections are saved first so restoring can be undone.
+    public func restoreVersion(_ index: Int) {
+        guard let brief = selected, brief.versions.indices.contains(index) else { return }
+        let sections = brief.versions[index].sections
+        mutate { b in
+            if b.versions.last?.sections != b.sections { b.snapshot() }
+            b.sections = sections
+            b.updatedAt = Date()
+        }
+    }
+
+    /// `copyText`, plus a version, because what was sent is worth being able to get back.
+    public func copyForClipboard(for surface: Surface?) -> String {
+        let text = copyText(for: surface)
+        if !text.isEmpty { saveVersion() }
+        return text
+    }
+
+    // MARK: Export
+
+    public func exportRoots() async -> [URL] { await contextSource?.roots() ?? [] }
+
+    /// Writes the selected brief to `<root>/.vibe/briefs/` and returns one sentence for the user.
+    public func exportSelected(to root: URL) -> String {
+        guard let brief = selected else { return "Pick a brief first." }
+        do {
+            let file = try BriefExporter.export(brief, toProjectRoot: root)
+            saveVersion()
+            let base = root.resolvingSymlinksInPath().path + "/"
+            let full = file.resolvingSymlinksInPath().path
+            return "Saved to " + (full.hasPrefix(base) ? String(full.dropFirst(base.count)) : file.lastPathComponent)
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     /// Every saved brief, with pending edits written first. For outside readers such as MCP.

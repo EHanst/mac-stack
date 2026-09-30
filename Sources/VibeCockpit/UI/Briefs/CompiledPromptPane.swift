@@ -1,6 +1,7 @@
 #if canImport(AppKit)
 #if SWIFT_PACKAGE
 import VibeCockpitCore
+import StackCore
 #endif
 import SwiftUI
 import AppKit
@@ -9,6 +10,9 @@ import AppKit
 struct CompiledPromptPane: View {
     @Environment(AppServices.self) private var services
     @State private var copied = false
+    @State private var showVersions = false
+    @State private var exportRoots: [URL] = []
+    @State private var exportMessage: String?
 
     private var model: BriefWorkbenchModel { services.briefs }
 
@@ -30,8 +34,15 @@ struct CompiledPromptPane: View {
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 copyBar
+                if let exportMessage {
+                    Text(exportMessage).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                }
             }
             .padding(16)
+            .sheet(isPresented: $showVersions) {
+                BriefVersionsSheet(brief: brief, onRestore: { model.restoreVersion($0) }, onClose: { showVersions = false })
+            }
+            .task(id: model.selectedID) { exportMessage = nil; exportRoots = await model.exportRoots() }
             .background(Color.mtSurfaceContainerLowest)
         } else {
             VStack(spacing: 8) {
@@ -79,12 +90,21 @@ struct CompiledPromptPane: View {
                 Button("ChatGPT") { copy(.chatGPTWeb) }
             }
             .disabled(empty)
+            Menu("Save to project") {
+                ForEach(exportRoots, id: \.self) { root in
+                    Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }
+                }
+                if exportRoots.isEmpty { Text("Add a project first") }
+            }
+            .disabled(empty)
+            Button("Versions") { showVersions = true }
+                .disabled(model.selected?.versions.isEmpty ?? true)
         }
     }
 
     private func copy(_ surface: Surface?) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(model.copyText(for: surface), forType: .string)
+        NSPasteboard.general.setString(model.copyForClipboard(for: surface), forType: .string)
         copied = true
         Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
     }

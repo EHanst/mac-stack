@@ -3,6 +3,7 @@
 import VibeCockpitCore
 #endif
 import SwiftUI
+import AppKit
 
 /// Center column: pick a brief, edit its sections. The compiled prompt is on the right.
 struct BriefWorkbenchView: View {
@@ -10,12 +11,17 @@ struct BriefWorkbenchView: View {
     @State private var newTitle = ""
     @State private var creating = false
     @State private var improving = false
+    @State private var clipboardNote: String?
 
     private var model: BriefWorkbenchModel { services.briefs }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let clipboardNote {
+                Text(clipboardNote).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 6)
+            }
             MTDivider()
             if let brief = model.selected {
                 editor(brief)
@@ -38,8 +44,11 @@ struct BriefWorkbenchView: View {
             .labelsHidden()
             .disabled(model.briefs.isEmpty)
             Spacer()
-            Button { creating = true } label: { Label("New brief", systemImage: "plus") }
-                .buttonStyle(MTFilledButtonStyle())
+            Menu {
+                Button("New brief") { creating = true }
+                Button("New brief from clipboard") { fromClipboard() }
+            } label: { Label("New brief", systemImage: "plus") }
+                .menuStyle(.button)
             Button(role: .destructive) { Task { await model.deleteSelected(); if model.selected == nil || model.selectedID != services.sidecar.briefID { services.sidecar.clear() } } } label: { Image(systemName: "trash") }
                 .disabled(model.selected == nil)
                 .help("Delete this brief")
@@ -49,6 +58,14 @@ struct BriefWorkbenchView: View {
             TextField("What is it for?", text: $newTitle)
             Button("Create") { let t = newTitle; newTitle = ""; Task { await model.newBrief(title: t) } }
             Button("Cancel", role: .cancel) { newTitle = "" }
+        }
+    }
+
+    private func fromClipboard() {
+        let text = NSPasteboard.general.string(forType: .string) ?? ""
+        Task {
+            if await model.newBrief(fromClipboard: text) { clipboardNote = nil; services.sidecar.clear() }
+            else { clipboardNote = "The clipboard has no text." }
         }
     }
 
