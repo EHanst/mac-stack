@@ -27,7 +27,9 @@ struct KnowledgePromptView: View {
                 MTCardTitle("Help \(AppBrand.name) learn from your accepted briefs", icon: "sparkles", tint: .accent)
                 Text("When you save, copy or export a brief, \(AppBrand.name) can keep its text, with secrets removed, and use it as an example for future suggestions. It stays on this Mac, never includes your attached files, and you can turn it off or wipe it at any time.")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                    .fixedSize(horizontal: false, vertical: true)
+                    // No fixedSize(vertical:) here: this card sits in a column that isn't scrollable, and
+                    // the window's minimum-size probe wraps the paragraph at ~0 width (3000+ pt tall).
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 HStack {
                     Button("Turn on") { Task { await model.turnOn() } }.buttonStyle(MTFilledButtonStyle())
                     Button("Not now") { model.dismissCard() }.buttonStyle(MTOutlinedButtonStyle())
