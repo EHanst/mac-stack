@@ -15,6 +15,9 @@ public final class BriefWorkbenchModel {
     public private(set) var saveError: String?
     /// Set by `AppServices`; nil means no project or index is available.
     public var contextSource: BriefContextSource?
+    /// Called when the user does something that means "this brief is good": saves a version, copies the
+    /// compiled prompt or exports it. The knowledge recorder listens; nothing here depends on it.
+    public var onBriefAccepted: (@MainActor (Brief) -> Void)?
 
     private let store: BriefStore
     private let saveDelay: Duration
@@ -126,9 +129,16 @@ public final class BriefWorkbenchModel {
     public func saveVersion(id: String? = nil) {
         guard let brief = briefs.first(where: { $0.id == (id ?? selectedID) }) else { return }
         let goal = brief.sections.first { $0.kind == .goal }
-        guard goal?.enabled == true, !(goal?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              brief.versions.last?.sections != brief.sections else { return }
-        snapshotIfChanged(id: brief.id)
+        guard goal?.enabled == true, !(goal?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if brief.versions.last?.sections != brief.sections { snapshotIfChanged(id: brief.id) }
+        noteAccepted(id: brief.id)
+    }
+
+    private func noteAccepted(id: String?) {
+        guard let brief = briefs.first(where: { $0.id == (id ?? selectedID) }) else { return }
+        let goal = brief.sections.first { $0.kind == .goal }
+        guard goal?.enabled == true, !(goal?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        onBriefAccepted?(brief)
     }
 
     /// Like `saveVersion` but with no goal requirement: used before an edit that would overwrite text,

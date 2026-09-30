@@ -488,4 +488,28 @@ struct BriefWorkbenchModelTests {
         let files = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(".vibe/briefs").path)
         #expect(files.allSatisfy { !$0.lowercased().contains("akiaiosfodnn7example") })
     }
+
+    @Test("saving a version and copying both report the brief as accepted")
+    func acceptedHook() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.setText("Add retry to uploads", for: .goal)
+        var seen: [String] = []
+        m.onBriefAccepted = { seen.append($0.id) }
+        m.saveVersion()
+        #expect(seen == [m.selectedID!])
+        _ = m.copyForClipboard(for: nil)
+        #expect(seen.count == 2)
+    }
+
+    @Test("a brief with no goal is not reported")
+    func noGoalNoHook() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        var count = 0
+        m.onBriefAccepted = { _ in count += 1 }
+        m.saveVersion()
+        _ = m.copyForClipboard(for: nil)
+        #expect(count == 0)
+    }
 }
