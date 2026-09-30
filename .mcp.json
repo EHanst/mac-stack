@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "vibecockpit": {
+      "command": "/Users/erichanst/house/projects/mac-stack/.build/release/vibe-mcp"
+    }
+  }
+}
