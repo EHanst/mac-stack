@@ -116,7 +116,15 @@ public final class BriefWorkbenchModel {
     }
 
     public func setBody(_ text: String) {
-        mutate { brief in
+        guard let id = selectedID else { return }
+        setBody(text, briefID: id)
+    }
+
+    /// Sets the body of a named brief, which need not be the selected one. If the brief is linked,
+    /// sets inputAtEdit to the current input. No-op if it no longer exists.
+    public func setBody(_ text: String, briefID: String) {
+        guard briefs.contains(where: { $0.id == briefID }) else { return }
+        mutate(id: briefID) { brief in
             if brief.body == nil { brief.inputAtEdit = brief.input }
             brief.body = text
             brief.updatedAt = Date()
@@ -135,7 +143,16 @@ public final class BriefWorkbenchModel {
     }
 
     public func appendToBody(_ text: String) {
-        mutate { brief in
+        guard let id = selectedID else { return }
+        appendToBody(text, briefID: id)
+    }
+
+    /// Appends to the body of a named brief, which need not be the selected one. If the brief is linked,
+    /// sets inputAtEdit to the current input. No-op if it no longer exists.
+    @discardableResult
+    public func appendToBody(_ text: String, briefID: String) -> Bool {
+        guard briefs.contains(where: { $0.id == briefID }) else { return false }
+        mutate(id: briefID) { brief in
             if brief.body == nil {
                 brief.inputAtEdit = brief.input
                 brief.body = brief.input + (brief.input.isEmpty ? "" : "\n\n") + text
@@ -144,6 +161,7 @@ public final class BriefWorkbenchModel {
             }
             brief.updatedAt = Date()
         }
+        return true
     }
 
     public func setTarget(modelFamily: String, surface: Surface) {

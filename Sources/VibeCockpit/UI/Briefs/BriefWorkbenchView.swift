@@ -10,7 +10,6 @@ struct BriefWorkbenchView: View {
     @Environment(AppServices.self) private var services
     @State private var newTitle = ""
     @State private var creating = false
-    @State private var improving = false
     @State private var clipboardNote: String?
     @State private var continuing = false
 
@@ -33,7 +32,6 @@ struct BriefWorkbenchView: View {
             }
         }
         .background(Color.mtSurface)
-        .sheet(isPresented: $improving) { improveSheet() }
         .sheet(isPresented: $continuing) {
             ReplySheet(title: "Continue from a session",
                        prompt: "Paste a long session. The sidecar summarizes it into a new brief; the paste is not kept.",
@@ -123,9 +121,6 @@ struct BriefWorkbenchView: View {
                 Text("Input").font(.mtLabelLarge)
                 Text("~\(PromptTokens.estimate(brief.input)) tokens")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                Spacer()
-                Button("Improve") { improve(brief) }
-                    .disabled(brief.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             EchoGuardedEditor(external: brief.input) { model.setInput($0) }
                 .id("\(brief.id)-input")
@@ -151,23 +146,5 @@ struct BriefWorkbenchView: View {
         .padding(16)
     }
 
-    private func improve(_ brief: Brief) {
-        services.promptStudio.startOptimize(draft: brief.input, mode: .improve, intent: PromptEngineer.Intent.general.rawValue)
-        improving = true
-    }
-
-    private func improveSheet() -> some View {
-        let id = model.selectedID
-        let draft = model.selected?.input ?? ""
-        return OptimizeReviewSheet(
-            studio: services.promptStudio, draft: draft,
-            onAccept: { if let id { model.setInput($0, briefID: id) }; services.promptStudio.clearUndo(); improving = false },
-            onExpand: { services.promptStudio.startOptimize(draft: draft, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
-            onAskQuestions: { questions in
-                if let id { model.appendToInput(questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), briefID: id) }
-                services.promptStudio.dismissReview(); improving = false
-            },
-            onClose: { services.promptStudio.dismissReview(); improving = false })
-    }
 }
 #endif

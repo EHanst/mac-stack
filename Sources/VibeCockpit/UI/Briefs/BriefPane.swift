@@ -6,11 +6,13 @@ import StackCore
 import SwiftUI
 import AppKit
 
-/// Right column: exactly what the frontier model will receive, plus target and Copy.
-struct CompiledPromptPane: View {
+/// Right column: exactly what the frontier model will receive, plus target, editable brief, Improve, and Copy.
+struct BriefPane: View {
     @Environment(AppServices.self) private var services
     @State private var copied = false
     @State private var showVersions = false
+    @State private var showImprove = false
+    @State private var improveID: String?
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?
 
@@ -21,18 +23,13 @@ struct CompiledPromptPane: View {
             VStack(alignment: .leading, spacing: 12) {
                 targetPicker(brief)
                 meter(brief, compiled)
+                statusLine(brief)
+                editor(brief)
+                attachmentsFooter(brief)
                 ForEach(Array(compiled.warnings.enumerated()), id: \.offset) { _, w in
                     Label(w.message, systemImage: "exclamationmark.triangle")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 }
-                ScrollView {
-                    Text(compiled.text.isEmpty ? "Your prompt appears here as you type." : compiled.text)
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled).padding(10)
-                }
-                .background(Color.mtSurfaceContainerHighest)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
                 copyBar
                 if let exportMessage {
                     Text(exportMessage).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
@@ -42,6 +39,7 @@ struct CompiledPromptPane: View {
             .sheet(isPresented: $showVersions) {
                 BriefVersionsSheet(brief: brief, onRestore: { model.restoreVersion($0) }, onClose: { showVersions = false })
             }
+            .sheet(isPresented: $showImprove) { improveSheet(brief) }
             .task(id: model.selectedID) { exportMessage = nil; exportRoots = await model.exportRoots() }
             .background(Color.mtSurfaceContainerLowest)
         } else {
@@ -54,6 +52,92 @@ struct CompiledPromptPane: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.mtSurfaceContainerLowest)
         }
+    }
+
+    @ViewBuilder
+    private func statusLine(_ brief: Brief) -> some View {
+        if brief.body == nil {
+            Text("Linked to input")
+                .font(.mtBodySmall)
+                .foregroundStyle(Color.mtOnSurfaceVariant)
+        } else {
+            HStack(spacing: 8) {
+                Text("Edited")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+                Button("Rebuild from input") { model.rebuildFromInput() }
+                    .controlSize(.small)
+                if model.inputChangedSinceEdit {
+                    Text("Input changed since you edited the brief")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtError)
+                }
+            }
+        }
+    }
+
+    private func editor(_ brief: Brief) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Brief").font(.mtLabelLarge)
+                Text("~\(PromptTokens.estimate(brief.effectiveBody)) tokens")
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                Spacer()
+                Button("Improve") { openImprove(brief) }
+                    .disabled(brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            EchoGuardedEditor(external: brief.effectiveBody) { model.setBody($0) }
+                .id("\(brief.id)-body")
+                .font(.system(.caption, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .padding(10)
+                .frame(minHeight: 200, maxHeight: .infinity)
+                .background(Color.mtSurfaceContainerHighest)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    @ViewBuilder
+    private func attachmentsFooter(_ brief: Brief) -> some View {
+        let included = brief.contextItems.filter(\.included)
+        if !included.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Attachments").font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                ForEach(included) { item in
+                    Text("\(item.ref) (~\(item.tokens) tokens, \(item.mode == .inline ? "inline" : "by path"))")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                }
+            }
+        }
+    }
+
+    private func openImprove(_ brief: Brief) {
+        improveID = brief.id
+        services.promptStudio.startOptimize(draft: brief.effectiveBody, mode: .improve,
+                                            intent: PromptEngineer.Intent.general.rawValue)
+        showImprove = true
+    }
+
+    private func improveSheet(_ brief: Brief) -> some View {
+        let draft = brief.effectiveBody
+        let id = improveID
+        return OptimizeReviewSheet(
+            studio: services.promptStudio,
+            draft: draft,
+            onAccept: { if let id { model.setBody($0, briefID: id) }; services.promptStudio.clearUndo(); showImprove = false },
+            onExpand: { services.promptStudio.startOptimize(draft: draft, mode: .expand,
+                                                           intent: PromptEngineer.Intent.general.rawValue) },
+            onAskQuestions: { questions in
+                if let id { model.appendToBody(questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), briefID: id) }
+                services.promptStudio.dismissReview()
+                showImprove = false
+            },
+            onClose: {
+                improveID = nil
+                services.promptStudio.dismissReview()
+                showImprove = false
+            })
     }
 
     private func targetPicker(_ brief: Brief) -> some View {
@@ -97,7 +181,6 @@ struct CompiledPromptPane: View {
                 if exportRoots.isEmpty { Text("Add a project first") }
             }
             .disabled(empty)
-            // Menus can't run code when they open; hovering the label comes first, so refresh then.
             .onHover { if $0 { Task { exportRoots = await model.exportRoots() } } }
             Button("Versions") { showVersions = true }
                 .disabled(model.selected?.versions.isEmpty ?? true)

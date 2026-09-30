@@ -199,7 +199,7 @@ struct MainLayout: View {
     private var detailPanel: some View {
         VStack(spacing: 0) {
             if selectedDestination == .briefs {
-                CompiledPromptPane()
+                BriefPane()
             } else if selectedDestination == .diff {
                 // Diff is already the content panel; show preview or placeholder
                 previewOrEmpty

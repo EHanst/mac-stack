@@ -564,4 +564,25 @@ struct BriefWorkbenchModelTests {
         #expect(m.selected?.body == "Body v1")
         #expect(m.selected?.inputAtEdit == "Input v1")
     }
+
+    @Test("setBody with briefID writes to the specified brief, not the selected one")
+    func setBodyWithBriefID() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "First", input: "Input 1")
+        let firstID = m.selected?.id
+        await m.newBrief(title: "Second", input: "Input 2")
+        let secondID = m.selected?.id
+
+        // Select second brief, then write to first
+        #expect(m.selectedID == secondID)
+        m.setBody("Body for first", briefID: firstID ?? "")
+
+        // Check first brief was updated, second untouched
+        let first = m.briefs.first { $0.id == firstID }
+        let second = m.briefs.first { $0.id == secondID }
+        #expect(first?.body == "Body for first")
+        #expect(first?.inputAtEdit == "Input 1")
+        #expect(second?.body == nil)
+        #expect(second?.input == "Input 2")
+    }
 }
