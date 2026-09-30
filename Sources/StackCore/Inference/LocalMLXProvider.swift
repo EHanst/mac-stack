@@ -23,6 +23,11 @@ public actor LocalMLXProvider: ModelProvider {
     private let logger = Logger(subsystem: "com.vibecockpit", category: "LocalMLXProvider")
 
     private var model: Qwen35ForCausalLM?
+    /// The MTP draft head, when the pack has one and `tuning.speculative` was set at load.
+    private var mtp: Qwen35MTP?
+    /// Drafts made and accepted by the most recent request that used speculative decoding.
+    public private(set) var lastSpeculation: (cycles: Int, accepted: Int)?
+    public func lastSpeculationForBench() -> (cycles: Int, accepted: Int)? { lastSpeculation }
     private var tokenizer: (any Tokenizer)?
     private var _runtime: ModelRuntime?
 
@@ -41,6 +46,10 @@ public actor LocalMLXProvider: ModelProvider {
         public var prefillChunkSize = 128
         /// MLX buffer-cache ceiling; the default is unbounded and grows with prompt length.
         public var bufferCacheLimit = 1 << 30
+        /// Draft with the model's MTP head when the pack ships one (greedy-ish requests only).
+        public var speculative = true
+        /// Draft only from the first N vocabulary entries (0 = all).
+        public var draftVocabulary = 65_536
         public init() {}
     }
     public private(set) var tuning = Tuning()
@@ -255,7 +264,7 @@ public actor LocalMLXProvider: ModelProvider {
             cache = hit.payload.fork()
             consumed = hit.tokens.count
         } else {
-            cache = mdl.makeCache()
+            cache = mdl.makeCache(withMTP: mtp != nil)
         }
 
         // Prefill in chunks cut at message boundaries so a snapshot can be taken at each one.
@@ -266,7 +275,15 @@ public actor LocalMLXProvider: ModelProvider {
             from: consumed, to: lastIndex, chunk: tuning.prefillChunkSize, stops: stops) {
             try Task.checkCancellation()
             let chunk = MLXArray(Array(promptIds[range]))[.newAxis]
-            mdl.prefill(chunk, cache: cache)
+            if let mtp, let mtpCache = cache.mtp {
+                // Keep the draft head's history in step with the prompt: position i pairs the model's
+                // hidden state there with the embedding of token i+1.
+                let h = mdl.finalNorm(mdl.hiddenStates(chunk, cache: cache))
+                let next = MLXArray(Array(promptIds[(range.lowerBound + 1)...range.upperBound]))[.newAxis]
+                _ = mtp(embeds: mdl.embed(next), hidden: h, embeddingFirst: true, cache: mtpCache)
+            } else {
+                mdl.prefill(chunk, cache: cache)
+            }
             MLX.eval(cache.stateArrays)
             if options.cacheSnapshots, stops.contains(range.upperBound) {
                 let isBoundary = boundaries.contains(range.upperBound)
@@ -301,9 +318,6 @@ public actor LocalMLXProvider: ModelProvider {
         }
 
         let decodeStart = Date()
-        var y = step(MLXArray([promptIds[lastIndex]])[.newAxis])
-        MLX.asyncEval(y)
-
         var detok = StreamingDetokenizer { tok.decode(tokens: $0) }
         var filter = StopSequenceFilter(stops: options.stopSequences)
         var generated = 0
@@ -317,25 +331,85 @@ public actor LocalMLXProvider: ModelProvider {
             return r.stopped
         }
 
-        while generated < maxTokens {
-            if Task.isCancelled { finish = .stop; stopped = true; break }
+        // Speculative decoding drafts one token ahead with the MTP head and checks it with a two-token
+        // pass, which is only exact for greedy choice; near-greedy rewrite settings are treated as greedy.
+        let speculate = tuning.speculative && mtp != nil && cache.mtp != nil
+            && sampling.temperature <= 0.25 && sampling.presencePenalty == 0
+        lastSpeculation = nil
 
-            var following: MLXArray?
-            if generated + 1 < maxTokens {
-                let next = step(y.reshaped([1, 1]))
-                MLX.asyncEval(next)
-                following = next
+        if speculate, let mtp, let mtpCache = cache.mtp {
+            var cycles = 0, accepted = 0
+            let first = mdl.decodeStep(MLXArray([promptIds[lastIndex]])[.newAxis], cache: cache)
+            let firstToken = argMax(first.logits, axis: -1)
+            MLX.eval([firstToken, first.hidden] + cache.stateArrays)
+            var curId = firstToken.item(Int.self)
+            var pendingHidden = first.hidden          // [1, n, H]: hidden state of each not-yet-drafted-from position
+            var pendingTokens: [Int32] = [Int32(curId)]   // the token that follows each of them; last is `curId`
+
+            while true {
+                if Task.isCancelled { finish = .stop; stopped = true; break }
+                generated += 1
+                if eosIds.contains(curId) { finish = .stop; stopped = true; break }
+                let text = detok.append(curId)
+                if !text.isEmpty, emit(text) { finish = .stop; stopped = true; break }
+                if generated >= maxTokens { break }
+
+                // Draft the token after `curId`, then run [curId, draft] through the model in one pass.
+                let n = pendingTokens.count
+                let drafted = mtp(embeds: mdl.embed(MLXArray(pendingTokens)[.newAxis]), hidden: pendingHidden,
+                                  embeddingFirst: true, cache: mtpCache)
+                let draft = argMax(mdl.draftLogits(fromNormed: drafted[0, n - 1].expandedDimensions(axis: 0),
+                                                   limit: tuning.draftVocabulary), axis: -1)
+                let verifyInput = concatenated([MLXArray([Int32(curId)]), draft.asType(.int32)], axis: 0)[.newAxis]
+                let verified = mdl.decodeStep(verifyInput, cache: cache, captureMid: true)
+                let chosen = argMax(verified.logits, axis: -1)          // model's own pick after each of the two
+                MLX.eval([chosen, draft, verified.hidden] + cache.stateArrays + cache.midArrays)
+                let draftId = draft.item(Int.self)
+                let picks = chosen.asArray(Int32.self)
+
+                cycles += 1
+                if Int(picks[0]) == draftId {
+                    accepted += 1
+                    generated += 1
+                    if eosIds.contains(draftId) { finish = .stop; stopped = true; break }
+                    let t = detok.append(draftId)
+                    if !t.isEmpty, emit(t) { finish = .stop; stopped = true; break }
+                    if generated >= maxTokens { break }
+                    curId = Int(picks[1])
+                    pendingHidden = verified.hidden
+                    pendingTokens = [Int32(draftId), Int32(curId)]
+                } else {
+                    mdl.rollBackLast(cache: cache)
+                    curId = Int(picks[0])
+                    pendingHidden = verified.hidden[0..., 0..<1]
+                    pendingTokens = [Int32(curId)]
+                }
             }
+            lastSpeculation = (cycles, accepted)
+        } else {
+            var y = step(MLXArray([promptIds[lastIndex]])[.newAxis])
+            MLX.asyncEval(y)
 
-            let id = y.item(Int.self)  // blocks until this token is ready
-            generated += 1
-            if eosIds.contains(id) { finish = .stop; stopped = true; break }
+            while generated < maxTokens {
+                if Task.isCancelled { finish = .stop; stopped = true; break }
 
-            let text = detok.append(id)
-            if !text.isEmpty, emit(text) { finish = .stop; stopped = true; break }
+                var following: MLXArray?
+                if generated + 1 < maxTokens {
+                    let next = step(y.reshaped([1, 1]))
+                    MLX.asyncEval(next)
+                    following = next
+                }
 
-            guard let next = following else { break }
-            y = next
+                let id = y.item(Int.self)  // blocks until this token is ready
+                generated += 1
+                if eosIds.contains(id) { finish = .stop; stopped = true; break }
+
+                let text = detok.append(id)
+                if !text.isEmpty, emit(text) { finish = .stop; stopped = true; break }
+
+                guard let next = following else { break }
+                y = next
+            }
         }
 
         if !stopped {
@@ -378,6 +452,15 @@ public actor LocalMLXProvider: ModelProvider {
         let mdl = Qwen35ForCausalLM(weights: store, config: config, hadamard: hadamard)
         let allW = mdl.allArrays()
         MLX.eval(allW)
+        let mtpFile = modelDirectory.appendingPathComponent("optiq/mtp.safetensors")
+        if tuning.speculative, hadamard.block == 0, FileManager.default.fileExists(atPath: mtpFile.path) {
+            let head = Qwen35MTP(
+                weights: WeightStore(try Qwen35MTP.loadTensors(from: mtpFile), quant: loadQuantConfig(from: modelDirectory)),
+                config: config)
+            MLX.eval(collectModuleArrays(head))
+            mtp = head
+            logger.info("MTP head loaded")
+        }
         logger.info("Weights eval'd (\(allW.count, privacy: .public) tensors)")
 
         Memory.cacheLimit = tuning.bufferCacheLimit

@@ -249,7 +249,7 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         super.init()
     }
 
-    func callAsFunction(_ x: MLXArray, cache: Qwen35LayerCache) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, cache: Qwen35LayerCache, captureMid: Bool = false) -> MLXArray {
         let B  = x.shape[0]
         let L  = x.shape[1]
         let Dm = x.shape[2]
@@ -261,7 +261,7 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let b   = MLX.matmul(xf, inProjB.transposed()).reshaped([B, L, nV])
         let a   = MLX.matmul(xf, inProjA.transposed()).reshaped([B, L, nV])
 
-        qkv = MLXNN.silu(bonsaiCausalConv(qkv, w: conv1dW, cache: cache))
+        qkv = MLXNN.silu(bonsaiCausalConv(qkv, w: conv1dW, cache: cache, captureMid: captureMid))
 
         // Layout is [q (keyDim) | k (keyDim) | v (valueDim)].
         let q = qkv[0..., 0..., 0..<keyDim].reshaped([B, L, nK, headK])
@@ -277,8 +277,23 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let beta = MLXNN.sigmoid(b.asType(.float32))
         let state = cache.ssmState
             ?? MLXArray.zeros([B, nV, headV, headK], dtype: Self.stateDType)
-        let (y, newState) = GatedDelta.update(q: qN, k: kN, v: v, g: g, beta: beta, state: state)
-        cache.ssmState = newState
+        let y: MLXArray
+        if captureMid && L == 2 {
+            // Two tokens fed for speculative verification: step them one at a time so the state
+            // after the first is available if the second turns out to be a wrong guess.
+            func slice(_ a: MLXArray, _ i: Int) -> MLXArray { a[0..., i..<(i + 1)] }
+            let (y0, s1) = GatedDelta.update(q: slice(qN, 0), k: slice(kN, 0), v: slice(v, 0),
+                                             g: slice(g, 0), beta: slice(beta, 0), state: state)
+            let (y1, s2) = GatedDelta.update(q: slice(qN, 1), k: slice(kN, 1), v: slice(v, 1),
+                                             g: slice(g, 1), beta: slice(beta, 1), state: s1)
+            y = concatenated([y0, y1], axis: 1)
+            cache.ssmStateMid = s1
+            cache.ssmState = s2
+        } else {
+            let (y1, newState) = GatedDelta.update(q: qN, k: kN, v: v, g: g, beta: beta, state: state)
+            y = y1
+            cache.ssmState = newState
+        }
 
         let gated = headNorm(y) * MLXNN.silu(z)                     // per-head RMSNorm, gated by silu(z)
         return outProj(gated.reshaped([B * L, valueDim])).reshaped([B, L, Dm])
@@ -286,7 +301,8 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
 
     /// Depthwise causal conv (kernel K) that continues from the K-1 inputs cached from the
     /// previous chunk / decode step instead of restarting from zero padding every call.
-    private func bonsaiCausalConv(_ x: MLXArray, w: MLXArray, cache: Qwen35LayerCache) -> MLXArray {
+    private func bonsaiCausalConv(_ x: MLXArray, w: MLXArray, cache: Qwen35LayerCache,
+                                  captureMid: Bool = false) -> MLXArray {
         // x: [B, L, C]; w: [C, K, 1]
         let B = x.shape[0], L = x.shape[1], C = x.shape[2]
         let K = w.shape[1]
@@ -295,6 +311,7 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let padded = concatenated([history, x], axis: 1)  // [B, L+K-1, C]
         // Last K-1 rows; contiguous() so the state doesn't pin the whole padded chunk.
         cache.convState = contiguous(padded[0..., L..., 0...])
+        if captureMid && L == 2 { cache.convStateMid = contiguous(padded[0..., 1..<K, 0...]) }
         var out = padded[0..., 0..<L, 0...] * wk[0..., 0]
         for i in 1..<K {
             out = out + padded[0..., i..<(i + L), 0...] * wk[0..., i]
@@ -340,14 +357,15 @@ final class Qwen35DecoderLayer: Module, @unchecked Sendable {
     func callAsFunction(
         _ x: MLXArray,
         mask: MLXFast.ScaledDotProductAttentionMaskMode,
-        cache: Qwen35LayerCache
+        cache: Qwen35LayerCache,
+        captureMid: Bool = false
     ) -> MLXArray {
         let normed = inputLayerNorm(x)
         let attnOut: MLXArray
         if let attn = selfAttn {
             attnOut = attn(normed, mask: mask, cache: cache)
         } else if let attn = linearAttn {
-            attnOut = attn(normed, cache: cache)
+            attnOut = attn(normed, cache: cache, captureMid: captureMid)
         } else {
             attnOut = MLXArray.zeros(x.shape).asType(x.dtype)
         }
@@ -400,7 +418,9 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
         super.init()
     }
 
-    func makeCache() -> Qwen35Cache { Qwen35Cache(layerCount: config.numHiddenLayers) }
+    func makeCache(withMTP: Bool = false) -> Qwen35Cache {
+        Qwen35Cache(layerCount: config.numHiddenLayers, withMTP: withMTP)
+    }
 
     /// Attention mask for `length` new tokens appended after `offset` cached ones.
     static func attentionMask(length L: Int, offset: Int) -> MLXFast.ScaledDotProductAttentionMaskMode {
@@ -414,12 +434,12 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
     }
 
     /// Run all decoder layers, updating `cache`. Returns hidden states `[B, L, hidden]`.
-    private func hidden(_ tokens: MLXArray, cache: Qwen35Cache) -> MLXArray {
+    private func hidden(_ tokens: MLXArray, cache: Qwen35Cache, captureMid: Bool = false) -> MLXArray {
         let L = tokens.shape[1]
         var h = embedTokens(tokens)
         let mask = Self.attentionMask(length: L, offset: cache.tokenCount)
         for (i, layer) in layers.enumerated() {
-            h = layer(h, mask: mask, cache: cache.layers[i])
+            h = layer(h, mask: mask, cache: cache.layers[i], captureMid: captureMid)
         }
         cache.advance(by: L)
         return h
@@ -430,10 +450,54 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
     func hiddenStates(_ tokens: MLXArray, cache: Qwen35Cache) -> MLXArray { hidden(tokens, cache: cache) }
     func finalNorm(_ h: MLXArray) -> MLXArray { norm(h) }
     func embed(_ tokens: MLXArray) -> MLXArray { embedTokens(tokens) }
+    private var draftHeads: [Int: PrismPackedEmbedding] = [:]
+
+    /// Logits over only the first `limit` vocabulary entries, for drafting. Token ids follow BPE merge
+    /// order, so low ids are the common tokens; reading a small slice of the (tied) embedding table instead
+    /// of all 248k rows cuts the draft step's memory traffic by the same factor. A draft outside the slice
+    /// is simply never proposed. Falls back to the full head when the embedding isn't tied.
+    func draftLogits(fromNormed h: MLXArray, limit: Int) -> MLXArray {
+        guard lmHeadEmbed != nil, limit > 0, limit < config.vocabSize else { return logits(fromNormed: h) }
+        if draftHeads[limit] == nil {
+            let e = embedTokens
+            let head = PrismPackedEmbedding(
+                weight: e.weight[0..<limit], scales: e.scales[0..<limit], biases: e.biases[0..<limit],
+                block: e.block, signs: e.signs, spec: e.spec)
+            MLX.eval(head.weight, head.scales, head.biases)
+            draftHeads[limit] = head
+        }
+        return draftHeads[limit]!.asLMHead(h)
+    }
+
     /// Vocabulary logits for already final-normed hidden states `[..., hidden]`.
     func logits(fromNormed h: MLXArray) -> MLXArray {
         if let head = lmHead { return head(h) }
         return lmHeadEmbed!.asLMHead(h)
+    }
+
+    /// A decode step for one or two tokens (`[1, L]`, L ≤ 2) that also returns the final-normed hidden
+    /// state of every position. With two tokens and `captureMid`, the state after the first is kept so
+    /// `rollBackLast` can undo the second.
+    func decodeStep(_ tokens: MLXArray, cache: Qwen35Cache, captureMid: Bool = false)
+        -> (logits: MLXArray, hidden: MLXArray)
+    {
+        let h = norm(hidden(tokens, cache: cache, captureMid: captureMid))     // [1, L, H]
+        return (logits(fromNormed: h[0]), h)                                    // logits [L, vocab]
+    }
+
+    /// Undo the last of two tokens fed with `captureMid`: recurrent layers return to the state after the
+    /// first token, full-attention layers drop the last cached key/value row.
+    func rollBackLast(cache: Qwen35Cache) {
+        for (i, layer) in cache.layers.enumerated() {
+            let isLinear = config.layerTypes.count > i && config.layerTypes[i] == "linear_attention"
+            if isLinear {
+                layer.ssmState = layer.ssmStateMid
+                layer.convState = layer.convStateMid
+            } else {
+                layer.trimKV(by: 1)
+            }
+        }
+        cache.rewind(by: 1)
     }
 
     /// Feed tokens through the model only to populate `cache` (no final norm / LM head).
@@ -455,29 +519,33 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
         }
     }
 
-    func allArrays() -> [MLXArray] {
-        var arrays: [MLXArray] = []
-        func collect(_ m: Module) {
-            let mirror = Mirror(reflecting: m)
-            for child in mirror.children {
-                switch child.value {
-                case let arr as MLXArray:
-                    arrays.append(arr)
-                case let mod as Module:
-                    collect(mod)
-                case let mods as [Module]:
-                    mods.forEach { collect($0) }
-                default:
-                    // Unwrap Optional<Module> via reflection
-                    let cm = Mirror(reflecting: child.value)
-                    if cm.displayStyle == .optional,
-                       let wrapped = cm.children.first?.value as? Module {
-                        collect(wrapped)
-                    }
+    func allArrays() -> [MLXArray] { collectModuleArrays(self) }
+}
+
+/// Every array held by `root` and its child modules (found by reflection; these modules keep plain
+/// stored properties rather than MLX's parameter dictionaries).
+func collectModuleArrays(_ root: Module) -> [MLXArray] {
+    var arrays: [MLXArray] = []
+    func collect(_ m: Module) {
+        let mirror = Mirror(reflecting: m)
+        for child in mirror.children {
+            switch child.value {
+            case let arr as MLXArray:
+                arrays.append(arr)
+            case let mod as Module:
+                collect(mod)
+            case let mods as [Module]:
+                mods.forEach { collect($0) }
+            default:
+                // Unwrap Optional<Module> via reflection
+                let cm = Mirror(reflecting: child.value)
+                if cm.displayStyle == .optional,
+                   let wrapped = cm.children.first?.value as? Module {
+                    collect(wrapped)
                 }
             }
         }
-        collect(self)
-        return arrays
     }
+    collect(root)
+    return arrays
 }
