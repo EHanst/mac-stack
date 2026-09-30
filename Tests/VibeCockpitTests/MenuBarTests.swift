@@ -188,6 +188,28 @@ struct LaunchModeTests {
     }
 }
 
+@Suite("Quit policy")
+struct QuitPolicyTests {
+    @Test func cmdQKeepsRunning() {
+        #expect(QuitPolicy.decide(explicitQuit: false, reason: .other) == .hideAndKeepRunning)
+    }
+    @Test func menuBarQuitTerminates() {
+        #expect(QuitPolicy.decide(explicitQuit: true, reason: .other) == .terminate)
+    }
+    @Test func systemLogoutShutdownAndRestartAreNeverBlocked() {
+        for reason in [QuitReason.logout, .shutdown, .restart] {
+            #expect(QuitPolicy.decide(explicitQuit: false, reason: reason) == .terminate)
+        }
+    }
+    @Test func reasonComesFromTheQuitAppleEvent() {
+        #expect(QuitReason(appleEventCode: nil) == .other)
+        #expect(QuitReason(appleEventCode: 0x7368_7574) == .shutdown)  // 'shut'
+        #expect(QuitReason(appleEventCode: 0x7265_7374) == .restart)   // 'rest'
+        #expect(QuitReason(appleEventCode: 0x726C_676F) == .logout)    // 'rlgo'
+        #expect(QuitReason(appleEventCode: 0x6162_6364) == .other)
+    }
+}
+
 private func release(_ tag: String, status: Int = 200, url: String = "https://github.com/EHanst/mac-stack/releases/tag/v9",
                      draft: Bool = false, prerelease: Bool = false) -> UpdateChecker.Fetch {
     { req in

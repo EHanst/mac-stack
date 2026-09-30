@@ -75,7 +75,10 @@ struct MenuBarContent: View {
         }
         .disabled(updates.status == .checking)
         Divider()
-        Button("Quit VibeCockpit") { NSApplication.shared.terminate(nil) }
+        Button("Quit VibeCockpit (stops the server)") {
+            AppDelegate.quitRequested = true
+            NSApplication.shared.terminate(nil)
+        }
             .keyboardShortcut("q")
     }
 }
