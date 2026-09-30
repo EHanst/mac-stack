@@ -116,9 +116,20 @@ struct BriefWorkbenchView: View {
 
     private func editor(_ brief: Brief) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            CappedScroll { SidecarRailView() }
+            CappedScroll {
+                VStack(alignment: .leading, spacing: 8) {
+                    BrainstormBanner()
+                    SidecarRailView()
+                }
+            }
             HStack {
                 Text("Input").font(.mtLabelLarge)
+                Button("⌘↩ to improve") { services.improve.open(brief, studio: services.promptStudio) }
+                    .buttonStyle(.plain)
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(brief.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Improve this brief (Command-Return)")
                 Text("~\(PromptTokens.estimate(brief.input)) tokens")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
             }

@@ -62,6 +62,14 @@ struct PromptOptimizerTests {
         #expect(PromptLiterals.missing(from: original, in: "Rename the property, keep the setting").count == 3)
     }
 
+    @Test("a quoted word may change case when the rewrite moves it; code stays case-exact")
+    func quotedCaseInsensitive() {
+        let quoted = "trigger the \"improve\" button"
+        #expect(PromptLiterals.missing(from: quoted, in: "Improve button fires on enter.").isEmpty)
+        #expect(PromptLiterals.missing(from: quoted, in: "Fires on enter.").contains("\"improve\""))
+        #expect(PromptLiterals.missing(from: "call `loadAll`", in: "call loadall").contains("`loadAll`"))
+    }
+
     @Test("short contents and fenced blocks keep their wrapper")
     func wrapperStrictCases() {
         #expect(PromptLiterals.missing(from: "set `x` to 5", in: "set x to 5 (fix the axis)").contains("`x`"))

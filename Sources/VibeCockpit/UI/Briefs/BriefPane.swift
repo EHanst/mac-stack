@@ -12,12 +12,12 @@ struct BriefPane: View {
     @Environment(AppServices.self) private var services
     @State private var copied = false
     @State private var showVersions = false
-    @State private var showImprove = false
-    @State private var improveID: String?
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?
 
     private var model: BriefWorkbenchModel { services.briefs }
+    private var improve: BriefImproveModel { services.improve }
+    private var feedback: BriefFeedbackModel { services.feedback }
 
     var body: some View {
         if let brief = model.selected, let compiled = model.compiled {
@@ -35,6 +35,7 @@ struct BriefPane: View {
                         }
                     }
                 }
+                BriefFeedbackBar(brief: brief)
                 copyBar
                 if let exportMessage {
                     Text(exportMessage).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
@@ -44,7 +45,10 @@ struct BriefPane: View {
             .sheet(isPresented: $showVersions) {
                 BriefVersionsSheet(brief: brief, onRestore: { model.restoreVersion($0) }, onClose: { showVersions = false })
             }
-            .sheet(isPresented: $showImprove) { improveSheet(brief) }
+            .sheet(isPresented: Binding(
+                get: { improve.presentedBriefID == brief.id },
+                set: { if !$0 { improve.close() } }
+            )) { improveSheet(brief) }
             .task(id: model.selectedID) { exportMessage = nil; exportRoots = await model.exportRoots() }
             .background(Color.mtSurfaceContainerLowest)
         } else {
@@ -88,7 +92,7 @@ struct BriefPane: View {
                 Text("~\(PromptTokens.estimate(brief.effectiveBody)) tokens")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 Spacer()
-                Button("Improve") { openImprove(brief) }
+                Button("Improve") { improve.open(brief, studio: services.promptStudio) }
                     .disabled(brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             EchoGuardedEditor(external: brief.effectiveBody) { model.setBody($0) }
@@ -117,31 +121,27 @@ struct BriefPane: View {
         }
     }
 
-    private func openImprove(_ brief: Brief) {
-        improveID = brief.id
-        services.promptStudio.startOptimize(draft: brief.effectiveBody, mode: .improve,
-                                            intent: PromptEngineer.Intent.general.rawValue)
-        showImprove = true
-    }
-
     private func improveSheet(_ brief: Brief) -> some View {
         let draft = brief.effectiveBody
-        let id = improveID
+        let id = brief.id
         return OptimizeReviewSheet(
             studio: services.promptStudio,
             draft: draft,
-            onAccept: { if let id { model.setBody($0, briefID: id) }; services.promptStudio.clearUndo(); showImprove = false },
+            onAccept: {
+                model.setBody($0, briefID: id)
+                services.promptStudio.clearUndo()
+                improve.close()
+            },
             onExpand: { services.promptStudio.startOptimize(draft: draft, mode: .expand,
                                                            intent: PromptEngineer.Intent.general.rawValue) },
             onAskQuestions: { questions in
-                if let id { model.appendToBody(questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), briefID: id) }
+                model.appendToBody(questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), briefID: id)
                 services.promptStudio.dismissReview()
-                showImprove = false
+                improve.close()
             },
             onClose: {
-                improveID = nil
                 services.promptStudio.dismissReview()
-                showImprove = false
+                improve.close()
             })
     }
 

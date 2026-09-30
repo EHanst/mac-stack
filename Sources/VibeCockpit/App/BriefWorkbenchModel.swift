@@ -131,6 +131,17 @@ public final class BriefWorkbenchModel {
         }
     }
 
+    /// Restores both the body and its linked-input snapshot in one call. Used by the undo stack.
+    /// If `text` is nil, the brief is relinked to its input (body cleared, inputAtEdit cleared).
+    public func restoreBody(_ text: String?, inputAtEdit: String?, briefID: String) {
+        guard briefs.contains(where: { $0.id == briefID }) else { return }
+        mutate(id: briefID) { brief in
+            brief.body = text
+            brief.inputAtEdit = inputAtEdit
+            brief.updatedAt = Date()
+        }
+    }
+
     public func rebuildFromInput() {
         guard let brief = selected, brief.body != nil else { return }
         snapshotIfChanged(id: brief.id)
