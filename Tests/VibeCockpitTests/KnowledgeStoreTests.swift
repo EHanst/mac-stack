@@ -122,3 +122,72 @@ struct KnowledgeStoreTests {
         #expect(await b.didReset == false)
     }
 }
+
+@Suite("KnowledgeSignals")
+struct KnowledgeSignalTests {
+    func makeStore() -> KnowledgeStore {
+        KnowledgeStore(dbURL: KnowledgeStub.tempURL(), dimension: KnowledgeStub.dim, embedder: KnowledgeStub.embedder())
+    }
+
+    @Test("accepted raises weight, rejected lowers it")
+    func adjusts() async throws {
+        let s = makeStore()
+        let e = KnowledgeEntry(kind: .technique, text: "note")
+        try await s.addAll([e])
+        try await s.applySignal(ids: [e.id], outcome: .accepted)
+        #expect(abs(try await s.entry(id: e.id)!.weight - 1.15) < 0.0001)
+        try await s.applySignal(ids: [e.id], outcome: .rejected)
+        #expect(abs(try await s.entry(id: e.id)!.weight - 0.92) < 0.0001)
+        try await s.applySignal(ids: [e.id], outcome: .edited)
+        #expect(abs(try await s.entry(id: e.id)!.weight - 0.92) < 0.0001)
+    }
+
+    @Test("weight is clamped to the allowed range")
+    func clamps() async throws {
+        let s = makeStore()
+        let e = KnowledgeEntry(kind: .technique, text: "clamp me")
+        try await s.addAll([e])
+        for _ in 0..<40 { try await s.applySignal(ids: [e.id], outcome: .rejected) }
+        #expect(try await s.entry(id: e.id)!.weight == KnowledgeLimits.weightRange.lowerBound)
+        for _ in 0..<80 { try await s.applySignal(ids: [e.id], outcome: .accepted) }
+        #expect(try await s.entry(id: e.id)!.weight == KnowledgeLimits.weightRange.upperBound)
+    }
+
+    @Test("a signal for an unknown id is ignored")
+    func unknownID() async throws {
+        let s = makeStore()
+        try await s.applySignal(ids: ["nope"], outcome: .accepted)
+    }
+}
+
+@Suite("KnowledgePacksInStore")
+struct KnowledgePackStoreTests {
+    func makeStore() -> KnowledgeStore {
+        KnowledgeStore(dbURL: KnowledgeStub.tempURL(), dimension: KnowledgeStub.dim, embedder: KnowledgeStub.embedder())
+    }
+    let info = KnowledgePackInfo(id: "p1", name: "Pack One", version: 1, license: "MIT", attribution: "Someone")
+
+    @Test("summaries count a pack's entries and show enabled state")
+    func summaries() async throws {
+        let s = makeStore()
+        try await s.registerPack(info)
+        try await s.addAll([KnowledgeEntry(kind: .technique, pack: "p1", text: "a"),
+                            KnowledgeEntry(kind: .technique, pack: "p1", text: "b")])
+        var sum = try await s.packSummaries()
+        #expect(sum == [KnowledgePackSummary(info: info, count: 2, enabled: true)])
+        try await s.setPackEnabled(false, pack: "p1")
+        sum = try await s.packSummaries()
+        #expect(sum.first?.enabled == false)
+    }
+
+    @Test("removing a pack deletes its entries and its row")
+    func removes() async throws {
+        let s = makeStore()
+        try await s.registerPack(info)
+        try await s.addAll([KnowledgeEntry(kind: .technique, pack: "p1", text: "a"),
+                            KnowledgeEntry(kind: .exemplar, text: "mine")])
+        #expect(try await s.removePack("p1") == 1)
+        #expect(try await s.all().map(\.text) == ["mine"])
+        #expect(try await s.packSummaries().isEmpty)
+    }
+}

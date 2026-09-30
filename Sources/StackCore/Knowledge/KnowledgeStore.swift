@@ -17,6 +17,20 @@ extension Array where Element == Float {
     var knowledgeBlob: Data { withUnsafeBufferPointer { Data(buffer: $0) } }
 }
 
+public struct KnowledgePackInfo: Codable, Sendable, Equatable {
+    public var id: String, name: String, version: Int, license: String, attribution: String
+    public init(id: String, name: String, version: Int, license: String, attribution: String) {
+        self.id = id; self.name = name; self.version = version; self.license = license; self.attribution = attribution
+    }
+}
+
+public struct KnowledgePackSummary: Sendable, Equatable {
+    public var info: KnowledgePackInfo
+    public var count: Int
+    /// False when every entry of the pack is disabled.
+    public var enabled: Bool
+}
+
 /// The sidecar model's own lasting knowledge: prompt-engineering notes and the user's accepted briefs.
 /// A separate file and a separate type from `VectorStore`, so the code index and this never mix.
 public actor KnowledgeStore {
@@ -282,6 +296,72 @@ public actor KnowledgeStore {
         let before = (try? embeddedCount()) ?? 0
         await embed(rows, batch: batch)
         return max(0, ((try? embeddedCount()) ?? 0) - before)
+    }
+
+    // MARK: Signals
+
+    public func applySignal(ids: [String], outcome: SignalOutcome) throws {
+        try open()
+        let factor: Double = switch outcome { case .accepted: 1.15; case .edited: 1.0; case .rejected: 0.8 }
+        let range = KnowledgeLimits.weightRange
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            for id in ids {
+                try run("""
+                    INSERT INTO signals(id, entry_id, outcome, created)
+                    SELECT ?, id, ?, ? FROM entries WHERE id = ?;
+                    """, [.text(UUID().uuidString), .text(outcome.rawValue), .double(Date().timeIntervalSince1970), .text(id)])
+                try run("UPDATE entries SET weight = MIN(?, MAX(?, weight * ?)) WHERE id = ?;",
+                        [.double(range.upperBound), .double(range.lowerBound), .double(factor), .text(id)])
+            }
+            try exec("COMMIT;")
+        } catch {
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+            throw error
+        }
+    }
+
+    // MARK: Packs
+
+    public func registerPack(_ info: KnowledgePackInfo) throws {
+        try open()
+        try run("INSERT OR REPLACE INTO packs(id, name, version, license, attribution) VALUES(?,?,?,?,?);",
+                [.text(info.id), .text(info.name), .int(Int64(info.version)), .text(info.license), .text(info.attribution)])
+    }
+
+    public func packSummaries() throws -> [KnowledgePackSummary] {
+        try open()
+        return try query("""
+            SELECT p.id, p.name, p.version, p.license, p.attribution,
+                   (SELECT count(*) FROM entries e WHERE e.pack = p.id),
+                   (SELECT count(*) FROM entries e WHERE e.pack = p.id AND e.enabled = 1)
+            FROM packs p ORDER BY p.name;
+            """) { s in
+            let count = Int(sqlite3_column_int(s, 5)), on = Int(sqlite3_column_int(s, 6))
+            return KnowledgePackSummary(
+                info: KnowledgePackInfo(id: kText(s, 0), name: kText(s, 1), version: Int(sqlite3_column_int(s, 2)),
+                                        license: kText(s, 3), attribution: kText(s, 4)),
+                count: count, enabled: count == 0 || on > 0)
+        }
+    }
+
+    public func packEntryIDs(pack: String) throws -> Set<String> {
+        try open()
+        return Set(try query("SELECT id FROM entries WHERE pack = ?;", [.text(pack)]) { kText($0, 0) })
+    }
+
+    public func setPackEnabled(_ on: Bool, pack: String) throws {
+        try open()
+        try run("UPDATE entries SET enabled = ? WHERE pack = ?;", [.int(on ? 1 : 0), .text(pack)])
+    }
+
+    @discardableResult
+    public func removePack(_ id: String) throws -> Int {
+        try open()
+        let ids = try packEntryIDs(pack: id)
+        try delete(ids: Array(ids))
+        try run("DELETE FROM packs WHERE id = ?;", [.text(id)])
+        return ids.count
     }
 
     // MARK: SQLite plumbing
