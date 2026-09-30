@@ -118,6 +118,7 @@ public final class AppServices {
             }
             return out
         })
+        let briefModel = self.briefs
         let externals = externalServers, requestLog = self.requestLog, governor = self.governor
         self.diagnostics = DiagnosticsModel(log: requestLog) {
             try await AppServices.makeSupportBundle(
@@ -135,6 +136,7 @@ public final class AppServices {
             await host.setProjectTools { await workspaces.tools() }
             await host.setWorkspaceOpener { try await workspaces.add($0) }
             // Other apps see your own prompts plus project prompts you approved; nothing else.
+            await host.setBriefProvider { await briefModel.allBriefs() }
             await host.setPromptProvider { await promptLibrary.userPrompts() + projectPrompts.approvedPrompts() }
         }
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))

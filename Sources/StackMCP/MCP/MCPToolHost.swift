@@ -52,6 +52,7 @@ public actor MCPToolHost {
     private var projectTools: (@Sendable () async -> [any AgentToolHandler])?
     private var externalTools: (@Sendable () async -> [any AgentToolHandler])?
     private var promptProvider: (@Sendable () async -> [SavedPrompt])?
+    private var briefProvider: (@Sendable () async -> [Brief])?
     private var workspaceOpener: (@Sendable (URL) async throws -> Void)?
     private let log = Logger(subsystem: "com.vibecockpit", category: "MCPToolHost")
 
@@ -104,6 +105,9 @@ public actor MCPToolHost {
     /// The saved prompts offered to apps allowed to read them (MCP `prompts/list` and `prompts/get`).
     public func setPromptProvider(_ provider: (@Sendable () async -> [SavedPrompt])?) { promptProvider = provider }
 
+    /// The briefs offered to apps allowed to read them (`list_briefs`, `get_brief`).
+    public func setBriefProvider(_ provider: (@Sendable () async -> [Brief])?) { briefProvider = provider }
+
     fileprivate func prompts() async -> [SavedPrompt] { await promptProvider?() ?? [] }
 
     public func allTools() async -> [any AgentToolHandler] {
@@ -113,6 +117,7 @@ public actor MCPToolHost {
             tools += [ListModelsTool(gateway: gateway), ChatTool(gateway: gateway), EmbedTool(gateway: gateway),
                        OptimizePromptTool(inference: inference)]
         }
+        if let briefProvider { tools += [ListBriefsTool(provider: briefProvider), GetBriefTool(provider: briefProvider)] }
         return tools + workspaceTools + (await projectTools?() ?? []) + (await externalTools?() ?? [])
     }
 

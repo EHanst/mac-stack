@@ -89,6 +89,9 @@ public final class BriefWorkbenchModel {
         return out.warnings.contains { $0.code == .emptyGoal } ? "" : out.text
     }
 
+    /// Every saved brief, with pending edits written first. For outside readers such as MCP.
+    public func allBriefs() async -> [Brief] { await flushNow(); return await store.all() }
+
     /// Waits for pending edits to reach disk on their normal schedule.
     public func flush() async { for task in Array(pendingSaves.values) { await task.value } }
 
