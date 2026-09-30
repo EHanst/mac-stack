@@ -22,7 +22,7 @@ public struct MenuBarStatus: Equatable, Sendable {
         models: [ModelInfo], isGenerating: Bool, onboardingNeeded: Bool, indexing: Bool = false
     ) -> MenuBarStatus {
         if onboardingNeeded {
-            return MenuBarStatus(level: .attention, title: "Set up VibeCockpit",
+            return MenuBarStatus(level: .attention, title: "Set up \(AppBrand.name)",
                                  detail: "Open the app to choose a model.", symbolName: "exclamationmark.circle")
         }
         let chat = models.filter { $0.capabilities.contains(.textGeneration) }

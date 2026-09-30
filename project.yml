@@ -68,6 +68,8 @@ targets:
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: Kokoro
+        CFBundleName: Kokoro
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.app

@@ -58,7 +58,7 @@ struct DiagnosticsCard: View {
 
     private func export() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "VibeCockpit-support-\(Date().formatted(.iso8601.year().month().day())).json"
+        panel.nameFieldStringValue = "\(AppBrand.name)-support-\(Date().formatted(.iso8601.year().month().day())).json"
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Task { await model.exportBundle(to: url) }

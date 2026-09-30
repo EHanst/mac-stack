@@ -49,7 +49,7 @@ struct MenuBarContent: View {
         }
         Divider()
 
-        Button("Open VibeCockpit") {
+        Button("Open \(AppBrand.name)") {
             NSApp.activate(ignoringOtherApps: true)
             openWindow(id: "main")
         }
@@ -75,7 +75,7 @@ struct MenuBarContent: View {
         }
         .disabled(updates.status == .checking)
         Divider()
-        Button("Quit VibeCockpit (stops the server)") {
+        Button("Quit \(AppBrand.name) (stops the server)") {
             AppDelegate.quitRequested = true
             NSApplication.shared.terminate(nil)
         }

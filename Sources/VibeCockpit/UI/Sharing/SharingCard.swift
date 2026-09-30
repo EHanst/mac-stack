@@ -54,7 +54,7 @@ struct SharingCard: View {
             Group {
                 switch sharing.status {
                 case .off:
-                    Text("Off. Nothing outside VibeCockpit can reach your models. Turn it on to give tools like Cursor or scripts an OpenAI-compatible address on this Mac.")
+                    Text("Off. Nothing outside \(AppBrand.name) can reach your models. Turn it on to give tools like Cursor or scripts an OpenAI-compatible address on this Mac.")
                 case .starting:
                     Text("Starting…")
                 case .running:

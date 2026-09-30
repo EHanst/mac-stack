@@ -164,10 +164,10 @@ struct MainLayout: View {
                     .foregroundStyle(Color.mtOnPrimary)
             }
             VStack(alignment: .leading, spacing: 0) {
-                Text("VibeCockpit")
+                Text(AppBrand.name)
                     .font(.mtTitleSmall)
                     .foregroundStyle(Color.mtOnSurface)
-                Text("AI Coding IDE")
+                Text(AppBrand.tagline)
                     .font(.mtLabelSmall)
                     .foregroundStyle(Color.mtOnSurfaceVariant)
             }
@@ -310,7 +310,7 @@ struct SettingsView: View {
             Text("Settings")
                 .font(.mtHeadlineSmall)
                 .foregroundStyle(Color.mtOnSurface)
-            Text("Configure VibeCockpit's inference, indexing and workspace behaviour.")
+            Text("Configure \(AppBrand.name)'s inference, indexing and workspace behaviour.")
                 .font(.mtBodyMedium)
                 .foregroundStyle(Color.mtOnSurfaceVariant)
         }
@@ -389,11 +389,11 @@ struct SettingsView: View {
                 }
                 MTDivider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Toggle("Launch VibeCockpit at login", isOn: Binding(
+                    Toggle("Launch \(AppBrand.name) at login", isOn: Binding(
                         get: { loginItem.isOn },
                         set: { loginItem.setEnabled($0) }))
                         .disabled(!loginItem.isAvailable)
-                    Text("VibeCockpit keeps running in the menu bar when you close its window, so other apps can keep using your local model.")
+                    Text("\(AppBrand.name) keeps running in the menu bar when you close its window, so other apps can keep using your local model.")
                         .font(.mtBodySmall)
                         .foregroundStyle(Color.mtOnSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)
@@ -406,7 +406,7 @@ struct SettingsView: View {
                     Toggle("Check for updates daily", isOn: Binding(
                         get: { updates.automaticChecks },
                         set: { updates.setAutomaticChecks($0) }))
-                    Text("Off by default. VibeCockpit only asks GitHub whether a newer version exists when you press \"Check now\" or turn this on (and never under \"Only on this Mac\"). Nothing about you or your work is sent, and it never installs anything by itself.")
+                    Text("Off by default. \(AppBrand.name) only asks GitHub whether a newer version exists when you press \"Check now\" or turn this on (and never under \"Only on this Mac\"). Nothing about you or your work is sent, and it never installs anything by itself.")
                         .font(.mtBodySmall)
                         .foregroundStyle(Color.mtOnSurfaceVariant)
                         .fixedSize(horizontal: false, vertical: true)

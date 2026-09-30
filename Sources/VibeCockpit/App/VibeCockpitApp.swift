@@ -11,7 +11,7 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set by the menu-bar Quit item, the one in-app way to stop the app.
     static var quitRequested = false
-    private static let mainWindowTitle = "VibeCockpit"
+    private static let mainWindowTitle = AppBrand.name
     /// `keyQuitReason` ('why?') on the quit Apple event; says whether the system is logging out etc.
     private static let quitReasonKeyword: AEKeyword = 0x7768_793F
 
@@ -61,10 +61,10 @@ enum AppLaunch {
 extension AppLaunch {
     /// SwiftUI opens the main window at launch and offers no supported way to skip that (the
     /// `.suppressed` launch behaviour did not stop it here), so close it as soon as it exists.
-    /// "Open VibeCockpit" in the menu bar brings it back.
+    /// "Open Kokoro" in the menu bar brings it back.
     @MainActor static func closeMainWindowWhenItAppears() async {
         for _ in 0..<60 {
-            if let window = NSApp.windows.first(where: { $0.title == "VibeCockpit" }) {
+            if let window = NSApp.windows.first(where: { $0.title == AppBrand.name }) {
                 window.close()
                 return
             }
@@ -110,7 +110,7 @@ struct VibeCockpitApp: App {
     @AppStorage(AppTheme.storageKey) private var themeChoice = AppTheme.default.rawValue
 
     var body: some Scene {
-        Window("VibeCockpit", id: "main") {
+        Window(AppBrand.name, id: "main") {
             ContentView()
                 .appTheme(AppTheme(stored: themeChoice))
                 .environment(coordinator)

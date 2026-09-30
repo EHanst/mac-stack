@@ -70,7 +70,7 @@ struct OnboardingView: View {
                     .font(.system(size: 38, weight: .semibold))
                     .foregroundStyle(Color.mtOnPrimaryContainer)
             }
-            Text("Welcome to VibeCockpit")
+            Text("Welcome to \(AppBrand.name)")
                 .font(.mtHeadlineMedium)
                 .foregroundStyle(Color.mtOnSurface)
             Text("Your own AI, running on this Mac.")

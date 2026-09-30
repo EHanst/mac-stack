@@ -85,7 +85,7 @@ struct IntentPane: View {
                 .font(.system(size: 20))
                 .foregroundStyle(Color.mtPrimary)
             VStack(alignment: .leading, spacing: 1) {
-                Text("VibeCockpit")
+                Text(AppBrand.name)
                     .font(.mtTitleMedium)
                     .foregroundStyle(Color.mtOnSurface)
                 generationStatus

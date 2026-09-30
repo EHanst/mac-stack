@@ -265,7 +265,7 @@ private struct ModelCard: View {
             Button("Remove", role: .destructive) { onRemove() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This unregisters the provider from VibeCockpit. No files are deleted.")
+            Text("This unregisters the provider from \(AppBrand.name). No files are deleted.")
         }
     }
 }

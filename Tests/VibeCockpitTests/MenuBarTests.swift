@@ -15,7 +15,7 @@ struct MenuBarStatusTests {
     @Test("first run: asks the user to open the app")
     func onboarding() {
         let s = MenuBarStatus.make(models: [], isGenerating: false, onboardingNeeded: true)
-        #expect(s.level == .attention && s.title == "Set up VibeCockpit")
+        #expect(s.level == .attention && s.title == "Set up Kokoro")
     }
 
     @Test("a healthy local chat model is 'Ready' and says it runs on this Mac")
