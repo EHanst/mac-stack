@@ -6,7 +6,8 @@ import StackCore
 import SwiftUI
 import AppKit
 
-/// Right column: exactly what the frontier model will receive, plus target, editable brief, Improve, and Copy.
+/// Right column: the editable brief (linked to the input or hand-edited) plus its attachments, with target, Improve, and Copy.
+/// The model receives the compiled text (brief plus attachments), not this editor's raw contents.
 struct BriefPane: View {
     @Environment(AppServices.self) private var services
     @State private var copied = false
@@ -25,10 +26,14 @@ struct BriefPane: View {
                 meter(brief, compiled)
                 statusLine(brief)
                 editor(brief)
-                attachmentsFooter(brief)
-                ForEach(Array(compiled.warnings.enumerated()), id: \.offset) { _, w in
-                    Label(w.message, systemImage: "exclamationmark.triangle")
-                        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                CappedScroll(maxHeight: 160) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        attachmentsFooter(brief)
+                        ForEach(Array(compiled.warnings.enumerated()), id: \.offset) { _, w in
+                            Label(w.message, systemImage: "exclamationmark.triangle")
+                                .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                        }
+                    }
                 }
                 copyBar
                 if let exportMessage {

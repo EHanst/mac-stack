@@ -116,7 +116,7 @@ struct BriefWorkbenchView: View {
 
     private func editor(_ brief: Brief) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            SidecarRailView()
+            CappedScroll { SidecarRailView() }
             HStack {
                 Text("Input").font(.mtLabelLarge)
                 Text("~\(PromptTokens.estimate(brief.input)) tokens")
@@ -130,21 +130,47 @@ struct BriefWorkbenchView: View {
                 .frame(minHeight: 160, maxHeight: .infinity)
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-            ForEach(PromptLint.check(brief.input, context: .init(maxTokens: brief.target.tokenBudget))) { finding in
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(Color.mtOnSurfaceVariant)
-                    Text(finding.message).font(.mtBodySmall)
-                    // "Name the file" has no text worth inserting; a blank "File:" would only repeat.
-                    if let add = finding.suggestion, finding.rule != .noTarget {
-                        Button("Add") { model.appendToInput(add.trimmingCharacters(in: .whitespacesAndNewlines), briefID: brief.id) }
-                            .controlSize(.small)
-                    }
-                }
+            CappedScroll {
+                VStack(alignment: .leading, spacing: 4) { lintRows(brief) }
             }
-            ContextListView()
+            CappedScroll { ContextListView() }
         }
         .padding(16)
     }
 
+    @ViewBuilder
+    private func lintRows(_ brief: Brief) -> some View {
+        ForEach(PromptLint.check(brief.input, context: .init(maxTokens: brief.target.tokenBudget))) { finding in
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.circle").foregroundStyle(Color.mtOnSurfaceVariant)
+                Text(finding.message).font(.mtBodySmall)
+                // "Name the file" has no text worth inserting; a blank "File:" would only repeat.
+                if let add = finding.suggestion, finding.rule != .noTarget {
+                    Button("Add") { model.appendToInput(add.trimmingCharacters(in: .whitespacesAndNewlines), briefID: brief.id) }
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+}
+
+/// Only as tall as its content, up to `maxHeight`; beyond that it scrolls. Keeps short rows from
+/// leaving a gap and long ones from pushing the editor or copy bar out of view.
+struct CappedScroll<Content: View>: View {
+    var maxHeight: CGFloat = 220
+    @ViewBuilder var content: () -> Content
+    @State private var contentHeight: CGFloat = 0
+
+    var body: some View {
+        ScrollView {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { proxy in
+                    Color.clear.onChange(of: proxy.size.height, initial: true) { _, h in contentHeight = h }
+                })
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(contentHeight, maxHeight))
+    }
 }
 #endif
