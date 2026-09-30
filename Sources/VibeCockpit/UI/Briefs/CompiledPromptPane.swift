@@ -69,7 +69,7 @@ struct CompiledPromptPane: View {
     }
 
     private var copyBar: some View {
-        let empty = model.copyText(for: nil).isEmpty
+        let empty = !model.canCopy
         return HStack {
             Button { copy(nil) } label: { Label(copied ? "Copied" : "Copy", systemImage: "doc.on.doc") }
                 .buttonStyle(MTFilledButtonStyle())

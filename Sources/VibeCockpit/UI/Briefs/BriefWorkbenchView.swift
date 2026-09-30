@@ -26,12 +26,13 @@ struct BriefWorkbenchView: View {
         .background(Color.mtSurface)
         .sheet(isPresented: $improving) { improveSheet }
         .task { await model.reload() }
-        .onDisappear { Task { await model.flush() } }
+        .onDisappear { Task { await model.flushNow() } }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Picker("Brief", selection: Binding(get: { model.selectedID }, set: { model.select($0) })) {
+                if model.briefs.isEmpty { Text("No briefs").tag(String?.none) }
                 ForEach(model.briefs) { Text($0.title).tag(Optional($0.id)) }
             }
             .labelsHidden()
@@ -111,7 +112,7 @@ struct BriefWorkbenchView: View {
     private var improveSheet: some View {
         OptimizeReviewSheet(
             studio: services.promptStudio, draft: goalText,
-            onAccept: { model.setText($0, for: .goal); services.promptStudio.dismissReview(); improving = false },
+            onAccept: { model.setText($0, for: .goal); services.promptStudio.clearUndo(); improving = false },
             onExpand: { services.promptStudio.startOptimize(draft: goalText, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
             onAskQuestions: { questions in
                 model.setText(goalText + "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), for: .goal)
