@@ -27,7 +27,7 @@ public enum ContextRedactor {
             ("Google key", #"\bAIza[0-9A-Za-z_-]{35}"#, 0),
             ("bearer token", #"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}"#, 0),
             // `name = "value"`, `name: 'value'`, `"name": "value"` and `NAME=value` where name mentions a credential.
-            ("credential", "(?i)[A-Za-z0-9_.-]*" + keyword + #"[A-Za-z0-9_.-]*["']?\s*[:=]\s*(?:"(?!\[redacted)([^"\n]{6,})"|'(?!\[redacted)([^'\n]{6,})'|("# + unquoted + "))", 0),
+            ("credential", "(?i)[A-Za-z0-9_.-]{0,40}" + keyword + #"[A-Za-z0-9_.-]{0,40}["']?\s*[:=]\s*(?:"(?!\[redacted)([^"\n]{6,})"|'(?!\[redacted)([^'\n]{6,})'|("# + unquoted + "))", 0),
         ]
         return table.compactMap { kind, pattern, group in
             (try? NSRegularExpression(pattern: pattern)).map { Rule(kind: kind, regex: $0, group: group) }

@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import StackCore
 
 @Suite("ContextRedactor")
@@ -85,5 +86,19 @@ struct ContextRedactorTests {
         let once = ContextRedactor.redact(#"password = "hunter2hunter2""#)
         let twice = ContextRedactor.redact(once.text)
         #expect(twice.count == 0 && twice.text == once.text)
+    }
+
+    @Test("a long run of identifier characters does not make redaction slow")
+    func longRunIsFast() {
+        let start = Date()
+        _ = ContextRedactor.redact(String(repeating: "a", count: 20_000))
+        _ = ContextRedactor.redact(String(repeating: "ab.", count: 7_000))
+        #expect(Date().timeIntervalSince(start) < 2)
+    }
+
+    @Test("a long credential name still redacts its value")
+    func longNameStillRedacts() {
+        let out = ContextRedactor.redact(#"MY_SERVICE_API_KEY_PRODUCTION = "hunter2hunter2""#)
+        #expect(out.count == 1 && !out.text.contains("hunter2"))
     }
 }
