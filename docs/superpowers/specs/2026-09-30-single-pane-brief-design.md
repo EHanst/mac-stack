@@ -22,7 +22,7 @@ Key finding: with one free-text input and instant compile, the brief ≈ input +
 - Compiled text is never persisted.
 
 3. Layout
-- Center (BriefWorkbenchView): header unchanged (picker, New menu, delete), continuation status, KnowledgePromptView, then `BriefInputPane`: one large editor for `input`, ContextListView chips, SidecarRailView, PromptLint findings for the input.
+- Center (BriefWorkbenchView): header unchanged (picker, New menu, delete), continuation status, KnowledgePromptView, then the input pane, inlined in BriefWorkbenchView (no separate `BriefInputPane` type): one large editor for `input`, ContextListView chips, SidecarRailView, PromptLint findings for the input.
 - Right (CompiledPromptPane → renamed/reworked as `BriefPane`): target picker, token meter, status line "Linked to input" / "Edited · Rebuild from input", toolbar with **Improve**, editable body editor (shows effectiveBody), read-only attachments footer listing included context items (ref + tokens + mode), warnings, existing copy bar (Copy, Copy for…, Save to project, Versions).
 - Context file contents are NOT in the editable text.
 - Both editors reuse the echo-guard editor (rename `SectionTextEditor` → `EchoGuardedEditor`, move to its own file) to avoid cursor jumps.
@@ -35,7 +35,7 @@ Key finding: with one free-text input and instant compile, the brief ≈ input +
 - Restoring a version restores both input and body.
 
 5. Sidecar retargeted
-- BriefSidecar prompts drop per-section tags; the brief is sent as `<brief>` with input (and body if edited). Interview answers, critique "Add this" and revisions apply to the active text (input while linked, body while edited; see D2). Revise returns one `<revision>` block: a whole-text replacement, shown as a diff. Question/Finding/Revision types drop `section`.
+- BriefSidecar prompts drop per-section tags; the brief is sent as `<brief>` with the active text (`effectiveBody`) only, since revisions replace only the active text. Interview answers, critique "Add this" and revisions apply to the active text (input while linked, body while edited; see D2). Revise returns one `<revision>` block: a whole-text replacement, shown as a diff. Question/Finding/Revision types drop `section`.
 - KnowledgeRecorder records effectiveBody (guard: non-empty). KnowledgeRetriever uses of sections updated.
 - BriefVersionDiff compares input and body instead of per-section rows.
 - MCP `get_brief` keeps returning only the compiled prompt; `list_briefs` marks edited briefs (see D9).
@@ -62,5 +62,5 @@ Key finding: with one free-text input and instant compile, the brief ≈ input +
 - **D6 Backups.** `<id>.v1.json` is written once, before the first v2 write; it's never overwritten and never loaded. Deleting the brief deletes its backup, because leaving a hidden copy of possibly secret text is worse.
 - **D7 Types.** The legacy decode types are file-private and `BriefSection` is deleted.
 - **D8 Compile.** Context items are included whenever `item.included` (there's no context toggle any more). Item rendering and `</file` neutralization are unchanged.
-- **D9 MCP contract.** `get_brief` still returns only the compiled prompt: MCP clients rely on "ready to follow". `list_briefs` marks edited briefs with "· edited".
+- **D9 MCP contract.** `get_brief` still returns only the compiled prompt: MCP clients rely on "ready to follow". `list_briefs` marks edited briefs with "· brief edited".
 
