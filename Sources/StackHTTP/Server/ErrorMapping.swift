@@ -13,6 +13,25 @@ extension OpenAIError {
         switch error {
         case let e as OpenAIError:
             return e
+        case let e as QueryError:
+            switch e {
+            case .invalid(let param, let message):
+                return .invalidRequest(message, param: param)
+            case .unknownModel(let id):
+                return .notFound("The model '\(id)' does not exist. See GET /v1/models.", code: "model_not_found")
+            case .blockedByPrivacy:
+                return OpenAIError(status: 403, message: e.localizedDescription, type: "permission_error", code: "blocked_by_privacy_setting")
+            case .budgetExhausted:
+                return OpenAIError(status: 429, message: e.localizedDescription, type: "insufficient_quota", code: "monthly_limit_reached")
+            case .noModelAvailable:
+                return OpenAIError(status: 503, message: e.localizedDescription, type: "server_error", code: "no_model_available")
+            case .contextTooLarge:
+                return .invalidRequest(e.localizedDescription, param: "messages", code: "context_length_exceeded")
+            case .upstream(let message):
+                return OpenAIError(status: 502, message: message, type: "server_error", code: "upstream_error")
+            case .cancelled, .internal:
+                return .server(e.localizedDescription)
+            }
         case let e as InferenceError:
             switch e {
             case .unknownModel(let id):

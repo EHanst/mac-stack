@@ -24,11 +24,11 @@ public struct ListModelsTool: AgentToolHandler {
         description: "List the AI models VibeCockpit can use right now, and whether each runs on this Mac or in the cloud.",
         inputSchema: objectSchema([:]))
     public var requiredScope: ClientScope { .models }
-    let inference: InferenceService
-    public init(inference: InferenceService) { self.inference = inference }
+    let gateway: QueryGateway
+    public init(gateway: QueryGateway) { self.gateway = gateway }
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
-        let models = await inference.availableModels()
+        let models = await gateway.models()
         guard !models.isEmpty else { return text("No models are set up yet. Open VibeCockpit to add one.") }
         let lines = models.map { m -> String in
             let health: String
@@ -56,8 +56,8 @@ public struct ChatTool: AgentToolHandler {
             "maxTokens": .object(["type": "integer", "description": "Longest answer, in tokens (default 1024)"]),
         ], required: ["prompt"]))
     public var requiredScope: ClientScope { .chat }
-    let inference: InferenceService
-    public init(inference: InferenceService) { self.inference = inference }
+    let gateway: QueryGateway
+    public init(gateway: QueryGateway) { self.gateway = gateway }
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .string(let prompt) = arguments["prompt"], !prompt.isEmpty else {
@@ -70,15 +70,11 @@ public struct ChatTool: AgentToolHandler {
         messages.append(ModelMessage(role: .user, content: prompt))
         var requested: String?
         if case .string(let m) = arguments["model"] { requested = m }
-        var maxTokens = 1024
-        if case .int(let n) = arguments["maxTokens"], n > 0 { maxTokens = min(n, 8192) }
+        var maxTokens: Int?
+        if case .int(let n) = arguments["maxTokens"] { maxTokens = n }
 
-        let events = try await inference.generate(
-            messages: messages, tools: [], options: GenerationOptions(maxTokens: maxTokens),
-            priority: .api, pin: InferenceService.pin(for: requested))
-        var answer = ""
-        for try await event in events { if case .token(let t) = event { answer += t } }
-        return text(answer)
+        let answer = try await gateway.chat(ChatQuery(messages: messages, model: requested, maxTokens: maxTokens, origin: .mcp))
+        return text(answer.text)
     }
 }
 
@@ -93,17 +89,16 @@ public struct EmbedTool: AgentToolHandler {
             "model": .object(["type": "string", "description": "Optional embedding model id"]),
         ], required: ["texts"]))
     public var requiredScope: ClientScope { .embeddings }
-    let inference: InferenceService
-    public init(inference: InferenceService) { self.inference = inference }
+    let gateway: QueryGateway
+    public init(gateway: QueryGateway) { self.gateway = gateway }
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         guard case .array(let items) = arguments["texts"] else { throw AgentToolError.missingArgument("texts") }
         let texts = items.compactMap { item -> String? in if case .string(let s) = item { return s } else { return nil } }
-        guard !texts.isEmpty else { throw AgentToolError.missingArgument("texts") }
         var requested: String?
         if case .string(let m) = arguments["model"] { requested = m }
-        let result = try await inference.embed(texts, pin: InferenceService.pin(for: requested))
-        let body: [String: Any] = ["model": result.provider, "embeddings": result.vectors]
+        let result = try await gateway.embed(EmbedQuery(texts: texts, model: requested, origin: .mcp))
+        let body: [String: Any] = ["model": result.model, "embeddings": result.vectors]
         let data = try JSONSerialization.data(withJSONObject: body)
         return text(String(decoding: data, as: UTF8.self))
     }

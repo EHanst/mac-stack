@@ -55,13 +55,13 @@ struct WorkspaceManagerTests {
         #expect(schema["required"] == nil)
     }
 
-    @Test("with several projects the argument is required, routes correctly, and never reaches the tool")
+    @Test("with several projects the argument is optional in the schema (the client's own folder is the default), routes correctly, and never reaches the tool")
     func several() async throws {
         let m = manager()
         try await m.add(folder("alpha")); try await m.add(folder("beta"))
         let write = try #require(await m.tools().first { $0.toolDefinition.name == "write_file" })
         #expect(write.requiredScope == .toolsWrite)
-        if case .object(let s) = write.toolDefinition.inputSchema { #expect(s["required"] == .array(["workspace"])) }
+        if case .object(let s) = write.toolDefinition.inputSchema { #expect(s["required"] == nil) }
 
         #expect(text(try await write.execute(arguments: ["workspace": "beta"])) == "beta:write_file:clean")
         #expect(text(try await write.execute(arguments: ["workspace": "ALPHA"])) == "alpha:write_file:clean")   // by name, any case
@@ -69,6 +69,36 @@ struct WorkspaceManagerTests {
         await #expect(throws: WorkspaceError.self) { try await write.execute(arguments: ["workspace": "gamma"]) }
         // The approval prompt names the project the write would land in.
         #expect(write.approvalSummary(arguments: ["workspace": "beta"]) == "[beta] Do write_file")
+    }
+
+    @Test("a client's own folder picks the project: exact, inside it, longest wins, otherwise unmatched")
+    func rootMatching() async throws {
+        let m = manager()
+        let outer = try folder("outer")
+        let inner = outer.appendingPathComponent("inner")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let other = try folder("other")
+        try await m.add(outer); try await m.add(inner); try await m.add(other)
+        let read = try #require(await m.tools().first { $0.toolDefinition.name == "read_file" } as? WorkspaceRoutedTool)
+        func id(_ name: String) -> RootMatch { .matched(name) }
+
+        #expect(read.match(rootPaths: [other.path]) == id("other"))
+        // Working in a sub-folder of a project uses that project; the most specific project wins.
+        #expect(read.match(rootPaths: [outer.appendingPathComponent("Sources").path]) == id("outer"))
+        #expect(read.match(rootPaths: [inner.path]) == id("inner"))
+        // A folder that only shares a name prefix is not inside the project.
+        #expect(read.match(rootPaths: [other.path + "-x"]) == .unmatched([other.path + "-x"]))
+        #expect(read.match(rootPaths: ["/nowhere/at/all"]) == .unmatched(["/nowhere/at/all"]))
+        // No roots offered: nothing to decide (old behaviour applies).
+        #expect(read.match(rootPaths: []) == nil)
+    }
+
+    @Test("the whole disk and the whole home folder can't be opened as a project")
+    func tooBroad() async throws {
+        let m = manager()
+        await #expect(throws: WorkspaceError.self) { try await m.add(URL(fileURLWithPath: "/")) }
+        await #expect(throws: WorkspaceError.self) { try await m.add(FileManager.default.homeDirectoryForCurrentUser) }
+        #expect(await m.list.isEmpty)
     }
 
     @Test("same folder name twice gets distinct ids; adding the same path twice is one project")

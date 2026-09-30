@@ -47,11 +47,13 @@ public struct FileWorkspaceStore: WorkspaceStore {
 
 public enum WorkspaceError: LocalizedError {
     case notAFolder(String)
+    case tooBroad(String)
     case ambiguous(available: [String])
     case unknown(String, available: [String])
     public var errorDescription: String? {
         switch self {
         case .notAFolder(let p): "'\(p)' isn't a folder."
+        case .tooBroad(let p): "'\(p)' is too broad to open as a project."
         case .ambiguous(let names): "More than one project is open. Say which with the 'workspace' argument: \(names.joined(separator: ", "))."
         case .unknown(let n, let names): "There is no open project called '\(n)'. Open projects: \(names.joined(separator: ", "))."
         }
@@ -93,6 +95,9 @@ public actor WorkspaceManager {
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else {
             throw WorkspaceError.notAFolder(path)
         }
+        // Never the whole disk or the whole home folder: file tools would reach far too much.
+        let home = FileManager.default.homeDirectoryForCurrentUser.resolvingSymlinksInPath().path
+        guard path != "/", path != home else { throw WorkspaceError.tooBroad(path) }
         if let existing = records.first(where: { $0.path == path }) { return existing }
         let name = URL(fileURLWithPath: path).lastPathComponent
         var id = ExternalMCPServer.makeID(from: name)
@@ -158,15 +163,39 @@ public struct ListWorkspacesTool: AgentToolHandler {
     }
 }
 
+public enum RootMatch: Sendable, Equatable {
+    case matched(String)          // workspace id
+    case unmatched([String])      // the client's folders, none of which is an open project
+}
+
 /// One workspace tool (say `read_file`) across every open project. Adds a `workspace` argument,
-/// strips it, and hands the call to that project's own tool. With one project open the argument
-/// is optional; with several it is required, so a write never lands in a project by guess.
+/// strips it, and hands the call to that project's own tool. The argument is optional. Order of
+/// choice: the project named; else the one the calling app's own folder is in (`match`); else the
+/// only open project. With several open and no hint it is an error, so a write never lands in a
+/// project by guess.
 public struct WorkspaceRoutedTool: AgentToolHandler {
     public struct Entry: Sendable { let workspace: WorkspaceRecord; let handler: any AgentToolHandler }
     let entries: [Entry]
     let base: any AgentToolHandler
 
     init(entries: [Entry]) { self.entries = entries; self.base = entries[0].handler }
+
+    /// Which open project a client's own folders point at. Nil when it offered none (then the
+    /// old rule applies: the only open project, else the caller must say). A folder counts as
+    /// inside a project when it is that folder or below it; the most specific project wins.
+    public func match(rootPaths: [String]) -> RootMatch? {
+        guard !rootPaths.isEmpty else { return nil }
+        var best: (id: String, length: Int)?
+        for raw in rootPaths {
+            let root = URL(fileURLWithPath: raw).standardizedFileURL.resolvingSymlinksInPath().path
+            for entry in entries {
+                let w = entry.workspace.path
+                guard root == w || root.hasPrefix(w.hasSuffix("/") ? w : w + "/") else { continue }
+                if best == nil || w.count > best!.length { best = (entry.workspace.id, w.count) }
+            }
+        }
+        return best.map { .matched($0.id) } ?? .unmatched(rootPaths)
+    }
 
     public var requiredScope: ClientScope { base.requiredScope }
     public var producesUntrustedContent: Bool { base.producesUntrustedContent }
@@ -176,14 +205,9 @@ public struct WorkspaceRoutedTool: AgentToolHandler {
         let t = base.toolDefinition.withValidSchema
         guard case .object(var schema) = t.inputSchema, case .object(var props)? = schema["properties"] else { return t }
         let names = entries.map(\.workspace.name).joined(separator: ", ")
-        props["workspace"] = .object(["type": "string", "description": .string("Which open project (\(names))" + (entries.count == 1 ? "; optional" : ""))])
+        props["workspace"] = .object(["type": "string", "description": .string(
+            "Which open project (\(names)). Optional: defaults to the project the calling app is working in.")])
         schema["properties"] = .object(props)
-        if entries.count > 1 {
-            var required: [Value] = []
-            if case .array(let r)? = schema["required"] { required = r }
-            required.append("workspace")
-            schema["required"] = .array(required)
-        }
         return Tool(name: t.name, title: t.title, description: t.description, inputSchema: .object(schema),
                     annotations: t.annotations, _meta: t._meta)
     }
