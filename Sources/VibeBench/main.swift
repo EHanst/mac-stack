@@ -6,6 +6,7 @@ import StackCore
 import MLXNN
 
 // vibe-bench — performance harness for the local model.
+//   swift run -c release VibeBench --optimizer-eval [--modes improve,synthesize] [--repeats 1] [--eval-json out.json] [--sampling rewrite|chat|greedy] [--no-repair]   (rewrite quality gate)
 //   swift run -c release VibeBench --idle-cancel-test   (reply after a background re-read is cancelled part-way)
 //   swift run -c release VibeBench --long-chat-test [--ceiling 6000]   (real chat: cache hits, compaction, summaries)
 //   swift run -c release VibeBench --knowledge-eval   (sidecar critique with vs without retrieved guidance; text search only)
@@ -30,6 +31,12 @@ struct Options {
     var apiTest = false
     var textTest = false
     var studioTest = false
+    var optimizerEval = false
+    var evalModes = ["improve", "synthesize"]
+    var evalRepeats = 1
+    var evalJSON: URL?
+    var evalSampling = "rewrite"
+    var evalRepair = true
     var sidecarTest = false
     var knowledgeEval = false
     var compactionTest = false
@@ -58,6 +65,12 @@ struct Options {
             case "--api-test": apiTest = true
             case "--text-test": textTest = true
             case "--studio-test": studioTest = true
+            case "--optimizer-eval": optimizerEval = true
+            case "--eval-json": if let v = it.next() { evalJSON = URL(fileURLWithPath: v) }
+            case "--no-repair": evalRepair = false
+            case "--sampling": if let v = it.next() { evalSampling = v }
+            case "--modes": if let v = it.next() { evalModes = v.split(separator: ",").map(String.init) }
+            case "--repeats": if let v = it.next(), let n = Int(v) { evalRepeats = max(1, n) }
             case "--sidecar-test": sidecarTest = true
             case "--knowledge-eval": knowledgeEval = true
             case "--compaction-test": compactionTest = true
@@ -368,6 +381,11 @@ func run() async throws {
                 print("  chunk \(chunk) · \(name) (\(stats?.promptTokens ?? 0) tok): \(text.replacingOccurrences(of: "\n", with: "⏎").prefix(150))")
             }
         }
+        print("")
+    }
+
+    if opts.optimizerEval {
+        await OptimizerEval.run(provider: provider, modes: opts.evalModes, repeats: opts.evalRepeats, json: opts.evalJSON, sampling: opts.evalSampling, repair: opts.evalRepair)
         print("")
     }
 
