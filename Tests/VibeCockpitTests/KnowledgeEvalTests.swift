@@ -11,7 +11,7 @@ struct KnowledgeEvalTests {
         let rows = await KnowledgeEval.compare(briefs: [brief("a"), brief("b")]) { b, withGuidance in
             if b.title == "b" && !withGuidance { throw SidecarError.unusable }
             var r = SidecarResult()
-            if withGuidance { r.findings = [SidecarFinding(id: "1", section: .goal, issue: "x", addition: nil)] }
+            if withGuidance { r.findings = [SidecarFinding(id: "1", issue: "x", addition: nil)] }
             return r
         }
         #expect(rows[0] == KnowledgeEvalRow(title: "a", withParsed: true, withoutParsed: false, withCount: 1, withoutCount: 0))

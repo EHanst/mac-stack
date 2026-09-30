@@ -505,9 +505,9 @@ func run() async throws {
         let chatSystem = Message(role: .system, content: "You are Kokoro, the assistant inside VibeCockpit, a native macOS app for building Swift/macOS software with a local model. You are warm, upbeat and a little playful. Substance comes first: be correct, concise and safe.")
         let q1 = Message(role: .user, content: makePrompt(tokens: opts.warmPrefix, nonce: 7_000))
         let q2 = Message(role: .user, content: "Now list the first two notes.")
-        var brief = Brief.new(title: "Retry uploads", target: .make(modelFamily: "claude", surface: .claudeCode))
-        brief.setText("Add a retry with backoff to the upload call in Sources/App/Uploader.swift so flaky networks stop failing the sync.", for: .goal)
-        brief.setText("Keep the public API unchanged.", for: .constraints)
+        let brief = Brief.new(title: "Retry uploads",
+                              input: "Add a retry with backoff to the upload call in Sources/App/Uploader.swift so flaky networks stop failing the sync.\n\nKeep the public API unchanged.",
+                              target: .make(modelFamily: "claude", surface: .claudeCode))
 
         func run(_ label: String, _ op: SidecarOperation?) async -> Double {
             await provider.clearPromptCache()
@@ -546,9 +546,7 @@ func run() async throws {
         let goals = ["Make uploads more reliable.", "Add retry to the sync call.", "Speed up the search screen.",
                      "Clean up the settings code.", "Add a dark mode toggle."]
         let briefs: [Brief] = goals.enumerated().map { i, goal in
-            var b = Brief.new(title: "eval \(i + 1)", target: .make(modelFamily: "claude", surface: .claudeCode))
-            b.setText(goal, for: .goal)
-            return b
+            Brief.new(title: "eval \(i + 1)", input: goal, target: .make(modelFamily: "claude", surface: .claudeCode))
         }
         let evalTimeout = opts.timeout
         let rows = await KnowledgeEval.compare(briefs: briefs) { brief, guided in

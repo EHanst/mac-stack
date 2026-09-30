@@ -26,7 +26,7 @@ struct CompiledPromptPane: View {
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 }
                 ScrollView {
-                    Text(compiled.text.isEmpty ? "Your prompt appears here as you write the goal." : compiled.text)
+                    Text(compiled.text.isEmpty ? "Your prompt appears here as you type." : compiled.text)
                         .font(.system(.caption, design: .monospaced))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled).padding(10)

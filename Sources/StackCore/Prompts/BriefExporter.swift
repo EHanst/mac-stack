@@ -1,11 +1,11 @@
 import Foundation
 
 public enum BriefExportError: LocalizedError, Equatable {
-    case emptyGoal
+    case emptyInput
     case outsideProject
     public var errorDescription: String? {
         switch self {
-        case .emptyGoal: "Write a goal first, then save."
+        case .emptyInput: "Write something first, then save."
         case .outsideProject: "The project's .vibe folder points outside the project, so nothing was written."
         }
     }
@@ -32,10 +32,10 @@ public enum BriefExporter {
         "\(slug(ContextRedactor.redact(brief.title).text))-\(slug(String(brief.id.prefix(8)))).md"
     }
 
-    /// nil when the brief has no goal.
+    /// nil when the brief has no input.
     public static func markdown(for brief: Brief) -> String? {
         let compiled = BriefCompiler.compile(brief)
-        if compiled.warnings.contains(where: { $0.code == .emptyGoal }) { return nil }
+        if compiled.warnings.contains(where: { $0.code == .emptyInput }) { return nil }
         let title = ContextRedactor.redact(brief.title).text
             .components(separatedBy: .newlines).joined(separator: " ")
             .replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
@@ -45,7 +45,7 @@ public enum BriefExporter {
 
     @discardableResult
     public static func export(_ brief: Brief, toProjectRoot root: URL) throws -> URL {
-        guard let text = markdown(for: brief) else { throw BriefExportError.emptyGoal }
+        guard let text = markdown(for: brief) else { throw BriefExportError.emptyInput }
         let fm = FileManager.default
         let dir = root.appendingPathComponent(".vibe/briefs", isDirectory: true)
         let realRoot = root.resolvingSymlinksInPath().path

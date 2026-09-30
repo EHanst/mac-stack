@@ -23,7 +23,8 @@ public struct ListBriefsTool: AgentToolHandler {
         guard !briefs.isEmpty else { return text("There are no briefs yet. Create one in Kokoro.") }
         let stamp = ISO8601DateFormatter()
         return text(briefs.map {
-            "\($0.id) — \($0.title) (\($0.target.surface.displayName), edited \(stamp.string(from: $0.updatedAt)))"
+            let edited = $0.body != nil ? " · edited" : ""
+            return "\($0.id) — \($0.title) (\($0.target.surface.displayName), edited \(stamp.string(from: $0.updatedAt)))\(edited)"
         }.joined(separator: "\n"))
     }
 }
@@ -47,8 +48,8 @@ public struct GetBriefTool: AgentToolHandler {
             return text("No brief with id \(id). Call list_briefs for the ids.")
         }
         let out = BriefCompiler.compile(brief)
-        if out.warnings.contains(where: { $0.code == .emptyGoal }) {
-            return text("The brief \"\(brief.title)\" has no goal yet, so there is nothing to follow.")
+        if out.warnings.contains(where: { $0.code == .emptyInput }) {
+            return text("The brief \"\(brief.title)\" is empty, so there is nothing to follow.")
         }
         return text(out.text)
     }

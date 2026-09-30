@@ -24,11 +24,10 @@ public struct KnowledgeRetriever: Sendable {
 
     /// Never throws: any failure means "no extra guidance".
     public func guidance(for brief: Brief, now: Date = Date()) async -> KnowledgeGuidance {
-        let goal = brief.text(of: .goal).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !goal.isEmpty else { return .empty }
-        let constraints = brief.text(of: .constraints).trimmingCharacters(in: .whitespacesAndNewlines)
-        let raw = constraints.isEmpty ? goal : goal + "\n" + constraints
-        let query = String(ContextRedactor.redact(raw).text.prefix(Self.queryChars))
+        let effective = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !effective.isEmpty else { return .empty }
+        let raw = ContextRedactor.redact(effective).text
+        let query = String(raw.prefix(Self.queryChars))
         // A brief is not its own example: its earlier accepted versions would fill the exemplar slots.
         let hits = await store.search(query: query, target: brief.target.modelFamily, k: 20)
             .filter { $0.entry.meta["briefID"] != brief.id }

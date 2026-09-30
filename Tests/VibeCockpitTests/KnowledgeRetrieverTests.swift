@@ -69,7 +69,7 @@ struct KnowledgeRetrieverTests {
     }
 
     @Test("an empty goal retrieves nothing, without touching the store")
-    func emptyGoal() async {
+    func emptyInput() async {
         let store = KnowledgeStore(dbURL: KnowledgeStub.tempURL(), dimension: KnowledgeStub.dim, embedder: KnowledgeStub.embedder())
         let brief = Brief.new(title: "t", target: .make(modelFamily: "claude", surface: .claudeCode))
         let g = await KnowledgeRetriever(store: store).guidance(for: brief)
@@ -82,7 +82,7 @@ struct KnowledgeRetrieverTests {
         try await store.addAll([KnowledgeEntry(kind: .technique, text: "Specify a retry limit and backoff when asking for retry logic"),
                                 KnowledgeEntry(kind: .technique, text: "Unrelated advice about database migrations")])
         var brief = Brief.new(title: "t", target: .make(modelFamily: "claude", surface: .claudeCode))
-        brief.setText("Add retry with backoff to uploads", for: .goal)
+        brief.input = "Add retry with backoff to uploads"
         let g = await KnowledgeRetriever(store: store).guidance(for: brief)
         #expect(g.text.contains("retry limit"))
         #expect(g.text.hasPrefix("<guidance>"))

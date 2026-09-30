@@ -4,25 +4,17 @@ import Foundation
 
 @Suite("BriefVersionDiff")
 struct BriefVersionDiffTests {
-    private func sections(goal: String, constraints: String = "") -> [BriefSection] {
-        [BriefSection(kind: .goal, text: goal), BriefSection(kind: .constraints, text: constraints)]
+    @Test("only changed fields appear, diffed from current to the version")
+    func changedFields() {
+        let v = Brief.Version(date: Date(), input: "old input", body: nil)
+        let rows = BriefVersionDiff.rows(currentInput: "new input", currentBody: nil, version: v)
+        #expect(rows.map(\.field) == [.input])
     }
 
-    @Test("only changed sections appear, diffed from current to the version")
-    func changedOnly() {
-        let v = Brief.Version(date: Date(), sections: sections(goal: "old goal", constraints: "same"))
-        let rows = BriefVersionDiff.rows(current: sections(goal: "new goal", constraints: "same"), version: v)
-        #expect(rows.map(\.kind) == [.goal])
-        #expect(rows[0].segments.contains { $0.kind == .removed && $0.text.contains("new") })
-        #expect(rows[0].segments.contains { $0.kind == .added && $0.text.contains("old") })
-    }
-
-    @Test("identical versions give no rows; a section only on one side still shows")
-    func identicalAndMissing() {
-        let s = sections(goal: "x")
-        #expect(BriefVersionDiff.rows(current: s, version: .init(date: Date(), sections: s)).isEmpty)
-        let v = Brief.Version(date: Date(), sections: [BriefSection(kind: .examples, text: "e.g. y")])
-        let rows = BriefVersionDiff.rows(current: s, version: v)
-        #expect(rows.map(\.kind) == [.goal, .examples])
+    @Test("identical versions give no rows; a body only on one side still shows")
+    func oneSidedBody() {
+        let v = Brief.Version(date: Date(), input: "same", body: nil)
+        #expect(BriefVersionDiff.rows(currentInput: "same", currentBody: nil, version: v).isEmpty)
+        #expect(BriefVersionDiff.rows(currentInput: "same", currentBody: "edited", version: v).map(\.field) == [.body])
     }
 }

@@ -10,11 +10,8 @@ struct KnowledgeRecorderTests {
         let store = KnowledgeStore(dbURL: KnowledgeStub.tempURL(), dimension: KnowledgeStub.dim, embedder: KnowledgeStub.embedder())
         return (KnowledgeRecorder(store: store, settings: settings), store, settings)
     }
-    func brief(goal: String = "Add retry with backoff to uploads") -> Brief {
-        var b = Brief.new(title: "t", target: .make(modelFamily: "claude", surface: .claudeCode))
-        b.setText(goal, for: .goal)
-        b.setText("Retry at most 3 times", for: .constraints)
-        return b
+    func brief(input: String = "Add retry with backoff to uploads") -> Brief {
+        Brief.new(title: "t", input: input, target: .make(modelFamily: "claude", surface: .claudeCode))
     }
 
     @Test("nothing is stored while opted out, but the accept is counted")
@@ -25,22 +22,19 @@ struct KnowledgeRecorderTests {
         #expect(settings.acceptedBriefCount == 1)
     }
 
-    @Test("opted in: an exemplar with the sections, target and intent is stored")
-    func stores() async throws {
-        let (r, store, _) = setup(recording: true)
-        await r.recordAccepted(brief())
-        let e = try await store.all().first
-        #expect(e?.kind == .exemplar)
+    @Test("opted in: an exemplar with the brief's text, target and intent is stored")
+    func exemplar() {
+        let b = Brief.new(title: "t", input: "Add retry\nwith backoff", target: .make(modelFamily: "claude", surface: .claudeCode))
+        let e = KnowledgeRecorder.exemplar(from: b, now: Date())
+        #expect(e?.text == "Add retry\nwith backoff")
+        #expect(e?.meta["intent"] == "Add retry with backoff")
         #expect(e?.target == "claude")
-        #expect(e?.pack == nil)
-        #expect(e?.text.contains("## goal") == true && e?.text.contains("Retry at most 3 times") == true)
-        #expect(e?.meta["intent"] == "Add retry with backoff to uploads")
     }
 
     @Test("secrets are redacted before anything is stored")
     func redacts() async throws {
         let (r, store, _) = setup(recording: true)
-        await r.recordAccepted(brief(goal: "Upload with key AKIAIOSFODNN7EXAMPLE"))
+        await r.recordAccepted(brief(input: "Upload with key AKIAIOSFODNN7EXAMPLE"))
         let stored = try await store.all()
         #expect(stored.count == 1)
         #expect(!stored[0].text.contains("AKIAIOSFODNN7EXAMPLE"))
@@ -57,15 +51,12 @@ struct KnowledgeRecorderTests {
         #expect(!text.contains("unique_marker_9f3") && !text.contains("Secrets.swift"))
     }
 
-    @Test("disabled sections are left out; a brief without a goal records nothing")
-    func sectionsAndGoal() async throws {
-        let (r, store, _) = setup(recording: true)
-        var b = brief()
-        if let i = b.sections.firstIndex(where: { $0.kind == .constraints }) { b.sections[i].enabled = false }
-        await r.recordAccepted(b)
-        #expect(try await store.all().first?.text.contains("Retry at most 3 times") == false)
-        await r.recordAccepted(Brief.new(title: "empty", target: .make(modelFamily: "claude", surface: .claudeCode)))
-        #expect(try await store.all().count == 1)
+    @Test("an empty brief records nothing; an edited brief records its body")
+    func exemplarEdges() {
+        var b = Brief.new(title: "t", input: " ", target: .make(modelFamily: "claude", surface: .claudeCode))
+        #expect(KnowledgeRecorder.exemplar(from: b, now: Date()) == nil)
+        b.body = "Edited text"
+        #expect(KnowledgeRecorder.exemplar(from: b, now: Date())?.text == "Edited text")
     }
 
     @Test("accepting the same content twice stores it once")
@@ -79,7 +70,7 @@ struct KnowledgeRecorderTests {
     @Test("very long text is truncated to the store limit")
     func truncates() async throws {
         let (r, store, _) = setup(recording: true)
-        await r.recordAccepted(brief(goal: String(repeating: "goal ", count: 3000)))
+        await r.recordAccepted(brief(input: String(repeating: "goal ", count: 3000)))
         #expect(try await store.all().first!.text.count <= KnowledgeLimits.maxTextChars)
     }
 
@@ -102,7 +93,7 @@ struct KnowledgeRecorderTests {
         let (r, store, settings) = setup(recording: true)
         await r.recordAccepted(brief())
         settings.setDecision(.declined)
-        await r.recordAccepted(brief(goal: "A different goal entirely"))
+        await r.recordAccepted(brief(input: "A different goal entirely"))
         #expect(try await store.all().count == 1)
     }
 }

@@ -13,7 +13,7 @@ struct KnowledgeModelTests {
     }
     func brief() -> Brief {
         var b = Brief.new(title: "t", target: .make(modelFamily: "claude", surface: .claudeCode))
-        b.setText("Add retry to uploads", for: .goal)
+        b.input = "Add retry to uploads"
         return b
     }
 
@@ -38,7 +38,7 @@ struct KnowledgeModelTests {
         try await store.addAll([KnowledgeEntry(kind: .technique, pack: "p", text: "packed")])
         await m.turnOff()
         #expect(m.learnedCount == 1)
-        await m.noteAccepted({ var b = brief(); b.setText("Another goal", for: .goal); return b }())
+        await m.noteAccepted({ var b = brief(); b.input = "Another goal"; return b }())
         #expect(m.learnedCount == 1)
         await m.wipeLearned()
         #expect(m.learnedCount == 0)

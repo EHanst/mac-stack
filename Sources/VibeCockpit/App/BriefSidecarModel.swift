@@ -76,30 +76,30 @@ public final class BriefSidecarModel {
     public func answer(_ q: SidecarQuestion, text: String, in workbench: BriefWorkbenchModel) {
         let a = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let id = briefID, !a.isEmpty, result?.questions.contains(q) == true else { return }
-        workbench.append("Q: \(q.text)\nA: \(a)", to: q.section, briefID: id)
+        workbench.appendToActive("Q: \(q.text)\nA: \(a)", briefID: id)
         signal(.accepted)
         result?.questions.removeAll { $0.id == q.id }
     }
 
     public func accept(_ f: SidecarFinding, in workbench: BriefWorkbenchModel) {
         guard let id = briefID, let addition = f.addition, result?.findings.contains(f) == true else { return }
-        workbench.append(addition, to: f.section, briefID: id)
+        workbench.appendToActive(addition, briefID: id)
         signal(.accepted)
         result?.findings.removeAll { $0.id == f.id }
     }
 
-    /// Applies a proposed rewrite to the brief it was made for, if that section is still as it was.
+    /// Applies a proposed rewrite to the brief it was made for, if the active text is still as it was.
     /// The text before the rewrite is saved as a version first, so it can be restored.
     public func acceptRevision(_ r: SidecarRevision, in workbench: BriefWorkbenchModel) {
         guard let id = briefID, result?.revisions.contains(r) == true,
               let brief = workbench.briefs.first(where: { $0.id == id }) else { return }
         result?.revisions.removeAll { $0.id == r.id }
-        guard brief.text(of: r.section) == r.original else {
-            result?.note = "That section changed since the suggestion. Run it again."
+        guard brief.effectiveBody == r.original else {
+            result?.note = "The brief changed since the suggestion. Run it again."
             return
         }
         workbench.snapshotIfChanged(id: id)
-        workbench.setText(r.proposed, for: r.section, briefID: id)
+        workbench.setActive(r.proposed, briefID: id)
         signal(.accepted)
         if let updated = workbench.briefs.first(where: { $0.id == id }) { onAccepted?(updated) }
     }
@@ -128,7 +128,7 @@ public final class BriefSidecarModel {
             do {
                 let draft = try await sidecar.continuation(from: pasted)
                 guard mine == self.continuationGeneration else { return }
-                await workbench.newBrief(title: draft.title, goal: draft.goal, context: draft.context)
+                await workbench.newBrief(title: draft.title, input: draft.input)
                 guard mine == self.continuationGeneration else { return }
                 self.clear()
                 self.continuationPhase = .idle

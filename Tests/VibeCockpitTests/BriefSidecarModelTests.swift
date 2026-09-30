@@ -6,11 +6,10 @@ import Foundation
 @MainActor
 @Suite("BriefSidecarModel")
 struct BriefSidecarModelTests {
-    private func workbench(goal: String = "Add retry to uploads") async -> BriefWorkbenchModel {
+    private func workbench(input: String = "Add retry to uploads") async -> BriefWorkbenchModel {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sc-\(UUID().uuidString)")
         let m = BriefWorkbenchModel(store: BriefStore(directory: dir), saveDelay: .zero)
-        await m.newBrief(title: "t")
-        m.setText(goal, for: .goal)
+        await m.newBrief(title: "t", input: input)
         return m
     }
     private func model(reply: @escaping @Sendable () async throws -> String) -> BriefSidecarModel {
@@ -27,7 +26,7 @@ struct BriefSidecarModelTests {
     func interview() async {
         let wb = await workbench()
         let before = wb.selected
-        let m = model { "<questions>\n- goal: Which endpoint?\n</questions>" }
+        let m = model { "<questions>\n- Which endpoint?\n</questions>" }
         m.run(.interview, brief: wb.selected!)
         await settle(m)
         #expect(m.result?.questions.count == 1)
@@ -35,34 +34,34 @@ struct BriefSidecarModelTests {
         #expect(wb.selected == before)
     }
 
-    @Test("answering appends Q and A to that section")
+    @Test("answering appends Q and A to the input while linked")
     func answer() async {
         let wb = await workbench()
-        let m = model { "<questions>\n- constraints: How many attempts?\n</questions>" }
+        let m = model { "<questions>\n- How many attempts?\n</questions>" }
         m.run(.interview, brief: wb.selected!)
         await settle(m)
         m.answer(m.result!.questions[0], text: "3", in: wb)
-        #expect(wb.selected?.text(of: .constraints) == "Q: How many attempts?\nA: 3")
+        #expect(wb.selected?.input == "Add retry to uploads\n\nQ: How many attempts?\nA: 3")
         #expect(m.result?.questions.isEmpty == true)
     }
 
     @Test("accepting a finding appends its addition once")
     func acceptOnce() async {
         let wb = await workbench()
-        let m = model { "<findings>\n- constraints | No limit | add: Retry at most 3 times.\n</findings>" }
+        let m = model { "<findings>\n- No limit | add: Retry at most 3 times.\n</findings>" }
         m.run(.critique, brief: wb.selected!)
         await settle(m)
         let f = m.result!.findings[0]
         m.accept(f, in: wb)
         m.accept(f, in: wb)
-        #expect(wb.selected?.text(of: .constraints) == "Retry at most 3 times.")
+        #expect(wb.selected?.input == "Add retry to uploads\n\nRetry at most 3 times.")
     }
 
     @Test("cancel returns to idle at once and the late reply is ignored")
     func cancel() async {
         let wb = await workbench()
         let gate = AsyncGate()
-        let m = model { await gate.wait(); return "<questions>\n- goal: late\n</questions>" }
+        let m = model { await gate.wait(); return "<questions>\n- late\n</questions>" }
         m.run(.interview, brief: wb.selected!)
         m.cancel()
         #expect(m.phase == .idle)
@@ -73,16 +72,16 @@ struct BriefSidecarModelTests {
 
     @Test("a second run replaces the first; only the second result shows")
     func secondWins() async {
-        let wb = await workbench(goal: "first goal")
+        let wb = await workbench(input: "first goal")
         let gate = AsyncGate()
         let m = BriefSidecarModel(sidecar: BriefSidecar { messages in
             if messages.last?.content.contains("first goal") == true {
-                await gate.wait(); return "<questions>\n- goal: first\n</questions>"
+                await gate.wait(); return "<questions>\n- first\n</questions>"
             }
-            return "<questions>\n- goal: second\n</questions>"
+            return "<questions>\n- second\n</questions>"
         })
         m.run(.interview, brief: wb.selected!)
-        wb.setText("second goal", for: .goal)
+        wb.setInput("second goal")
         m.run(.interview, brief: wb.selected!)
         await settle(m)
         await gate.open()
@@ -90,13 +89,13 @@ struct BriefSidecarModelTests {
         #expect(m.result?.questions.first?.text == "second")
     }
 
-    @Test("an empty goal fails with one sentence and no result")
-    func emptyGoal() async {
-        let wb = await workbench(goal: "")
+    @Test("an empty input fails with one sentence and no result")
+    func emptyInput() async {
+        let wb = await workbench(input: "")
         let m = model { "unused" }
         m.run(.critique, brief: wb.selected!)
         await settle(m)
-        #expect(m.phase == .failed("Write a goal first."))
+        #expect(m.phase == .failed("Write something first."))
         #expect(m.result == nil)
     }
 
@@ -115,7 +114,7 @@ struct BriefSidecarModelTests {
     @Test("applying to a brief that was deleted does nothing")
     func staleApply() async {
         let wb = await workbench()
-        let m = model { "<findings>\n- goal | vague | add: Be specific.\n</findings>" }
+        let m = model { "<findings>\n- vague | add: Be specific.\n</findings>" }
         m.run(.critique, brief: wb.selected!)
         await settle(m)
         let f = m.result!.findings[0]
@@ -128,7 +127,7 @@ struct BriefSidecarModelTests {
     func reviseProposes() async {
         let wb = await workbench()
         let before = wb.selected
-        let m = model { "<revision><goal>Add retry with backoff</goal></revision>" }
+        let m = model { "<revision>Add retry with backoff</revision>" }
         m.run(.revise, brief: wb.selected!, reply: "It timed out")
         await settle(m)
         #expect(m.result?.revisions.count == 1)
@@ -138,39 +137,39 @@ struct BriefSidecarModelTests {
     @Test("accepting applies once and saves the old text as a version")
     func acceptRevision() async {
         let wb = await workbench()
-        let m = model { "<revision><goal>Add retry with backoff</goal></revision>" }
+        let m = model { "<revision>Add retry with backoff</revision>" }
         m.run(.revise, brief: wb.selected!, reply: "r")
         await settle(m)
         let r = m.result!.revisions[0]
         m.acceptRevision(r, in: wb); m.acceptRevision(r, in: wb)
-        #expect(wb.selected?.text(of: .goal) == "Add retry with backoff")
+        #expect(wb.selected?.input == "Add retry with backoff")
         #expect(wb.selected?.versions.count == 1)
-        #expect(wb.selected?.versions[0].sections.first { $0.kind == .goal }?.text == "Add retry to uploads")
+        #expect(wb.selected?.versions[0].input == "Add retry to uploads")
     }
 
-    @Test("a stale card is refused when the section was edited meanwhile")
+    @Test("a stale card is refused when the brief was edited meanwhile")
     func staleRevision() async {
         let wb = await workbench()
-        let m = model { "<revision><goal>Something new</goal></revision>" }
+        let m = model { "<revision>Something new</revision>" }
         m.run(.revise, brief: wb.selected!, reply: "r")
         await settle(m)
-        wb.setText("I changed this", for: .goal)
+        wb.setInput("I changed this")
         m.acceptRevision(m.result!.revisions[0], in: wb)
-        #expect(wb.selected?.text(of: .goal) == "I changed this")
-        #expect(m.result?.note == "That section changed since the suggestion. Run it again.")
+        #expect(wb.selected?.input == "I changed this")
+        #expect(m.result?.note == "The brief changed since the suggestion. Run it again.")
     }
 
     @Test("accepting after switching briefs edits the original brief only")
     func acceptOnOriginalBrief() async {
         let wb = await workbench()
         let firstID = wb.selectedID!
-        let m = model { "<revision><goal>Better goal</goal></revision>" }
+        let m = model { "<revision>Better goal</revision>" }
         m.run(.revise, brief: wb.selected!, reply: "r")
         await settle(m)
         await wb.newBrief(title: "other")
         m.acceptRevision(m.result!.revisions[0], in: wb)
-        #expect(wb.briefs.first { $0.id == firstID }?.text(of: .goal) == "Better goal")
-        #expect(wb.selected?.text(of: .goal) == "")
+        #expect(wb.briefs.first { $0.id == firstID }?.input == "Better goal")
+        #expect(wb.selected?.input == "")
     }
 
     @Test("an empty reply fails with one sentence")
@@ -198,7 +197,7 @@ struct BriefSidecarModelTests {
         await settleContinuation(m)
         #expect(wb.briefs.count == 2)
         #expect(wb.selected?.title.hasPrefix("Continue: Add retry") == true)
-        #expect(wb.selected?.text(of: .context).contains("Sources/Upload.swift") == true)
+        #expect(wb.selected?.input.contains("Sources/Upload.swift") == true)
     }
 
     @Test("cancelling a continuation creates nothing")
@@ -228,7 +227,7 @@ struct BriefSidecarModelTests {
     func deleteDuringRevise() async {
         let wb = await workbench()
         let gate = AsyncGate()
-        let m = model { await gate.wait(); return "<revision><goal>Better</goal></revision>" }
+        let m = model { await gate.wait(); return "<revision>Better</revision>" }
         m.run(.revise, brief: wb.selected!, reply: "r")
         await wb.deleteSelected()
         await gate.open()
@@ -237,24 +236,12 @@ struct BriefSidecarModelTests {
         #expect(wb.briefs.isEmpty)
     }
 
-    @Test("accepting a revision keeps an undo even when the goal was disabled meanwhile")
-    func acceptKeepsUndoWithGoalOff() async {
-        let wb = await workbench()
-        let m = model { "<revision><constraints>Retry 3 times</constraints></revision>" }
-        wb.setText("old rule", for: .constraints)
-        m.run(.revise, brief: wb.selected!, reply: "r")
-        await settle(m)
-        wb.setEnabled(false, for: .goal)
-        m.acceptRevision(m.result!.revisions[0], in: wb)
-        #expect(wb.selected?.text(of: .constraints) == "Retry 3 times")
-        #expect(wb.selected?.versions.last?.sections.first { $0.kind == .constraints }?.text == "old rule")
-    }
 
     @Test("accepting a finding sends one accepted signal with the guidance ids")
     func acceptSignals() async {
         let wb = await workbench()
         let sidecar = BriefSidecar(guidance: { _, _ in KnowledgeGuidance(text: "<guidance>\nx\n</guidance>\n", entryIDs: ["g1"]) },
-                                   generate: { _ in "<findings>\n- constraints | No limit | add: Retry at most 3 times.\n- goal | Vague\n</findings>" })
+                                   generate: { _ in "<findings>\n- No limit | add: Retry at most 3 times.\n- Vague\n</findings>" })
         let m = BriefSidecarModel(sidecar: sidecar)
         var signals: [(ids: [String], outcome: SignalOutcome)] = []
         m.onSignal = { signals.append(($0, $1)) }
@@ -270,7 +257,7 @@ struct BriefSidecarModelTests {
     func rejectSignals() async {
         let wb = await workbench()
         let sidecar = BriefSidecar(guidance: { _, _ in KnowledgeGuidance(text: "<guidance>\nx\n</guidance>\n", entryIDs: ["g1"]) },
-                                   generate: { _ in "<findings>\n- goal | Vague\n- constraints | Missing\n</findings>" })
+                                   generate: { _ in "<findings>\n- Vague\n- Missing\n</findings>" })
         let m = BriefSidecarModel(sidecar: sidecar)
         var outcomes: [SignalOutcome] = []
         m.onSignal = { outcomes.append($1) }
@@ -285,7 +272,7 @@ struct BriefSidecarModelTests {
     @Test("no signal is sent when no guidance was used")
     func noSignalWithoutGuidance() async {
         let wb = await workbench()
-        let m = model { "<findings>\n- goal | Vague\n</findings>" }
+        let m = model { "<findings>\n- Vague\n</findings>" }
         var count = 0
         m.onSignal = { _, _ in count += 1 }
         m.run(.critique, brief: wb.selected!)
@@ -297,7 +284,7 @@ struct BriefSidecarModelTests {
     @Test("accepting a revision reports the brief as accepted")
     func revisionAccepted() async {
         let wb = await workbench()
-        let m = model { "<revision>\n<goal>Add retry with backoff to uploads</goal>\n</revision>" }
+        let m = model { "<revision>Add retry with backoff to uploads</revision>" }
         var accepted = 0
         m.onAccepted = { _ in accepted += 1 }
         m.run(.revise, brief: wb.selected!, reply: "the answer")

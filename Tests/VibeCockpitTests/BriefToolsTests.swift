@@ -9,7 +9,7 @@ struct BriefToolsTests {
     private func brief(_ title: String, goal: String, id: String = UUID().uuidString) -> Brief {
         var b = Brief.new(title: title, target: .make(modelFamily: "claude", surface: .claudeCode))
         b.id = id
-        b.setText(goal, for: .goal)
+        b.input = goal
         return b
     }
     private func run(_ tool: any AgentToolHandler, _ args: [String: Value] = [:]) async throws -> String {
@@ -44,11 +44,11 @@ struct BriefToolsTests {
         #expect(!text.contains("AKIAIOSFODNN7EXAMPLE"))
     }
 
-    @Test("unknown id, missing id and empty goal give plain answers")
+    @Test("unknown id, missing id and empty brief give plain answers")
     func edges() async throws {
         let tool = GetBriefTool(provider: { [brief("T", goal: "", id: "e")] })
         #expect(try await run(tool, ["id": "nope"]).contains("No brief with id nope"))
-        #expect(try await run(tool, ["id": "e"]).contains("no goal yet"))
+        #expect(try await run(tool, ["id": "e"]).contains("is empty"))
         await #expect(throws: (any Error).self) { _ = try await tool.execute(arguments: [:]) }
     }
 }

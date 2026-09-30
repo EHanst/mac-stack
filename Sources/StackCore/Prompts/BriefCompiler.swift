@@ -2,7 +2,7 @@ import Foundation
 
 public struct BriefWarning: Sendable, Equatable {
     public enum Code: String, Sendable {
-        case emptyGoal, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, sectionsOverBudget, secretRedacted
+        case emptyInput, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, bodyOverBudget, secretRedacted
     }
     public var code: Code
     public var message: String
@@ -22,26 +22,24 @@ public enum BriefCompiler {
 
     public static func compile(_ original: Brief) -> CompiledPrompt {
         var warnings: [BriefWarning] = []
-        // Nothing leaves the app with a credential in it, whichever section or item it came from.
-        // Only what will actually be emitted is counted, so a hidden secret does not raise a warning.
         var brief = original
-        var sectionRedactions = 0
-        for i in brief.sections.indices {
-            let r = ContextRedactor.redact(brief.sections[i].text)
-            brief.sections[i].text = r.text
-            if brief.sections[i].enabled { sectionRedactions += r.count }
-        }
-        if sectionRedactions > 0 {
+
+        // Nothing leaves the app with a credential in it, whether from the text or an attached item.
+        // Only what will actually be emitted is counted, so a hidden secret does not raise a warning.
+        let body = ContextRedactor.redact(original.effectiveBody)
+        if body.count > 0 {
             warnings.append(.init(code: .secretRedacted,
-                                  message: "\(sectionRedactions) secret\(sectionRedactions == 1 ? " was" : "s were") removed from your text.", itemID: nil))
+                                  message: "\(body.count) secret\(body.count == 1 ? " was" : "s were") removed from your text.",
+                                  itemID: nil))
         }
+
         for i in brief.contextItems.indices {
-            let body = ContextRedactor.redact(brief.contextItems[i].text)
-            let ref = ContextRedactor.redact(brief.contextItems[i].ref)
-            brief.contextItems[i].text = body.text
-            brief.contextItems[i].ref = ref.text
-            if brief.contextItems[i].included, body.count + ref.count > 0 {
-                let n = body.count + ref.count
+            let redactedText = ContextRedactor.redact(brief.contextItems[i].text)
+            let redactedRef = ContextRedactor.redact(brief.contextItems[i].ref)
+            brief.contextItems[i].text = redactedText.text
+            brief.contextItems[i].ref = redactedRef.text
+            if brief.contextItems[i].included, redactedText.count + redactedRef.count > 0 {
+                let n = redactedText.count + redactedRef.count
                 warnings.append(.init(code: .secretRedacted,
                                       message: "\(n) secret\(n == 1 ? " was" : "s were") removed from \(brief.contextItems[i].ref).",
                                       itemID: brief.contextItems[i].id))
@@ -51,15 +49,12 @@ public enum BriefCompiler {
         let structure = brief.target.structure
         let budget = brief.target.tokenBudget
 
-        if brief.sections.first(where: { $0.kind == .goal && $0.enabled })?.text
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
-            warnings.append(.init(code: .emptyGoal, message: "Say what you want done.", itemID: nil))
+        if body.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            warnings.append(.init(code: .emptyInput, message: "Say what you want done.", itemID: nil))
         }
 
-        // Switching the Context section off takes its items with it.
-        let contextOn = brief.sections.first { $0.kind == .context }?.enabled ?? true
         var items: [ContextItem] = []
-        for item in brief.contextItems where item.included && contextOn {
+        for item in brief.contextItems where item.included {
             if item.mode == .reference && hasNoPath(item) {
                 warnings.append(.init(code: .referenceWithoutPath, message: "A context item has no path, so it was left out.", itemID: item.id))
             } else {
@@ -74,7 +69,7 @@ public enum BriefCompiler {
         }
 
         func render(_ items: [ContextItem]) -> String {
-            renderText(brief, items: items, structure: structure)
+            renderText(body.text, items: items, structure: structure)
         }
 
         var text = render(items)
@@ -102,8 +97,8 @@ public enum BriefCompiler {
         }
         if tokens > budget {
             warnings.append(.init(code: .overBudget, message: "The brief is about \(tokens) tokens, over this target's budget of about \(budget).", itemID: nil))
-            if PromptTokens.estimate(renderText(brief, items: [], structure: structure)) > budget {
-                warnings.append(.init(code: .sectionsOverBudget, message: "Your own sections are longer than this target handles well. Shorten them.", itemID: nil))
+            if PromptTokens.estimate(render([])) > budget {
+                warnings.append(.init(code: .bodyOverBudget, message: "Your text is longer than this target handles well. Shorten it.", itemID: nil))
             }
         }
         return CompiledPrompt(text: text, tokens: tokens, warnings: warnings, includedItemIDs: items.map(\.id))
@@ -125,52 +120,23 @@ public enum BriefCompiler {
 
     // MARK: Rendering
 
-    private static let order: [BriefSection.Kind] = [.goal, .context, .constraints, .examples, .outputFormat]
-
-    private static func renderText(_ brief: Brief, items: [ContextItem], structure: ModelPromptProfile.Structure) -> String {
+    private static func renderText(_ body: String, items: [ContextItem], structure: ModelPromptProfile.Structure) -> String {
         var blocks: [String] = []
-        for kind in order {
-            var body = brief.sections.first { $0.kind == kind && $0.enabled }?.text
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if kind == .context, !items.isEmpty, brief.sections.first(where: { $0.kind == .context })?.enabled ?? true {
-                let rendered = items.map { renderItem($0, structure: structure) }.joined(separator: "\n")
-                body = body.isEmpty ? rendered : body + "\n" + rendered
-            }
-            guard !body.isEmpty else { continue }
-            if kind == .constraints, structure == .plainNumbered {
-                body = body.split(separator: "\n", omittingEmptySubsequences: true).enumerated()
-                    .map { "\($0.offset + 1). \($0.element.trimmingCharacters(in: .whitespaces))" }.joined(separator: "\n")
-            }
-            blocks.append(wrap(body, kind: kind, structure: structure))
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            blocks.append(trimmed)
+        }
+        if !items.isEmpty {
+            blocks.append(items.map { renderItem($0, structure: structure) }.joined(separator: "\n"))
         }
         return blocks.joined(separator: "\n\n")
-    }
-
-    private static func wrap(_ body: String, kind: BriefSection.Kind, structure: ModelPromptProfile.Structure) -> String {
-        switch structure {
-        case .xmlTags:
-            let tag = kind.rawValue.lowercased()
-            return "<\(tag)>\n\(neutralize(body, keepingKnownTags: true))\n</\(tag)>"
-        case .markdown, .plainNumbered:
-            return "## \(title(kind))\n\(body)"
-        }
-    }
-
-    private static func title(_ kind: BriefSection.Kind) -> String {
-        switch kind {
-        case .goal: "Goal"
-        case .context: "Context"
-        case .constraints: "Constraints"
-        case .examples: "Examples"
-        case .outputFormat: "Output format"
-        }
     }
 
     private static func renderItem(_ item: ContextItem, structure: ModelPromptProfile.Structure) -> String {
         if item.mode == .reference { return "See \(oneLine(item.ref))" }
         switch structure {
         case .xmlTags:
-            return "<file path=\"\(attribute(item.ref))\">\n\(neutralize(item.text, keepingKnownTags: false))\n</file>"
+            return "<file path=\"\(attribute(item.ref))\">\n\(neutralize(item.text))\n</file>"
         case .markdown, .plainNumbered:
             var fence = "```"
             while item.text.contains(fence) { fence += "`" }
@@ -178,17 +144,9 @@ public enum BriefCompiler {
         }
     }
 
-    /// Stops pasted text from closing the tag it sits in. Section text escapes the section closers;
-    /// pasted file text escapes only `</file`, so code such as `</div>` reaches the model unchanged
-    /// (the section pass still escapes section closers inside the whole context block).
-    private static func neutralize(_ text: String, keepingKnownTags: Bool) -> String {
-        if keepingKnownTags {
-            // Only the file wrapper is ours inside a section, so protect closing tags inside inlined files
-            // by leaving user prose alone but escaping stray closers of the section tags themselves.
-            return text.replacingOccurrences(
-                of: #"</\s*(goal|context|constraints|examples|outputformat)\s*>"#, with: #"<\\/$1>"#,
-                options: [.regularExpression, .caseInsensitive])
-        }
-        return text.replacingOccurrences(of: "</file", with: "<\\/file", options: .caseInsensitive)
+    /// Stops pasted file text from closing the `<file>` tag it sits in. Only `</file` is escaped,
+    /// so code such as `</div>` reaches the model unchanged. (The section-tag branch went with the sections.)
+    private static func neutralize(_ text: String) -> String {
+        text.replacingOccurrences(of: "</file", with: "<\\/file", options: .caseInsensitive)
     }
 }
