@@ -4,42 +4,6 @@ import VibeCockpitCore
 #endif
 import SwiftUI
 
-// MARK: - Navigation destinations
-
-enum NavDestination: Hashable, CaseIterable {
-    case chat
-    case diff
-    case models
-    case prompts
-    case tools
-    case snapshots
-    case settings
-
-    var label: String {
-        switch self {
-        case .chat:      return "Chat"
-        case .diff:      return "Changes"
-        case .models:    return "Models"
-        case .prompts:   return "Prompts"
-        case .tools:     return "MCP Tools"
-        case .snapshots: return "Snapshots"
-        case .settings:  return "Settings"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .chat:      return "bubble.left.and.bubble.right.fill"
-        case .diff:      return "arrow.left.arrow.right.circle.fill"
-        case .models:    return "cpu.fill"
-        case .prompts:   return "text.book.closed.fill"
-        case .tools:     return "wrench.and.screwdriver.fill"
-        case .snapshots: return "camera.fill"
-        case .settings:  return "gearshape.fill"
-        }
-    }
-}
-
 // MARK: - Root content view
 
 struct ContentView: View {
@@ -132,8 +96,8 @@ struct MainLayout: View {
         .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
     }
 
-    private var primaryItems: [NavDestination] { [.chat, .diff, .prompts, .models] }
-    private var secondaryItems: [NavDestination] { [.tools, .snapshots, .settings] }
+    private var primaryItems: [NavDestination] { NavDestination.sidebarPrimary }
+    private var secondaryItems: [NavDestination] { NavDestination.sidebarSecondary }
 
     private func badge(for dest: NavDestination) -> Int {
         switch dest {
@@ -258,10 +222,10 @@ struct MainLayout: View {
             Image(systemName: "macwindow.on.rectangle")
                 .font(.system(size: 44))
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.35))
-            Text("Preview")
+            Text("Compiled prompt")
                 .font(.mtTitleMedium)
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.5))
-            Text("Web previews will appear here when the agent generates HTML output.")
+            Text("The prompt your frontier model will receive appears here.")
                 .font(.mtBodySmall)
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.4))
                 .multilineTextAlignment(.center)
