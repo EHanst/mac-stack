@@ -193,6 +193,19 @@ public final class BriefWorkbenchModel {
         addContext(items, to: id)
     }
 
+    /// Adds `text` to a section of the named brief (not necessarily the selected one). False if that
+    /// brief no longer exists. Existing text is kept; a list-like section gets a new line, others a blank line.
+    @discardableResult
+    public func append(_ text: String, to kind: BriefSection.Kind, briefID: String) -> Bool {
+        guard briefs.contains(where: { $0.id == briefID }) else { return false }
+        mutate(id: briefID) { brief in
+            let existing = brief.text(of: kind)
+            let gap = existing.isEmpty ? "" : (kind == .constraints || kind == .examples ? "\n" : "\n\n")
+            brief.setText(existing + gap + text, for: kind)
+        }
+        return true
+    }
+
     /// Replaces the selected brief wholesale (used by later context and version features).
     public func replaceSelected(with brief: Brief) {
         mutate { $0 = brief; $0.updatedAt = Date() }

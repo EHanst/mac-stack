@@ -289,4 +289,36 @@ struct BriefWorkbenchModelTests {
                                              workingDiff: { _ in "" })
         await #expect(throws: Down.self) { _ = try await m.searchContext("x") }
     }
+
+    @Test("append adds to a section, separated from existing text")
+    func appendText() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        let id = m.selectedID!
+        #expect(m.append("first", to: .constraints, briefID: id))
+        #expect(m.append("second", to: .constraints, briefID: id))
+        #expect(m.selected?.text(of: .constraints) == "first\nsecond")
+        m.setText("Goal text", for: .goal)
+        #expect(m.append("Q: x\nA: y", to: .goal, briefID: id))
+        #expect(m.selected?.text(of: .goal) == "Goal text\n\nQ: x\nA: y")
+    }
+
+    @Test("append to a deleted brief does nothing and reports it")
+    func appendToDeleted() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        let id = m.selectedID!
+        await m.deleteSelected()
+        #expect(!m.append("x", to: .goal, briefID: id))
+    }
+
+    @Test("append targets the named brief, not the selected one")
+    func appendPinned() async {
+        let (m, _) = make()
+        await m.newBrief(title: "a"); let a = m.selectedID!
+        await m.newBrief(title: "b")
+        #expect(m.append("only a", to: .goal, briefID: a))
+        #expect(m.selected?.text(of: .goal) == "")
+        #expect(m.briefs.first { $0.id == a }?.text(of: .goal) == "only a")
+    }
 }
