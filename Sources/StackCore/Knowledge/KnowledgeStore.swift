@@ -244,6 +244,46 @@ public actor KnowledgeStore {
         try run("DELETE FROM entries WHERE id = ?;", [.text(id)])
     }
 
+    // MARK: Search
+
+    public func search(query text: String, target: String?, k: Int = 20) async -> [KnowledgeHit] {
+        guard (try? open()) != nil else { return [] }
+        let filter = "e.enabled = 1 AND (e.target IS NULL OR e.target = ?)"
+        let targetBind = Bind.text(target ?? "")
+        var sparse: [String] = []
+        if let match = FTSQuery.match(text) {
+            sparse = (try? query("""
+                SELECT e.id FROM entries_fts f JOIN entries e ON e.rowid = f.rowid
+                WHERE entries_fts MATCH ? AND \(filter) ORDER BY bm25(entries_fts) LIMIT ?;
+                """, [.text(match), targetBind, .int(Int64(k))]) { kText($0, 0) }) ?? []
+        }
+        var dense: [String] = []
+        if let embedder, let q = try? await embedder.query(text), q.count == dimension {
+            dense = (try? query("""
+                SELECT e.id FROM entries_vec v JOIN entries e ON e.id = v.entry_id
+                WHERE \(filter) ORDER BY vec_distance_cosine(v.embedding, ?) LIMIT ?;
+                """, [targetBind, .blob(q.knowledgeBlob), .int(Int64(k))]) { kText($0, 0) }) ?? []
+        }
+        var hits: [KnowledgeHit] = []
+        for (id, score) in RankFusion.fuse([dense, sparse]).prefix(k) {
+            if let e = try? entry(id: id) { hits.append(KnowledgeHit(entry: e, score: score)) }
+        }
+        return hits
+    }
+
+    /// Embeds entries that have no vector (the embedder was unavailable, or the dimension changed).
+    @discardableResult
+    public func reembedMissing(batch: Int = 16) async -> Int {
+        guard embedder != nil, (try? open()) != nil else { return 0 }
+        let rows = (try? query("""
+            SELECT id, text FROM entries WHERE id NOT IN (SELECT entry_id FROM entries_vec) LIMIT 500;
+            """) { (id: kText($0, 0), text: kText($0, 1)) }) ?? []
+        guard !rows.isEmpty else { return 0 }
+        let before = (try? embeddedCount()) ?? 0
+        await embed(rows, batch: batch)
+        return max(0, ((try? embeddedCount()) ?? 0) - before)
+    }
+
     // MARK: SQLite plumbing
 
     private func failure() -> KnowledgeError {
