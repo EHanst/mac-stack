@@ -35,10 +35,10 @@ Key finding: with one free-text input and instant compile, the brief ≈ input +
 - Restoring a version restores both input and body.
 
 5. Sidecar retargeted
-- BriefSidecar prompts drop per-section tags; the brief is sent as `<brief>` with input (and body if edited). Interview answers and critique "Add this" append to the input. Revise returns one `<revision>` block: whole-input replacement, shown as a diff, applied via `setInput`. Question/Finding/Revision types drop `section`.
+- BriefSidecar prompts drop per-section tags; the brief is sent as `<brief>` with input (and body if edited). Interview answers, critique "Add this" and revisions apply to the active text (input while linked, body while edited; see D2). Revise returns one `<revision>` block: a whole-text replacement, shown as a diff. Question/Finding/Revision types drop `section`.
 - KnowledgeRecorder records effectiveBody (guard: non-empty). KnowledgeRetriever uses of sections updated.
 - BriefVersionDiff compares input and body instead of per-section rows.
-- MCP BriefTools get_brief/list_briefs return `input`, `body` (or null), `compiled`.
+- MCP `get_brief` keeps returning only the compiled prompt; `list_briefs` marks edited briefs (see D9).
 - BriefSidecarModel.continueFromSession / newBrief(title:goal:context:) → newBrief(title:input:).
 
 6. Synthesize removal (everywhere)
@@ -51,3 +51,16 @@ Key finding: with one free-text input and instant compile, the brief ≈ input +
 7. Antipatterns avoided: two writers without an owner; persisting derived text; lossy migration; feature flag running old+new UI in parallel (single cutover); model calls per keystroke; growing the 245-line view (split files); leftover dead code (compiler-driven removal); silent default on bad MCP input.
 
 8. Testing: Swift Testing (`import Testing`, @Test, #expect), run with `swift test --filter <Suite>`; full `swift test --parallel`. Compiler tests (linked vs edited, redaction, context both formats, emptyInput), migration tests (v1→v2 join, disabled sections preserved in backup, backup not re-loaded as a brief, future schema skip), workbench ownership tests, sidecar `<revision>` parse, MCP unknown-mode error, compile perf check with 200 KB diff item < 16 ms (memoize redaction only if it fails). Final: launch app with the run-vibecockpit skill and visually verify.
+
+9. Corrections from plan review
+
+- **D1 Edit tracking.** `Brief` stores `inputAtEdit: String?`, the input at the moment `body` was first set. `inputChangedSinceEdit` compares against it, so the "input changed" hint survives relaunch. `Version` stores it too, so restore is exact.
+- **D2 Sidecar targets the active text.** Answers, "Add this" and revisions apply to `input` while linked and to `body` while edited. Otherwise, after Improve (always edited) sidecar actions would change nothing visible.
+- **D3 Renames.** `.emptyGoal` becomes `.emptyInput` and `.sectionsOverBudget` becomes `.bodyOverBudget` on `BriefWarning`, `SidecarError` and `BriefExportError`.
+- **D4 MCP errors.** `AgentToolError` gains `invalidArgument(name, reason)`. `optimize_prompt` rejects unknown modes; it used to fall back to improve silently. The mode parser is a static function, so it's testable without inference.
+- **D5 Perf gate.** The unit test asserts < 100 ms (best of 3) in debug as a regression guard. The 16 ms frame target is a manual release-build check.
+- **D6 Backups.** `<id>.v1.json` is written once, before the first v2 write; it's never overwritten and never loaded. Deleting the brief deletes its backup, because leaving a hidden copy of possibly secret text is worse.
+- **D7 Types.** The legacy decode types are file-private and `BriefSection` is deleted.
+- **D8 Compile.** Context items are included whenever `item.included` (there's no context toggle any more). Item rendering and `</file` neutralization are unchanged.
+- **D9 MCP contract.** `get_brief` still returns only the compiled prompt: MCP clients rely on "ready to follow". `list_briefs` marks edited briefs with "· edited".
+
