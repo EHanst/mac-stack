@@ -7,14 +7,12 @@ public enum OptimizeMode: Sendable, Equatable {
     case expand
     /// Same request, restructured for the target model's preferred style (see `ModelPromptProfile`).
     case adapt
-    /// Audit the prompt: resolve instructions that conflict and fill in what is missing, saying what was assumed.
-    case synthesize
 
     /// Modes whose whole point is a longer, richer prompt.
-    var addsDetail: Bool { self == .expand || self == .synthesize }
+    var addsDetail: Bool { self == .expand }
 }
 
-/// How much detail Expand and Synthesize add.
+/// How much detail Expand adds.
 public enum OptimizeDepth: String, Sendable, CaseIterable {
     case concise, standard, exhaustive
 
@@ -40,16 +38,12 @@ public struct OptimizeContext: Sendable {
     /// prefix survives (a separate prompt would evict it; see docs/plans/2026-09-29-prompt-studio-plan.md).
     /// Never sent to a cloud model.
     public var sharedPrefix: [Message]
-    /// Text that will be sent along with the draft (recipe guidance, retrieved code). Synthesize checks
-    /// the draft against it but must not copy it into the rewrite.
-    public var reference: String?
 
     public init(workspaceName: String? = nil, intent: String? = nil,
                 profile: ModelPromptProfile = .generic, pin: ProviderID? = nil,
                 priority: InferenceScheduler.Priority = .interactive,
-                sharedPrefix: [Message] = [], reference: String? = nil, depth: OptimizeDepth? = nil) {
+                sharedPrefix: [Message] = [], depth: OptimizeDepth? = nil) {
         self.depth = depth
-        self.reference = reference
         self.priority = priority
         self.sharedPrefix = sharedPrefix
         self.workspaceName = workspaceName
@@ -125,7 +119,7 @@ public struct PromptOptimizer: Sendable {
     static let minimumRoom = 128
     /// Longest reply we wait for, so a runaway rewrite on a slow local model can be cancelled early.
     static let maxOutputTokens = 2_048
-    /// Expand and synthesize write long, detailed prompts, so a cloud model gets more room.
+    /// Expand writes long, detailed prompts, so a cloud model gets more room.
     static let maxDetailedOutputTokens = 4_096
 
     /// A model on this Mac decodes at about 11 tokens/s (docs/plans/model-facts.md), so 4,096 tokens would
@@ -295,18 +289,6 @@ public struct PromptOptimizer: Sendable {
                     Do not invent file names, APIs or facts that are not in the request; write "unspecified" or ask instead.
                     """)
             }
-        case .synthesize:
-            lines.append("""
-                5. Audit the request, then rewrite it as one complete, consistent prompt for a highly capable model. \
-                First, find instructions that conflict (requirements, constraints, scope, tone, output format, or with the \
-                <reference> text if present) and resolve each in favour of the user's clearest, most specific statement; \
-                list every conflict in <changes> as a line starting "Conflict:" that says how you resolved it. \
-                Second, add useful information that is missing\(context.depth ?? OptimizeDepth.defaultDepth(for: context.profile) == .concise ? " (keep additions brief)" : ""): \
-                the goal and why it matters, scope and non-goals, concrete requirements, acceptance criteria, edge cases, \
-                constraints, how to verify, and the output format. Mark anything you had to assume as a line starting \
-                "Assumed:" in <changes>. Do not invent file names, APIs or facts. If a gap can only be closed by the user, \
-                ask (at most 2 questions) instead of guessing. Do not copy <reference> text into the rewrite.
-                """)
         }
         lines.append("6. If the request is too vague to rewrite honestly, ask at most 2 short questions instead.")
         lines.append("")
@@ -337,17 +319,9 @@ public struct PromptOptimizer: Sendable {
         return "<draft>\n\(safe)\n</draft>"
     }
 
-    static func wrapReference(_ text: String) -> String {
-        let safe = text.replacingOccurrences(of: "</reference", with: "<\u{200B}/reference", options: .caseInsensitive)
-        return "<reference>\n\(safe)\n</reference>"
-    }
-
-    /// The user message body: the draft, preceded by reference text when synthesize checks against it.
+    /// The user message body: always the draft, never separate reference text.
     static func userBody(draft: String, context: OptimizeContext, mode: OptimizeMode) -> String {
-        guard mode == .synthesize,
-              let ref = context.reference?.trimmingCharacters(in: .whitespacesAndNewlines), !ref.isEmpty
-        else { return wrapDraft(draft) }
-        return wrapReference(ref) + "\n\n" + wrapDraft(draft)
+        wrapDraft(draft)
     }
 
     // MARK: Parsing and checking

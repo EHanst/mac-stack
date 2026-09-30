@@ -21,7 +21,7 @@ enum OptimizerEval {
     ]
 
     static func mode(_ name: String) -> OptimizeMode? {
-        ["improve": .improve, "expand": .expand, "adapt": .adapt, "synthesize": .synthesize][name]
+        ["improve": .improve, "expand": .expand, "adapt": .adapt][name]
     }
 
     static func run(provider: LocalMLXProvider, modes: [String], repeats: Int, json: URL?, sampling: String, repair: Bool) async {

@@ -27,26 +27,26 @@ struct BriefWorkbenchModelTests {
     func editGoal() async {
         let (m, store) = make()
         await m.newBrief(title: "t")
-        m.setText("Add a retry to the upload call", for: .goal)
+        m.setInput("Add a retry to the upload call")
         #expect(m.compiled?.text.contains("Add a retry") == true)
         await m.flush()
-        #expect(await store.all().first?.text(of: .goal) == "Add a retry to the upload call")
+        #expect(await store.all().first?.input == "Add a retry to the upload call")
     }
 
     @Test("rapid edits end with the last one on disk")
     func rapidEdits() async {
         let (m, store) = make()
         await m.newBrief(title: "t")
-        for i in 0..<20 { m.setText("edit \(i)", for: .goal) }
+        for i in 0..<20 { m.setInput("edit \(i)") }
         await m.flush()
-        #expect(await store.all().first?.text(of: .goal) == "edit 19")
+        #expect(await store.all().first?.input == "edit 19")
     }
 
     @Test("empty goal warns and copy text is empty")
-    func emptyGoal() async {
+    func emptyInput() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        #expect(m.compiled?.warnings.contains { $0.code == .emptyGoal } == true)
+        #expect(m.compiled?.warnings.contains { $0.code == .emptyInput } == true)
         #expect(m.copyText(for: nil).isEmpty)
     }
 
@@ -54,17 +54,17 @@ struct BriefWorkbenchModelTests {
     func surface() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        m.setText("Do X", for: .goal)
+        m.setInput("Do X")
         m.setTarget(modelFamily: "claude", surface: .chatGPTWeb)
         #expect(m.selected?.target.surface == .chatGPTWeb)
-        #expect(m.selected?.text(of: .goal) == "Do X")
+        #expect(m.selected?.input == "Do X")
     }
 
     @Test("copy for a surface does not change the brief's own target")
     func copyVariant() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        m.setText("Do X", for: .goal)
+        m.setInput("Do X")
         let before = m.selected?.target
         _ = m.copyText(for: .claudeCode)
         #expect(m.selected?.target == before)
@@ -101,7 +101,7 @@ struct BriefWorkbenchModelTests {
     func concurrentDelete() async {
         let (m, store) = make()
         await m.newBrief(title: "only")
-        m.setText("pending edit", for: .goal)
+        m.setInput("pending edit")
         async let a: Void = m.deleteSelected()
         async let b: Void = m.deleteSelected()
         _ = await (a, b)
@@ -117,13 +117,13 @@ struct BriefWorkbenchModelTests {
         let m = BriefWorkbenchModel(store: store, saveDelay: .milliseconds(200))
         await m.newBrief(title: "a")
         let aID = m.selectedID!
-        m.setText("edit in A", for: .goal)
+        m.setInput("edit in A")
         await m.newBrief(title: "b")
-        m.setText("edit in B", for: .goal)
+        m.setInput("edit in B")
         await m.flushNow()
         let saved = await store.all()
-        #expect(saved.first { $0.id == aID }?.text(of: .goal) == "edit in A")
-        #expect(saved.first { $0.id != aID }?.text(of: .goal) == "edit in B")
+        #expect(saved.first { $0.id == aID }?.input == "edit in A")
+        #expect(saved.first { $0.id != aID }?.input == "edit in B")
     }
 
     @Test("flushNow writes immediately instead of waiting out the delay")
@@ -132,11 +132,11 @@ struct BriefWorkbenchModelTests {
         let store = BriefStore(directory: dir)
         let m = BriefWorkbenchModel(store: store, saveDelay: .seconds(30))
         await m.newBrief(title: "t")
-        m.setText("last words", for: .goal)
+        m.setInput("last words")
         let start = ContinuousClock.now
         await m.flushNow()
         #expect(ContinuousClock.now - start < .seconds(5))
-        #expect(await store.all().first?.text(of: .goal) == "last words")
+        #expect(await store.all().first?.input == "last words")
     }
 
     @Test("reload keeps an edit that has not reached disk yet")
@@ -144,9 +144,9 @@ struct BriefWorkbenchModelTests {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("wb-\(UUID().uuidString)")
         let m = BriefWorkbenchModel(store: BriefStore(directory: dir), saveDelay: .seconds(30))
         await m.newBrief(title: "t")
-        m.setText("fresh", for: .goal)
+        m.setInput("fresh")
         await m.reload()
-        #expect(m.selected?.text(of: .goal) == "fresh")
+        #expect(m.selected?.input == "fresh")
     }
 
     @Test("canCopy follows the goal and does not need a second compile")
@@ -155,9 +155,9 @@ struct BriefWorkbenchModelTests {
         #expect(!m.canCopy)
         await m.newBrief(title: "t")
         #expect(!m.canCopy)
-        m.setText("Do X", for: .goal)
+        m.setInput("Do X")
         #expect(m.canCopy)
-        m.setEnabled(false, for: .goal)
+        m.setInput("  ")
         #expect(!m.canCopy)
     }
 
@@ -165,14 +165,14 @@ struct BriefWorkbenchModelTests {
     func overBudgetSurface() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        m.setText("Do X", for: .goal)
+        m.setInput("Do X")
         var brief = m.selected!
         let big = String(repeating: "word ", count: 30_000)
         brief.contextItems = [ContextItem(kind: .snippet, ref: "a.swift", text: big, mode: .inline)]
         m.replaceSelected(with: brief)
         let before = m.compiled?.warnings.map(\.code) ?? []
         m.setTarget(modelFamily: "claude", surface: .chatGPTWeb)
-        #expect(m.selected?.text(of: .goal) == "Do X")
+        #expect(m.selected?.input == "Do X")
         #expect(m.compiled != nil)
         #expect(before.contains(.overBudget) || before.contains(.itemDowngraded) || before.contains(.itemDropped))
     }
@@ -193,7 +193,7 @@ struct BriefWorkbenchModelTests {
     @Test("excluded items cost nothing and reference mode changes the compiled text")
     func toggles() async {
         let (m, _) = make()
-        await m.newBrief(title: "t"); m.setText("Do X", for: .goal)
+        await m.newBrief(title: "t"); m.setInput("Do X")
         m.addContext([ContextItem(id: "x", kind: .file, ref: "a.swift", text: "func a() {}", mode: .inline)])
         #expect(m.contextTokens > 0)
         #expect(m.compiled?.text.contains("func a() {}") == true)
@@ -290,51 +290,60 @@ struct BriefWorkbenchModelTests {
         await #expect(throws: Down.self) { _ = try await m.searchContext("x") }
     }
 
-    @Test("append adds to a section, separated from existing text")
-    func appendText() async {
+    @Test("appendToInput adds to the input, separated from existing text")
+    func appendInput() async {
         let (m, _) = make()
-        await m.newBrief(title: "t")
-        let id = m.selectedID!
-        #expect(m.append("first", to: .constraints, briefID: id))
-        #expect(m.append("second", to: .constraints, briefID: id))
-        #expect(m.selected?.text(of: .constraints) == "first\nsecond")
-        m.setText("Goal text", for: .goal)
-        #expect(m.append("Q: x\nA: y", to: .goal, briefID: id))
-        #expect(m.selected?.text(of: .goal) == "Goal text\n\nQ: x\nA: y")
+        await m.newBrief(title: "t", input: "Fix login")
+        #expect(m.appendToInput("File: Auth.swift", briefID: m.selectedID!))
+        #expect(m.selected?.input == "Fix login\n\nFile: Auth.swift")
+        #expect(m.appendToInput("x", briefID: "gone") == false)
     }
 
-    @Test("append to a deleted brief does nothing and reports it")
+    @Test("appendToInput to a deleted brief does nothing and reports it")
     func appendToDeleted() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
         let id = m.selectedID!
         await m.deleteSelected()
-        #expect(!m.append("x", to: .goal, briefID: id))
+        #expect(!m.appendToInput("x", briefID: id))
     }
 
-    @Test("append targets the named brief, not the selected one")
+    @Test("appendToInput targets the named brief, not the selected one")
     func appendPinned() async {
         let (m, _) = make()
         await m.newBrief(title: "a"); let a = m.selectedID!
         await m.newBrief(title: "b")
-        #expect(m.append("only a", to: .goal, briefID: a))
-        #expect(m.selected?.text(of: .goal) == "")
-        #expect(m.briefs.first { $0.id == a }?.text(of: .goal) == "only a")
+        #expect(m.appendToInput("only a", briefID: a))
+        #expect(m.selected?.input == "")
+        #expect(m.briefs.first { $0.id == a }?.input == "only a")
     }
 
-    @Test("saveVersion records once; unchanged sections add nothing")
+    @Test("saveVersion records once; unchanged text adds nothing")
     func saveVersionOnce() async {
         let (m, _) = make()
-        await m.newBrief(title: "t")
-        m.setText("Do X", for: .goal)
+        await m.newBrief(title: "t", input: "Fix login")
         m.saveVersion(); m.saveVersion()
         #expect(m.selected?.versions.count == 1)
-        m.setText("Do Y", for: .goal)
+        m.setInput("Fix login and logout")
         m.saveVersion()
         #expect(m.selected?.versions.count == 2)
     }
 
-    @Test("empty goal creates no version")
+    @Test("a body-only change is recorded as a new version")
+    func saveVersionBodyOnly() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Fix login")
+        m.saveVersion()
+        m.setBody("Fix login, edited")
+        m.saveVersion()
+        #expect(m.selected?.versions.count == 2)
+        m.setBody("Fix login, edited again")
+        m.saveVersion()
+        #expect(m.selected?.versions.count == 3)
+        #expect(m.selected?.input == "Fix login")
+    }
+
+    @Test("empty input creates no version")
     func noVersionWithoutGoal() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
@@ -346,7 +355,7 @@ struct BriefWorkbenchModelTests {
     func copyRecords() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        m.setText("Do X", for: .goal)
+        m.setInput("Do X")
         #expect(m.copyForClipboard(for: nil).contains("Do X"))
         #expect(m.copyForClipboard(for: nil).contains("Do X"))
         #expect(m.selected?.versions.count == 1)
@@ -356,25 +365,25 @@ struct BriefWorkbenchModelTests {
     func restore() async {
         let (m, store) = make()
         await m.newBrief(title: "t")
-        m.setText("old goal", for: .goal)
+        m.setInput("old goal")
         m.saveVersion()
-        m.setText("new goal", for: .goal)
+        m.setInput("new goal")
         m.restoreVersion(0)
-        #expect(m.selected?.text(of: .goal) == "old goal")
-        #expect(m.selected?.versions.last?.sections.first { $0.kind == .goal }?.text == "new goal")
+        #expect(m.selected?.input == "old goal")
+        #expect(m.selected?.versions.last?.input == "new goal")
         #expect(m.compiled?.text.contains("old goal") == true)
         await m.flush()
-        #expect(await store.all().first?.text(of: .goal) == "old goal")
+        #expect(await store.all().first?.input == "old goal")
     }
 
     @Test("restore with a bad index does nothing; the version cap holds")
     func restoreBoundsAndCap() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        m.setText("a", for: .goal)
+        m.setInput("a")
         m.restoreVersion(5); m.restoreVersion(-1)
-        #expect(m.selected?.text(of: .goal) == "a")
-        for i in 0..<(Brief.maxVersions + 5) { m.setText("g\(i)", for: .goal); m.saveVersion() }
+        #expect(m.selected?.input == "a")
+        for i in 0..<(Brief.maxVersions + 5) { m.setInput("g\(i)"); m.saveVersion() }
         #expect(m.selected?.versions.count == Brief.maxVersions)
     }
 
@@ -388,7 +397,7 @@ struct BriefWorkbenchModelTests {
     func export() async throws {
         let (m, _) = make()
         await m.newBrief(title: "Fix login")
-        m.setText("Add a retry", for: .goal)
+        m.setInput("Add a retry")
         let root = try tempRoot()
         let msg = m.exportSelected(to: root)
         #expect(msg.hasPrefix("Saved to .vibe/briefs/fix-login-"))
@@ -404,7 +413,7 @@ struct BriefWorkbenchModelTests {
         let (m, _) = make()
         await m.newBrief(title: "t")
         let root = try tempRoot()
-        #expect(m.exportSelected(to: root) == "Write a goal first, then save.")
+        #expect(m.exportSelected(to: root) == "Write something first, then save.")
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent(".vibe").path))
         #expect(m.selected?.versions.isEmpty == true)
     }
@@ -412,7 +421,7 @@ struct BriefWorkbenchModelTests {
     @Test("export refuses a symlinked .vibe with the exporter's sentence")
     func exportSymlink() async throws {
         let (m, _) = make()
-        await m.newBrief(title: "t"); m.setText("g", for: .goal)
+        await m.newBrief(title: "t"); m.setInput("g")
         let fm = FileManager.default
         let root = try tempRoot(), elsewhere = try tempRoot()
         try fm.createSymbolicLink(at: root.appendingPathComponent(".vibe"), withDestinationURL: elsewhere)
@@ -432,7 +441,7 @@ struct BriefWorkbenchModelTests {
         let made = await m.newBrief(fromClipboard: "\n  Fix the flaky upload test\nmore detail")
         #expect(made)
         #expect(m.selected?.title == "Fix the flaky upload test")
-        #expect(m.selected?.text(of: .goal) == "\n  Fix the flaky upload test\nmore detail")
+        #expect(m.selected?.input == "\n  Fix the flaky upload test\nmore detail")
     }
 
     @Test("blank clipboard makes nothing")
@@ -446,7 +455,7 @@ struct BriefWorkbenchModelTests {
     func clipboardSecret() async {
         let (m, _) = make()
         await m.newBrief(fromClipboard: "Deploy with AKIAIOSFODNN7EXAMPLE now")
-        #expect(m.selected?.text(of: .goal).contains("AKIAIOSFODNN7EXAMPLE") == true)
+        #expect(m.selected?.input.contains("AKIAIOSFODNN7EXAMPLE") == true)
         #expect(m.compiled?.text.contains("AKIAIOSFODNN7EXAMPLE") == false)
         #expect(m.copyText(for: nil).contains("AKIAIOSFODNN7EXAMPLE") == false)
     }
@@ -458,24 +467,17 @@ struct BriefWorkbenchModelTests {
         #expect((m.selected?.title.count ?? 99) <= 40)
     }
 
-    @Test("newBrief with goal and context fills both sections")
-    func newWithContext() async {
-        let (m, _) = make()
-        await m.newBrief(title: "Continue: x", goal: "Continue this work.", context: "- Sources/A.swift")
-        #expect(m.selected?.text(of: .goal) == "Continue this work.")
-        #expect(m.selected?.text(of: .context) == "- Sources/A.swift")
-    }
 
     @Test("restoring at the version cap keeps the restored text and the current text")
     func restoreAtCap() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        for i in 0..<Brief.maxVersions { m.setText("g\(i)", for: .goal); m.saveVersion() }
-        m.setText("current", for: .goal)
+        for i in 0..<Brief.maxVersions { m.setInput("v\(i)"); m.saveVersion() }
+        m.setInput("current")
         m.restoreVersion(0)
-        #expect(m.selected?.text(of: .goal) == "g0")
+        #expect(m.selected?.input == "v0")
+        #expect(m.selected?.versions.last?.input == "current")
         #expect(m.selected?.versions.count == Brief.maxVersions)
-        #expect(m.selected?.versions.last?.sections.first { $0.kind == .goal }?.text == "current")
     }
 
     @Test("a secret on the clipboard is not in the title or the export file name")
@@ -493,7 +495,7 @@ struct BriefWorkbenchModelTests {
     func acceptedHook() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
-        m.setText("Add retry to uploads", for: .goal)
+        m.setInput("Add retry to uploads")
         var seen: [String] = []
         m.onBriefAccepted = { seen.append($0.id) }
         m.saveVersion()
@@ -511,5 +513,103 @@ struct BriefWorkbenchModelTests {
         m.saveVersion()
         _ = m.copyForClipboard(for: nil)
         #expect(count == 0)
+    }
+
+    @Test("setBody while linked sets body and inputAtEdit; editing body to equal input stays edited")
+    func setBodyOwnership() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Original")
+        m.setBody("Edited")
+        #expect(m.selected?.body == "Edited")
+        #expect(m.selected?.input == "Original")
+        #expect(m.selected?.inputAtEdit == "Original")
+        #expect(m.selected?.effectiveBody == "Edited")
+        #expect(m.inputChangedSinceEdit == false)
+
+        m.setBody("Original")
+        #expect(m.selected?.body == "Original")
+        #expect(m.selected?.inputAtEdit == "Original")
+        #expect(m.selected?.isEdited == true)
+    }
+
+    @Test("editing input after body set exposes inputChangedSinceEdit and leaves compiled unchanged")
+    func inputChangedHint() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Original")
+        m.setBody("Edited")
+        let compiledBefore = m.compiled?.text
+        m.setInput("Original changed")
+        #expect(m.inputChangedSinceEdit == true)
+        #expect(m.selected?.body == "Edited")
+        #expect(m.compiled?.text == compiledBefore)
+    }
+
+    @Test("rebuildFromInput clears body and inputAtEdit and snapshots first")
+    func rebuild() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Original")
+        m.setBody("Edited")
+        m.rebuildFromInput()
+        #expect(m.selected?.body == nil)
+        #expect(m.selected?.inputAtEdit == nil)
+        #expect(m.selected?.effectiveBody == "Original")
+        #expect(m.selected?.versions.count == 1)
+        #expect(m.selected?.versions.last?.body == "Edited")
+    }
+
+    @Test("appendToBody switches a linked brief to edited and keeps an edited brief edited")
+    func appendsToBody() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Start")
+        m.appendToBody("Extra")
+        #expect(m.selected?.body == "Start\n\nExtra")
+        #expect(m.selected?.inputAtEdit == "Start")
+        m.appendToBody("Final")
+        #expect(m.selected?.body == "Start\n\nExtra\n\nFinal")
+        #expect(m.selected?.inputAtEdit == "Start")
+    }
+
+    @Test("appendToBody onto an empty body adds no leading blank lines")
+    func appendsToEmptyBody() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Start")
+        m.setBody("")
+        m.appendToBody("Extra")
+        #expect(m.selected?.body == "Extra")
+    }
+
+    @Test("restoreVersion restores input, body, and inputAtEdit")
+    func restoreOwnership() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "Input v1")
+        m.setBody("Body v1")
+        m.saveVersion()
+        m.setInput("Input v2")
+        m.setBody("Body v2")
+        m.restoreVersion(0)
+        #expect(m.selected?.input == "Input v1")
+        #expect(m.selected?.body == "Body v1")
+        #expect(m.selected?.inputAtEdit == "Input v1")
+    }
+
+    @Test("setBody with briefID writes to the specified brief, not the selected one")
+    func setBodyWithBriefID() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "First", input: "Input 1")
+        let firstID = m.selected?.id
+        await m.newBrief(title: "Second", input: "Input 2")
+        let secondID = m.selected?.id
+
+        // Select second brief, then write to first
+        #expect(m.selectedID == secondID)
+        m.setBody("Body for first", briefID: firstID ?? "")
+
+        // Check first brief was updated, second untouched
+        let first = m.briefs.first { $0.id == firstID }
+        let second = m.briefs.first { $0.id == secondID }
+        #expect(first?.body == "Body for first")
+        #expect(first?.inputAtEdit == "Input 1")
+        #expect(second?.body == nil)
+        #expect(second?.input == "Input 2")
     }
 }

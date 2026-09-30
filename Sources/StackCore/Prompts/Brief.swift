@@ -1,14 +1,14 @@
 import Foundation
 
-public struct BriefSection: Codable, Sendable, Equatable, Identifiable {
-    public enum Kind: String, Codable, Sendable, CaseIterable { case goal, context, constraints, examples, outputFormat }
-    public var kind: Kind
-    public var text: String
-    public var enabled: Bool
-    public var id: Kind { kind }
-    public init(kind: Kind, text: String = "", enabled: Bool = true) {
-        self.kind = kind; self.text = text; self.enabled = enabled
-    }
+private struct LegacySection: Codable {
+    var kind: String
+    var text: String
+    var enabled: Bool
+}
+
+private struct LegacyVersion: Codable {
+    var date: Date
+    var sections: [LegacySection]
 }
 
 /// A piece of repo context attached to a brief. `text` is what gets inlined; `ref` is what a
@@ -39,10 +39,19 @@ public struct ContextItem: Codable, Sendable, Equatable, Identifiable {
 public struct Brief: Codable, Sendable, Equatable, Identifiable {
     public struct Version: Codable, Sendable, Equatable {
         public var date: Date
-        public var sections: [BriefSection]
+        public var input: String
+        public var body: String?
+        public var inputAtEdit: String?
+
+        public init(date: Date, input: String, body: String?, inputAtEdit: String? = nil) {
+            self.date = date
+            self.input = input
+            self.body = body
+            self.inputAtEdit = inputAtEdit
+        }
     }
 
-    public static let currentVersion = 1
+    public static let currentVersion = 2
     public static let maxVersions = 20
 
     public var id: String
@@ -50,34 +59,118 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
     public var title: String
     public var workspace: String?
     public var target: TargetProfile
-    public var sections: [BriefSection]
+    public var input: String
+    public var body: String?
+    /// The input when `body` was last set; nil when linked.
+    public var inputAtEdit: String?
     public var contextItems: [ContextItem]
     public var versions: [Version]
     public var createdAt: Date
     public var updatedAt: Date
 
-    public static func new(title: String, target: TargetProfile, workspace: String? = nil, now: Date = Date()) -> Brief {
+    public var effectiveBody: String { body ?? input }
+    public var isEdited: Bool { body != nil }
+
+    public init(id: String, schemaVersion: Int, title: String, workspace: String?, target: TargetProfile,
+                input: String, body: String?, inputAtEdit: String?, contextItems: [ContextItem],
+                versions: [Version], createdAt: Date, updatedAt: Date) {
+        self.id = id
+        self.schemaVersion = schemaVersion
+        self.title = title
+        self.workspace = workspace
+        self.target = target
+        self.input = input
+        self.body = body
+        self.inputAtEdit = inputAtEdit
+        self.contextItems = contextItems
+        self.versions = versions
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
+    public static func new(title: String, input: String = "", target: TargetProfile,
+                           workspace: String? = nil, now: Date = Date()) -> Brief {
         Brief(id: UUID().uuidString, schemaVersion: currentVersion, title: title, workspace: workspace,
-              target: target, sections: BriefSection.Kind.allCases.map { BriefSection(kind: $0) },
+              target: target, input: input, body: nil, inputAtEdit: nil,
               contextItems: [], versions: [], createdAt: now, updatedAt: now)
     }
 
-    public func text(of kind: BriefSection.Kind) -> String {
-        sections.first { $0.kind == kind }?.text ?? ""
-    }
-
-    public mutating func setText(_ text: String, for kind: BriefSection.Kind, now: Date = Date()) {
-        if let i = sections.firstIndex(where: { $0.kind == kind }) {
-            sections[i].text = text
-        } else {
-            sections.append(BriefSection(kind: kind, text: text))
-        }
-        updatedAt = now
-    }
-
-    /// Records the current sections so an edit can be undone or diffed, newest last.
     public mutating func snapshot(now: Date = Date()) {
-        versions.append(Version(date: now, sections: sections))
+        versions.append(Version(date: now, input: input, body: body, inputAtEdit: inputAtEdit))
         if versions.count > Self.maxVersions { versions.removeFirst(versions.count - Self.maxVersions) }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, schemaVersion, title, workspace, target
+        case input, body, inputAtEdit, contextItems, versions, createdAt, updatedAt
+        case sections
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        title = try c.decode(String.self, forKey: .title)
+        workspace = try c.decodeIfPresent(String.self, forKey: .workspace)
+        target = try c.decode(TargetProfile.self, forKey: .target)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+        contextItems = try c.decodeIfPresent([ContextItem].self, forKey: .contextItems) ?? []
+
+        if schemaVersion <= 1 {
+            let legacySections = try c.decodeIfPresent([LegacySection].self, forKey: .sections) ?? []
+            let legacyVersions = try c.decodeIfPresent([LegacyVersion].self, forKey: .versions) ?? []
+            input = Self.joinLegacy(legacySections)
+            body = nil
+            inputAtEdit = nil
+            // The old context section's switch also gated the attached items; keep them off.
+            if legacySections.first(where: { $0.kind == "context" })?.enabled == false {
+                for i in contextItems.indices { contextItems[i].included = false }
+            }
+            versions = legacyVersions.map {
+                Version(date: $0.date, input: Self.joinLegacy($0.sections), body: nil, inputAtEdit: nil)
+            }
+            self.schemaVersion = Self.currentVersion
+        } else {
+            input = try c.decodeIfPresent(String.self, forKey: .input) ?? ""
+            body = try c.decodeIfPresent(String.self, forKey: .body)
+            inputAtEdit = try c.decodeIfPresent(String.self, forKey: .inputAtEdit)
+            versions = try c.decodeIfPresent([Version].self, forKey: .versions) ?? []
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(workspace, forKey: .workspace)
+        try c.encode(target, forKey: .target)
+        try c.encode(input, forKey: .input)
+        try c.encodeIfPresent(body, forKey: .body)
+        try c.encodeIfPresent(inputAtEdit, forKey: .inputAtEdit)
+        try c.encode(contextItems, forKey: .contextItems)
+        try c.encode(versions, forKey: .versions)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(updatedAt, forKey: .updatedAt)
+    }
+
+    private static func joinLegacy(_ sections: [LegacySection]) -> String {
+        let titles = [
+            "goal": "Goal",
+            "context": "Context",
+            "constraints": "Constraints",
+            "examples": "Examples",
+            "outputFormat": "Output format"
+        ]
+        let order = ["goal", "context", "constraints", "examples", "outputFormat"]
+        var parts: [String] = []
+        for key in order {
+            guard let section = sections.first(where: { $0.kind == key }), section.enabled else { continue }
+            let text = section.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            parts.append("## \(titles[key] ?? key)\n\(text)")
+        }
+        return parts.joined(separator: "\n\n")
     }
 }

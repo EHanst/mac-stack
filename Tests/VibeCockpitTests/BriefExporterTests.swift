@@ -6,7 +6,7 @@ import Foundation
 struct BriefExporterTests {
     private func brief(title: String = "Fix login timeout", goal: String = "Add a retry") -> Brief {
         var b = Brief.new(title: title, target: .make(modelFamily: "claude", surface: .claudeCode))
-        b.setText(goal, for: .goal)
+        b.input = goal
         return b
     }
     private func tempRoot() -> URL {
@@ -42,9 +42,9 @@ struct BriefExporterTests {
     }
 
     @Test("no goal means nothing to export")
-    func emptyGoal() {
+    func emptyInput() {
         #expect(BriefExporter.markdown(for: brief(goal: " ")) == nil)
-        #expect(throws: BriefExportError.emptyGoal) { try BriefExporter.export(brief(goal: ""), toProjectRoot: tempRoot()) }
+        #expect(throws: BriefExportError.emptyInput) { try BriefExporter.export(brief(goal: ""), toProjectRoot: tempRoot()) }
     }
 
     @Test("export writes under .vibe/briefs and re-exporting the same brief overwrites one file")
@@ -54,7 +54,7 @@ struct BriefExporterTests {
         let url = try BriefExporter.export(b, toProjectRoot: root)
         #expect(url.deletingLastPathComponent().path.hasSuffix("/.vibe/briefs"))
         #expect(url.lastPathComponent.hasSuffix(".md"))
-        var edited = b; edited.setText("Different goal", for: .goal)
+        var edited = b; edited.input = "Different goal"
         let again = try BriefExporter.export(edited, toProjectRoot: root)
         #expect(again == url)
         #expect(try String(contentsOf: url, encoding: .utf8).contains("Different goal"))

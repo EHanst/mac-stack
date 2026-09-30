@@ -12,6 +12,11 @@ public enum BriefStoreError: LocalizedError, Equatable {
     }
 }
 
+private struct FileMeta: Decodable {
+    let id: String
+    let schemaVersion: Int
+}
+
 /// The user's briefs: one JSON file each, so they are easy to back up and diff. Same shape as
 /// `PromptLibrary`. All writes go through here.
 public actor BriefStore {
@@ -19,6 +24,9 @@ public actor BriefStore {
     private var briefs: [String: Brief] = [:]
     /// Every file each brief was read from or written to, so delete removes copies too.
     private var files: [String: Set<URL>] = [:]
+    /// Files that still contain original v1 data, keyed by brief id. Copied once to `<id>.v1.json`
+    /// before the first v2 write; not loaded as briefs.
+    private var legacyFiles: [String: URL] = [:]
     private var loaded = false
     private let logger = Logger(subsystem: "com.vibecockpit", category: "BriefStore")
 
@@ -43,12 +51,17 @@ public actor BriefStore {
         loaded = true
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let entries = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
-        for file in entries where file.pathExtension == "json" {
+        for file in entries where file.pathExtension == "json" && !file.lastPathComponent.hasSuffix(".v1.json") {
             do {
-                let brief = try Self.decoder.decode(Brief.self, from: Data(contentsOf: file))
+                let data = try Data(contentsOf: file)
+                let meta = try Self.decoder.decode(FileMeta.self, from: data)
+                let brief = try Self.decoder.decode(Brief.self, from: data)
                 guard brief.schemaVersion <= Brief.currentVersion else {
                     logger.error("skipping newer brief \(file.lastPathComponent, privacy: .public)")
                     continue
+                }
+                if meta.schemaVersion < Brief.currentVersion {
+                    legacyFiles[brief.id] = file
                 }
                 files[brief.id, default: []].insert(file)
                 if briefs[brief.id] == nil { briefs[brief.id] = brief }
@@ -73,6 +86,24 @@ public actor BriefStore {
             throw BriefStoreError.invalidID(brief.id)
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        if let legacy = legacyFiles[brief.id] {
+            let backup = directory.appendingPathComponent("\(brief.id).v1.json")
+            if !FileManager.default.fileExists(atPath: backup.path) {
+                // Data.write can't combine .atomic with .withoutOverwriting, so stage a temp file and move it in;
+                // moveItem refuses to replace an existing file, and a crash never leaves a partial backup.
+                let staged = directory.appendingPathComponent(".\(brief.id).v1.json.\(UUID().uuidString).tmp")
+                do {
+                    try Data(contentsOf: legacy).write(to: staged, options: .atomic)
+                    try FileManager.default.moveItem(at: staged, to: backup)
+                } catch {
+                    try? FileManager.default.removeItem(at: staged)
+                    throw error
+                }
+            }
+            legacyFiles[brief.id] = nil
+        }
+
         let target = url(for: brief.id)
         try Self.encoder.encode(brief).write(to: target, options: .atomic)
         briefs[brief.id] = brief
@@ -85,8 +116,14 @@ public actor BriefStore {
         for file in files[id] ?? [] where FileManager.default.fileExists(atPath: file.path) {
             try FileManager.default.removeItem(at: file)
         }
-        briefs[id] = nil
+        // The backup may hold secrets the user just chose to delete; don't leave a hidden copy.
+        let backup = directory.appendingPathComponent("\(id).v1.json")
+        if FileManager.default.fileExists(atPath: backup.path) {
+            try FileManager.default.removeItem(at: backup)
+        }
         files[id] = nil
+        briefs[id] = nil
+        legacyFiles[id] = nil
     }
 
     public func exportMarkdown(id: String, to url: URL) throws {

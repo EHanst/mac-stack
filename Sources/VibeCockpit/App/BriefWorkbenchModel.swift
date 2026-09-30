@@ -39,31 +39,25 @@ public final class BriefWorkbenchModel {
         recompile()
     }
 
-    public func newBrief(title: String) async {
+    public func newBrief(title: String, input: String = "") async {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         await insert(Brief.new(title: name.isEmpty ? "Untitled brief" : name,
+                               input: input,
                                target: .make(modelFamily: "claude", surface: .claudeCode)))
     }
 
-    /// The clipboard text becomes the goal as it is; redaction happens when the prompt is compiled,
+    /// The clipboard text becomes the input as it is; redaction happens when the prompt is compiled,
     /// exported or sent to the model. False when there is nothing to use.
     @discardableResult
     public func newBrief(fromClipboard text: String) async -> Bool {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         let first = text.split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespaces) }.first { !$0.isEmpty } ?? ""
-        var brief = Brief.new(title: String(ContextRedactor.redact(first).text.prefix(40)).trimmingCharacters(in: .whitespaces),
+        let brief = Brief.new(title: String(ContextRedactor.redact(first).text.prefix(40)).trimmingCharacters(in: .whitespaces),
+                              input: text,
                               target: .make(modelFamily: "claude", surface: .claudeCode))
-        brief.setText(text, for: .goal)
         await insert(brief)
         return true
-    }
-
-    public func newBrief(title: String, goal: String, context: String) async {
-        var brief = Brief.new(title: title, target: .make(modelFamily: "claude", surface: .claudeCode))
-        brief.setText(goal, for: .goal)
-        brief.setText(context, for: .context)
-        await insert(brief)
     }
 
     private func insert(_ brief: Brief) async {
@@ -75,21 +69,99 @@ public final class BriefWorkbenchModel {
 
     public func select(_ id: String?) { selectedID = id; recompile() }
 
-    public func setText(_ text: String, for kind: BriefSection.Kind) {
-        mutate { $0.setText(text, for: kind) }
+    public func setInput(_ text: String) {
+        mutate { $0.input = text; $0.updatedAt = Date() }
     }
 
-    /// Sets a section of a named brief, which need not be the selected one. No-op if it no longer exists.
-    public func setText(_ text: String, for kind: BriefSection.Kind, briefID: String) {
+    /// Sets the input of a named brief, which need not be the selected one. No-op if it no longer exists.
+    public func setInput(_ text: String, briefID: String) {
         guard briefs.contains(where: { $0.id == briefID }) else { return }
-        mutate(id: briefID) { $0.setText(text, for: kind) }
+        mutate(id: briefID) { $0.input = text; $0.updatedAt = Date() }
     }
 
-    public func setEnabled(_ on: Bool, for kind: BriefSection.Kind) {
-        mutate { brief in
-            if let i = brief.sections.firstIndex(where: { $0.kind == kind }) { brief.sections[i].enabled = on }
+    /// Appends to the text sidecar proposals apply to: `input` while linked, `body` while edited.
+    /// False if that brief no longer exists.
+    @discardableResult
+    public func appendToActive(_ text: String, briefID: String) -> Bool {
+        guard briefs.contains(where: { $0.id == briefID }) else { return false }
+        mutate(id: briefID) { brief in
+            if let body = brief.body {
+                brief.body = body + (body.isEmpty ? "" : "\n\n") + text
+            } else {
+                brief.input += (brief.input.isEmpty ? "" : "\n\n") + text
+            }
             brief.updatedAt = Date()
         }
+        return true
+    }
+
+    /// Replaces the active text outright: `input` while linked, `body` while edited.
+    public func setActive(_ text: String, briefID: String) {
+        guard briefs.contains(where: { $0.id == briefID }) else { return }
+        mutate(id: briefID) { brief in
+            if brief.body != nil { brief.body = text } else { brief.input = text }
+            brief.updatedAt = Date()
+        }
+    }
+
+    /// Appends to `input` whatever the brief's state; the input lint's "Add" is about the input.
+    @discardableResult
+    public func appendToInput(_ text: String, briefID: String) -> Bool {
+        guard briefs.contains(where: { $0.id == briefID }) else { return false }
+        mutate(id: briefID) { brief in
+            brief.input += (brief.input.isEmpty ? "" : "\n\n") + text
+            brief.updatedAt = Date()
+        }
+        return true
+    }
+
+    public func setBody(_ text: String) {
+        guard let id = selectedID else { return }
+        setBody(text, briefID: id)
+    }
+
+    /// Sets the body of a named brief, which need not be the selected one. If the brief is linked,
+    /// sets inputAtEdit to the current input. No-op if it no longer exists.
+    public func setBody(_ text: String, briefID: String) {
+        guard briefs.contains(where: { $0.id == briefID }) else { return }
+        mutate(id: briefID) { brief in
+            if brief.body == nil { brief.inputAtEdit = brief.input }
+            brief.body = text
+            brief.updatedAt = Date()
+        }
+    }
+
+    public func rebuildFromInput() {
+        guard let brief = selected, brief.body != nil else { return }
+        snapshotIfChanged(id: brief.id)
+        mutate { $0.body = nil; $0.inputAtEdit = nil; $0.updatedAt = Date() }
+    }
+
+    public var inputChangedSinceEdit: Bool {
+        guard let brief = selected, brief.body != nil else { return false }
+        return brief.input != brief.inputAtEdit
+    }
+
+    public func appendToBody(_ text: String) {
+        guard let id = selectedID else { return }
+        appendToBody(text, briefID: id)
+    }
+
+    /// Appends to the body of a named brief, which need not be the selected one. If the brief is linked,
+    /// sets inputAtEdit to the current input. No-op if it no longer exists.
+    @discardableResult
+    public func appendToBody(_ text: String, briefID: String) -> Bool {
+        guard briefs.contains(where: { $0.id == briefID }) else { return false }
+        mutate(id: briefID) { brief in
+            if brief.body == nil {
+                brief.inputAtEdit = brief.input
+                brief.body = brief.input + (brief.input.isEmpty ? "" : "\n\n") + text
+            } else {
+                brief.body! += (brief.body!.isEmpty ? "" : "\n\n") + text
+            }
+            brief.updatedAt = Date()
+        }
+        return true
     }
 
     public func setTarget(modelFamily: String, surface: Surface) {
@@ -106,7 +178,7 @@ public final class BriefWorkbenchModel {
         await pendingSaves[id]?.value
         pendingSaves[id] = nil
         saveGeneration[id] = nil
-        do { try await store.delete(id: id) } catch let BriefStoreError.notFound { /* never reached disk */ }
+        do { try await store.delete(id: id) } catch BriefStoreError.notFound { /* never reached disk */ }
         catch { saveError = error.localizedDescription }
     }
 
@@ -119,42 +191,42 @@ public final class BriefWorkbenchModel {
             for i in brief.contextItems.indices { brief.contextItems[i].mode = surface.defaultContextMode }
         }
         let out = BriefCompiler.compile(brief)
-        return out.warnings.contains { $0.code == .emptyGoal } ? "" : out.text
+        return out.warnings.contains { $0.code == .emptyInput } ? "" : out.text
     }
 
     // MARK: Versions
 
-    /// Records the current sections as a version unless nothing changed since the last one or there is no goal.
+    /// Records the current text as a version unless nothing changed since the last one or it is empty.
     /// `id` pins the brief; nil means the selected one.
     public func saveVersion(id: String? = nil) {
         guard let brief = briefs.first(where: { $0.id == (id ?? selectedID) }) else { return }
-        let goal = brief.sections.first { $0.kind == .goal }
-        guard goal?.enabled == true, !(goal?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        if brief.versions.last?.sections != brief.sections { snapshotIfChanged(id: brief.id) }
+        guard !brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if hasUnsavedVersion(brief) { snapshotIfChanged(id: brief.id) }
         noteAccepted(id: brief.id)
     }
 
     private func noteAccepted(id: String?) {
         guard let brief = briefs.first(where: { $0.id == (id ?? selectedID) }) else { return }
-        let goal = brief.sections.first { $0.kind == .goal }
-        guard goal?.enabled == true, !(goal?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         onBriefAccepted?(brief)
     }
 
-    /// Like `saveVersion` but with no goal requirement: used before an edit that would overwrite text,
+    /// Like `saveVersion` but with no emptiness requirement: used before an edit that would overwrite text,
     /// where losing it is worse than keeping an odd version.
     public func snapshotIfChanged(id: String) {
-        guard let brief = briefs.first(where: { $0.id == id }), brief.versions.last?.sections != brief.sections else { return }
+        guard let brief = briefs.first(where: { $0.id == id }), hasUnsavedVersion(brief) else { return }
         mutate(id: id) { $0.snapshot() }
     }
 
-    /// Puts an older version's sections back. The current sections are saved first so restoring can be undone.
+    /// Puts an older version's text back. The current text is saved first so restoring can be undone.
     public func restoreVersion(_ index: Int) {
         guard let brief = selected, brief.versions.indices.contains(index) else { return }
-        let sections = brief.versions[index].sections
+        let version = brief.versions[index]
         mutate { b in
-            if b.versions.last?.sections != b.sections { b.snapshot() }
-            b.sections = sections
+            if hasUnsavedVersion(b) { b.snapshot() }
+            b.input = version.input
+            b.body = version.body
+            b.inputAtEdit = version.inputAtEdit
             b.updatedAt = Date()
         }
     }
@@ -196,10 +268,10 @@ public final class BriefWorkbenchModel {
         await flush()
     }
 
-    /// True when the compiled prompt has a goal to send. Reads the cached compile, never recompiles.
+    /// True when the compiled prompt has text to send. Reads the cached compile, never recompiles.
     public var canCopy: Bool {
         guard let compiled else { return false }
-        return !compiled.warnings.contains { $0.code == .emptyGoal }
+        return !compiled.warnings.contains { $0.code == .emptyInput }
     }
 
     // MARK: Context
@@ -291,22 +363,14 @@ public final class BriefWorkbenchModel {
         addContext(items, to: id)
     }
 
-    /// Adds `text` to a section of the named brief (not necessarily the selected one). False if that
-    /// brief no longer exists. Existing text is kept; a list-like section gets a new line, others a blank line.
-    @discardableResult
-    public func append(_ text: String, to kind: BriefSection.Kind, briefID: String) -> Bool {
-        guard briefs.contains(where: { $0.id == briefID }) else { return false }
-        mutate(id: briefID) { brief in
-            let existing = brief.text(of: kind)
-            let gap = existing.isEmpty ? "" : (kind == .constraints || kind == .examples ? "\n" : "\n\n")
-            brief.setText(existing + gap + text, for: kind)
-        }
-        return true
-    }
-
     /// Replaces the selected brief wholesale (used by later context and version features).
     public func replaceSelected(with brief: Brief) {
         mutate { $0 = brief; $0.updatedAt = Date() }
+    }
+
+    /// True when the brief's text differs from its newest version (or it has none).
+    private func hasUnsavedVersion(_ b: Brief) -> Bool {
+        b.versions.last.map { $0.input != b.input || $0.body != b.body } ?? true
     }
 
     private func mutate(id: String? = nil, _ change: (inout Brief) -> Void) {

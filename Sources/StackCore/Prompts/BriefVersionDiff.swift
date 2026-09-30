@@ -1,20 +1,26 @@
 import Foundation
 
-/// What restoring a version would change, one row per section that differs.
+/// What restoring a version would change, one row per field that differs.
 public enum BriefVersionDiff {
+    public enum Field: String, Equatable { case input, body }
+
     public struct Row: Equatable, Identifiable {
-        public let kind: BriefSection.Kind
+        public let field: Field
         public let segments: [WordDiff.Segment]
-        public var id: BriefSection.Kind { kind }
+        public var id: Field { field }
     }
 
     /// Segments run from the current text to the version's: `added` comes back on restore, `removed` goes away.
-    public static func rows(current: [BriefSection], version: Brief.Version) -> [Row] {
-        BriefSection.Kind.allCases.compactMap { kind in
-            let now = current.first { $0.kind == kind }?.text ?? ""
-            let then = version.sections.first { $0.kind == kind }?.text ?? ""
-            guard now != then else { return nil }
-            return Row(kind: kind, segments: WordDiff.segments(from: now, to: then))
+    public static func rows(currentInput: String, currentBody: String?, version: Brief.Version) -> [Row] {
+        var rows: [Row] = []
+        if currentInput != version.input {
+            rows.append(Row(field: .input, segments: WordDiff.segments(from: currentInput, to: version.input)))
         }
+        let nowBody = currentBody ?? ""
+        let thenBody = version.body ?? ""
+        if nowBody != thenBody {
+            rows.append(Row(field: .body, segments: WordDiff.segments(from: nowBody, to: thenBody)))
+        }
+        return rows
     }
 }

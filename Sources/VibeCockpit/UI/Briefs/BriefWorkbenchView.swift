@@ -5,12 +5,11 @@ import VibeCockpitCore
 import SwiftUI
 import AppKit
 
-/// Center column: pick a brief, edit its sections. The compiled prompt is on the right.
+/// Center column: pick a brief, edit the input. The compiled prompt is on the right.
 struct BriefWorkbenchView: View {
     @Environment(AppServices.self) private var services
     @State private var newTitle = ""
     @State private var creating = false
-    @State private var improvingKind: BriefSection.Kind?
     @State private var clipboardNote: String?
     @State private var continuing = false
 
@@ -33,9 +32,6 @@ struct BriefWorkbenchView: View {
             }
         }
         .background(Color.mtSurface)
-        .sheet(isPresented: Binding(get: { improvingKind != nil }, set: { if !$0 { improvingKind = nil } })) {
-            if let kind = improvingKind { improveSheet(kind) }
-        }
         .sheet(isPresented: $continuing) {
             ReplySheet(title: "Continue from a session",
                        prompt: "Paste a long session. The sidecar summarizes it into a new brief; the paste is not kept.",
@@ -119,127 +115,62 @@ struct BriefWorkbenchView: View {
     }
 
     private func editor(_ brief: Brief) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                SidecarRailView()
-                ForEach(BriefSection.Kind.allCases, id: \.self) { kind in
-                    sectionEditor(kind, section: brief.sections.first { $0.kind == kind })
-                }
-            }
-            .padding(16)
-        }
-    }
-
-    private func sectionEditor(_ kind: BriefSection.Kind, section: BriefSection?) -> some View {
-        let enabled = section?.enabled ?? true
-        return VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 12) {
+            CappedScroll { SidecarRailView() }
             HStack {
-                Text(Self.title(kind)).font(.mtLabelLarge)
-                Text("~\(PromptTokens.estimate(section?.text ?? "")) tokens")
+                Text("Input").font(.mtLabelLarge)
+                Text("~\(PromptTokens.estimate(brief.input)) tokens")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                Button("Improve") { improve(kind) }
-                    .disabled((section?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Spacer()
-                Toggle("Include", isOn: Binding(get: { enabled }, set: { model.setEnabled($0, for: kind) }))
-                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
             }
-            SectionTextEditor(external: section?.text ?? "") { model.setText($0, for: kind) }
-                .id("\(model.selectedID ?? "")-\(kind.rawValue)")
+            EchoGuardedEditor(external: brief.input) { model.setInput($0) }
+                .id("\(brief.id)-input")
                 .font(.mtBodyMedium)
-                .frame(minHeight: kind == .goal ? 110 : 70)
                 .scrollContentBackground(.hidden)
                 .padding(8)
+                .frame(minHeight: 160, maxHeight: .infinity)
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-                .opacity(enabled ? 1 : 0.5)
-            if kind == .goal, enabled, let id = model.selectedID, let target = model.selected?.target {
-                ForEach(PromptLint.check(section?.text ?? "", context: .init(maxTokens: target.tokenBudget))) { finding in
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.circle").foregroundStyle(Color.mtOnSurfaceVariant)
-                        Text(finding.message).font(.mtBodySmall)
-                        // "Name the file" has no text worth inserting; a blank "File:" would only repeat.
-                        if let add = finding.suggestion, finding.rule != .noTarget {
-                            Button("Add") { model.append(add.trimmingCharacters(in: .whitespacesAndNewlines), to: .goal, briefID: id) }
-                                .controlSize(.small)
-                        }
-                    }
+            CappedScroll {
+                VStack(alignment: .leading, spacing: 4) { lintRows(brief) }
+            }
+            CappedScroll { ContextListView() }
+        }
+        .padding(16)
+    }
+
+    @ViewBuilder
+    private func lintRows(_ brief: Brief) -> some View {
+        ForEach(PromptLint.check(brief.input, context: .init(maxTokens: brief.target.tokenBudget))) { finding in
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.circle").foregroundStyle(Color.mtOnSurfaceVariant)
+                Text(finding.message).font(.mtBodySmall)
+                // "Name the file" has no text worth inserting; a blank "File:" would only repeat.
+                if let add = finding.suggestion, finding.rule != .noTarget {
+                    Button("Add") { model.appendToInput(add.trimmingCharacters(in: .whitespacesAndNewlines), briefID: brief.id) }
+                        .controlSize(.small)
                 }
             }
-            Text(Self.hint(kind)).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-            if kind == .context { ContextListView() }
-        }
-    }
-
-    private func text(of kind: BriefSection.Kind) -> String { model.selected?.text(of: kind) ?? "" }
-
-    private func improve(_ kind: BriefSection.Kind) {
-        services.promptStudio.startOptimize(draft: text(of: kind), mode: .improve, intent: PromptEngineer.Intent.general.rawValue)
-        improvingKind = kind
-    }
-
-    private func improveSheet(_ kind: BriefSection.Kind) -> some View {
-        let draft = text(of: kind)
-        return OptimizeReviewSheet(
-            studio: services.promptStudio, draft: draft,
-            onAccept: { model.setText($0, for: kind); services.promptStudio.clearUndo(); improvingKind = nil },
-            onExpand: { services.promptStudio.startOptimize(draft: draft, mode: .expand, intent: PromptEngineer.Intent.general.rawValue) },
-            onSynthesize: { services.promptStudio.startOptimize(draft: draft, mode: .synthesize, intent: PromptEngineer.Intent.general.rawValue) },
-            onAskQuestions: { questions in
-                model.setText(draft + "\n\n" + questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), for: kind)
-                services.promptStudio.dismissReview(); improvingKind = nil
-            },
-            onClose: { services.promptStudio.dismissReview(); improvingKind = nil })
-    }
-
-    static func title(_ kind: BriefSection.Kind) -> String {
-        switch kind {
-        case .goal: "Goal"
-        case .context: "Context"
-        case .constraints: "Constraints"
-        case .examples: "Examples"
-        case .outputFormat: "Output format"
-        }
-    }
-
-    static func hint(_ kind: BriefSection.Kind) -> String {
-        switch kind {
-        case .goal: "What you want done, in your own words."
-        case .context: "Background the model cannot see on its own."
-        case .constraints: "Rules it must follow, one per line."
-        case .examples: "A sample of what good looks like."
-        case .outputFormat: "How the answer should be shaped."
         }
     }
 }
 
-/// Keeps the text in local state while typing. Binding straight to the model made SwiftUI compare
-/// against a stale snapshot mid-keystroke and reset the selection to the end.
-private struct SectionTextEditor: View {
-    let external: String
-    let onChange: (String) -> Void
-    @State private var text: String
-    @State private var lastSent: String
-
-    init(external: String, onChange: @escaping (String) -> Void) {
-        self.external = external
-        self.onChange = onChange
-        _text = State(initialValue: external)
-        _lastSent = State(initialValue: external)
-    }
+/// Only as tall as its content, up to `maxHeight`; beyond that it scrolls. Keeps short rows from
+/// leaving a gap and long ones from pushing the editor or copy bar out of view.
+struct CappedScroll<Content: View>: View {
+    var maxHeight: CGFloat = 220
+    @ViewBuilder var content: () -> Content
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        TextEditor(text: $text)
-            .onChange(of: text) {
-                guard text != lastSent else { return }
-                lastSent = text
-                onChange(text)
-            }
-            .onChange(of: external) {
-                // Ignore the echo of our own edit; adopt real outside changes (Improve, Add, undo).
-                guard external != lastSent, external != text else { return }
-                lastSent = external
-                text = external
-            }
+        ScrollView {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { proxy in
+                    Color.clear.onChange(of: proxy.size.height, initial: true) { _, h in contentHeight = h }
+                })
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: min(contentHeight, maxHeight))
     }
 }
 #endif

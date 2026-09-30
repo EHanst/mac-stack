@@ -25,19 +25,17 @@ public struct KnowledgeRecorder: Sendable {
         try? await store.applySignal(ids: ids, outcome: outcome)
     }
 
-    /// The sections the user settled on, redacted. Attached context (file text, diffs) is deliberately left out.
+    /// The user's edited brief text, redacted. Attached context (file text, diffs) is deliberately left out.
     public static func exemplar(from brief: Brief, now: Date) -> KnowledgeEntry? {
-        let goal = ContextRedactor.redact(brief.text(of: .goal)).text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard brief.sections.first(where: { $0.kind == .goal })?.enabled == true, !goal.isEmpty else { return nil }
-        var parts: [String] = []
-        for kind in BriefSection.Kind.allCases {
-            guard let s = brief.sections.first(where: { $0.kind == kind }), s.enabled else { continue }
-            let text = ContextRedactor.redact(s.text).text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { parts.append("## \(kind.rawValue)\n\(text)") }
-        }
-        let intent = String(goal.replacingOccurrences(of: "\n", with: " ").prefix(200))
+        let effective = ContextRedactor.redact(brief.effectiveBody).text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !effective.isEmpty else { return nil }
+        let intent = String(effective.replacingOccurrences(of: "\n", with: " ").prefix(200))
         return KnowledgeEntry(kind: .exemplar, target: brief.target.modelFamily,
-                              text: String(parts.joined(separator: "\n\n").prefix(KnowledgeLimits.maxTextChars)),
-                              meta: ["intent": intent, "surface": brief.target.surface.rawValue, "briefID": brief.id], created: now)
+                              text: String(effective.prefix(KnowledgeLimits.maxTextChars)),
+                              meta: ["intent": intent,
+                                     "surface": brief.target.surface.rawValue,
+                                     "briefID": brief.id],
+                              created: now)
     }
 }

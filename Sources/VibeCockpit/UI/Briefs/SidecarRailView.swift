@@ -61,7 +61,6 @@ struct SidecarRailView: View {
 
     private func revisionCard(_ r: SidecarRevision, briefID: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(BriefWorkbenchView.title(r.section)).font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
             BriefVersionsSheet.diffText(WordDiff.segments(from: r.original, to: r.proposed)).font(.mtBodyMedium)
             HStack {
                 Button("Apply") { sidecar.acceptRevision(r, in: workbench) }
@@ -72,7 +71,6 @@ struct SidecarRailView: View {
 
     private func questionCard(_ q: SidecarQuestion) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(BriefWorkbenchView.title(q.section)).font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
             Text(q.text).font(.mtBodyMedium)
             HStack {
                 TextField("Your answer", text: Binding(get: { answers[q.id] ?? "" }, set: { answers[q.id] = $0 }))
@@ -86,7 +84,6 @@ struct SidecarRailView: View {
 
     private func findingCard(_ f: SidecarFinding) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(BriefWorkbenchView.title(f.section)).font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
             Text(f.issue).font(.mtBodyMedium)
             if let add = f.addition { Text("+ \(add)").font(.mtBodySmall).foregroundStyle(Color.mtPrimary) }
             HStack {

@@ -48,14 +48,17 @@ struct BriefVersionsSheet: View {
 
     @ViewBuilder private var detail: some View {
         if let selection, brief.versions.indices.contains(selection) {
-            let rows = BriefVersionDiff.rows(current: brief.sections, version: brief.versions[selection])
+            let rows = BriefVersionDiff.rows(currentInput: brief.input, currentBody: brief.body,
+                                             version: brief.versions[selection])
             if rows.isEmpty {
                 Text("No differences from the current text.").font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(rows) { row in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(BriefWorkbenchView.title(row.kind)).font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                            Text(row.field == .input ? "Input" : "Brief")
+                                .font(.mtLabelSmall)
+                                .foregroundStyle(Color.mtOnSurfaceVariant)
                             Self.diffText(row.segments).font(.mtBodyMedium)
                         }
                     }

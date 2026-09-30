@@ -9,9 +9,7 @@ struct BriefStoreTests {
             .appendingPathComponent("briefs-\(UUID().uuidString)", isDirectory: true))
     }
     private func brief(_ title: String) -> Brief {
-        var b = Brief.new(title: title, target: .make(modelFamily: "claude", surface: .claudeCode))
-        b.setText("Do the thing", for: .goal)
-        return b
+        Brief.new(title: title, input: "Do the thing", target: .make(modelFamily: "claude", surface: .claudeCode))
     }
 
     @Test("a saved brief survives a relaunch")
@@ -105,5 +103,74 @@ struct BriefStoreTests {
         #expect(text.hasPrefix("# Exp\n"))
         #expect(text.contains(compiled.text))
         #expect(compiled.warnings.allSatisfy { text.contains($0.message) } && !compiled.warnings.isEmpty)
+    }
+
+    private func writeV1BackupFixture(to directory: URL, id: String = "backupme") throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let json = """
+        {"id":"\(id)","schemaVersion":1,"title":"Old","workspace":null,\
+        "target":{"modelFamily":"claude","surface":"claudeCode","tokenBudget":20000},\
+        "sections":[{"kind":"goal","text":"Do thing","enabled":true}],\
+        "contextItems":[],"versions":[],"createdAt":"2026-09-30T00:00:00Z","updatedAt":"2026-09-30T00:00:00Z"}
+        """
+        try Data(json.utf8).write(to: directory.appendingPathComponent("\(id).json"))
+    }
+
+    @Test("the first v2 save copies the original v1 file to <id>.v1.json byte for byte")
+    func v1BackupCreated() async throws {
+        let s = store()
+        try writeV1BackupFixture(to: s.directory)
+        let original = try Data(contentsOf: s.directory.appendingPathComponent("backupme.json"))
+
+        let first = BriefStore(directory: s.directory)
+        let migrated = try #require(await first.brief(id: "backupme"))
+        #expect(migrated.schemaVersion == Brief.currentVersion)
+        #expect(migrated.body == nil)
+        let backup = s.directory.appendingPathComponent("backupme.v1.json")
+        #expect(!FileManager.default.fileExists(atPath: backup.path))   // loading alone writes nothing
+
+        try await first.save(migrated)
+        #expect(try Data(contentsOf: backup) == original)
+        // The live file is now v2; a fresh store sees one brief, not the backup as a second one.
+        #expect(await BriefStore(directory: s.directory).all().count == 1)
+    }
+
+    @Test("an existing backup is never overwritten")
+    func v1BackupNotOverwritten() async throws {
+        let s = store()
+        try writeV1BackupFixture(to: s.directory)
+        let backup = s.directory.appendingPathComponent("backupme.v1.json")
+        try Data("already here".utf8).write(to: backup)
+
+        let first = BriefStore(directory: s.directory)
+        let migrated = try #require(await first.brief(id: "backupme"))
+        try await first.save(migrated)
+        #expect(try String(contentsOf: backup, encoding: .utf8) == "already here")
+    }
+
+    @Test("deleting a migrated brief removes its backup too")
+    func v1BackupDeleted() async throws {
+        let s = store()
+        try writeV1BackupFixture(to: s.directory)
+        let first = BriefStore(directory: s.directory)
+        let migrated = try #require(await first.brief(id: "backupme"))
+        try await first.save(migrated)
+
+        let fresh = BriefStore(directory: s.directory)
+        try await fresh.delete(id: "backupme")
+        #expect(!FileManager.default.fileExists(atPath: s.directory.appendingPathComponent("backupme.v1.json").path))
+        #expect(await BriefStore(directory: s.directory).all().isEmpty)
+    }
+
+    @Test("a file from a newer schema is skipped, not migrated")
+    func futureSchemaSkipped() async throws {
+        let s = store()
+        try FileManager.default.createDirectory(at: s.directory, withIntermediateDirectories: true)
+        let json = """
+        {"id":"future","schemaVersion":3,"title":"New","target":{"modelFamily":"claude","surface":"claudeCode","tokenBudget":20000},\
+        "input":"x","contextItems":[],"versions":[],"createdAt":"2026-09-30T00:00:00Z","updatedAt":"2026-09-30T00:00:00Z"}
+        """
+        try Data(json.utf8).write(to: s.directory.appendingPathComponent("future.json"))
+        #expect(await BriefStore(directory: s.directory).all().isEmpty)
     }
 }

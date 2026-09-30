@@ -220,11 +220,11 @@ struct InferenceServiceTests {
         #expect(await shared.runningCount == 1)                    // local really is holding the slot
 
         let big = [Message(role: .user, content: String(repeating: "x", count: 500))]   // over local limit → cloud first
-        let started = Date()
         let text = try await collect(try await cloudSvc.generate(messages: big, tools: []))
         #expect(text == "cloud")
-        #expect(Date().timeIntervalSince(started) < 0.2)           // well under the local request's 400 ms
-        #expect(await shared.runningCount == 1)                    // local still running
+        // Cloud finished while local still holds the slot, so it never waited for it.
+        // (A wall-clock bound here flaked on slow CI runners.)
+        #expect(await shared.runningCount == 1)
         _ = try await slow.value
     }
 
