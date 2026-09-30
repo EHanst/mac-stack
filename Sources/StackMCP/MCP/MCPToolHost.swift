@@ -150,16 +150,25 @@ public actor MCPToolHost {
 
     /// The folders the connected app says it is working in. Empty if it doesn't offer any.
     private static func rootPaths(of server: Server, scopes: ScopeBox) async -> [String] {
-        // A client that doesn't support roots may never answer (and the request can't be cancelled),
-        // so wait briefly, then stop asking on this connection.
+        // A client that answers "not supported" is remembered and not asked again. One that hasn't
+        // answered in 5s (a slow start, or a client ignoring the request, which can't be cancelled) is
+        // not remembered: this call goes on without a folder hint and the next call asks again.
         guard !scopes.rootsUnsupported else { return [] }
-        let roots: [Root]? = await withCheckedContinuation { continuation in
+        let outcome: Result<[Root], Error>? = await withCheckedContinuation { continuation in
             let once = OneShot(continuation)
-            Task { once.resume(try? await server.listRoots()) }
-            Task { try? await Task.sleep(for: .seconds(2)); once.resume(nil) }
+            Task {
+                do { once.resume(.success(try await server.listRoots())) }
+                catch { once.resume(.failure(error)) }
+            }
+            Task { try? await Task.sleep(for: .seconds(5)); once.resume(nil) }
         }
-        if roots == nil { scopes.rootsUnsupported = true }
-        return (roots ?? []).compactMap { r in
+        var roots: [Root] = []
+        switch outcome {
+        case .success(let r)?: roots = r
+        case .failure?: scopes.rootsUnsupported = true
+        case nil: break
+        }
+        return roots.compactMap { r in
             guard let url = URL(string: r.uri), url.isFileURL, !url.path.isEmpty else { return nil }
             return url.path
         }
