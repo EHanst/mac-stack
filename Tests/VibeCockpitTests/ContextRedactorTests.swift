@@ -75,10 +75,20 @@ struct ContextRedactorTests {
 
     @Test("many BEGIN lines with no END do not take quadratic time")
     func noBacktracking() {
-        let text = String(repeating: "-----BEGIN RSA PRIVATE KEY-----\n", count: 6_000)
-        let start = ContinuousClock.now
-        _ = ContextRedactor.redact(text)
-        #expect(ContinuousClock.now - start < .seconds(2))
+        // Compare how the time grows with input size rather than an absolute bound, which flakes on slow
+        // runners: 4x the input takes ~4x as long if linear, ~16x if quadratic.
+        func best(_ count: Int) -> Duration {
+            let text = String(repeating: "-----BEGIN RSA PRIVATE KEY-----\n", count: count)
+            var fastest = Duration.seconds(3_600)
+            for _ in 0..<3 {
+                let start = ContinuousClock.now
+                _ = ContextRedactor.redact(text)
+                fastest = min(fastest, ContinuousClock.now - start)
+            }
+            return fastest
+        }
+        let small = best(2_000), large = best(8_000)
+        #expect(large < small * 10 + .milliseconds(50))
     }
 
     @Test("a redacted value is not redacted again")
