@@ -14,6 +14,6 @@ fi
 APP=$(xcodebuild -scheme VibeCockpit -configuration Debug -showBuildSettings 2>/dev/null \
   | awk -F' = ' '/ BUILT_PRODUCTS_DIR /{print $2}')/VibeCockpit.app
 pkill -x VibeCockpit 2>/dev/null || true
-sleep 0.5
+for _ in $(seq 20); do pgrep -x VibeCockpit >/dev/null || break; sleep 0.25; done
 open "$APP"
 echo "Launched $APP"

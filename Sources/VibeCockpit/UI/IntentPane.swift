@@ -131,6 +131,12 @@ struct IntentPane: View {
     private var historyList: some View {
         ScrollViewReader { proxy in
             ScrollView {
+                if coordinator.state.intentHistory.isEmpty {
+                    Text("Quick questions only. Build the real prompt in Briefs.")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .padding(16)
+                }
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(coordinator.state.intentHistory) { event in
                         IntentEventBubble(event: event, onSave: { sheet = .save($0) })
