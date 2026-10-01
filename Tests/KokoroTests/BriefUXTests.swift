@@ -30,6 +30,17 @@ struct BriefUXTests {
         #expect(WordDiff.merge(original: original, proposed: proposed, acceptedHunkIndexes: [hunk.id]) == proposed)
     }
 
+    @Test func changesDescribeBeforeAfterAndContext() {
+        let changes = WordDiff.changes(from: "one two three four five", to: "one two THREE four five six", contextWords: 2)
+        #expect(changes.count == 2)
+        #expect(changes[0].kind == .reworded && changes[0].before == "three" && changes[0].after == "THREE")
+        #expect(changes[0].lead == "one two" && changes[0].trail == "four five")
+        #expect(changes[1].kind == .added && changes[1].after == "six" && changes[1].before.isEmpty)
+        #expect(WordDiff.changes(from: "a b", to: "a").first?.kind == .removed)
+        #expect(WordDiff.changes(from: "same", to: "same").isEmpty)
+        #expect(changes.map(\.id) == WordDiff.hunks(from: "one two three four five", to: "one two THREE four five six").map(\.id))
+    }
+
     @Test func templatesAreNotEmptyAndContainAcceptanceCriteria() {
         for template in BriefTemplate.allCases {
             #expect(!template.markdown.isEmpty)

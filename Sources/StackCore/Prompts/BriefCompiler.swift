@@ -186,7 +186,9 @@ public enum BriefCompiler {
             .filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
-    /// Strips heading markers and `**`/`__` emphasis from prose lines and halves leading indentation; fenced code passes through.
+    /// Strips what a model reads no differently: heading, list, numbering and quote markers, rules,
+    /// table rules, emphasis, link syntax. Nesting is kept as halved indentation and order as line
+    /// order; fenced code passes through.
     private static func compactProse(_ text: String) -> String {
         var inFence = false
         var lines: [String] = []
@@ -195,15 +197,26 @@ public enum BriefCompiler {
             while line.last == " " || line.last == "\t" { line.removeLast() }
             if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { inFence.toggle(); lines.append(line); continue }
             if inFence { lines.append(line); continue }
-            if line.isEmpty { continue }
+            if line.isEmpty || line.range(of: rulePattern, options: .regularExpression) != nil { continue }
             if let r = line.range(of: #"^\s{0,3}#{1,6}\s+"#, options: .regularExpression) { line.removeSubrange(r) }
             let pad = line.prefix { $0 == " " }.count
-            if pad > 1 { line = String(repeating: " ", count: pad / 2) + line.dropFirst(pad) }
-            line = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
-            lines.append(line)
+            var body = String(line.dropFirst(pad))
+            while let r = body.range(of: #"^>\s?"#, options: .regularExpression) { body.removeSubrange(r) }
+            if let r = body.range(of: #"^([-*+•]|\d{1,4}[.)])\s+"#, options: .regularExpression) { body.removeSubrange(r) }
+            if body.hasPrefix("|"), body.hasSuffix("|"), body.count > 1 {
+                body = String(body.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+            }
+            body = body.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
+            body = body.replacingOccurrences(of: #"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])"#, with: "$1", options: .regularExpression)
+            body = body.replacingOccurrences(of: #"\[([^\]\n]+)\]\(([^)\s]+)\)"#, with: "$1 ($2)", options: .regularExpression)
+            if body.isEmpty { continue }
+            lines.append(String(repeating: " ", count: pad > 1 ? pad / 2 : pad) + body)
         }
         return lines.joined(separator: "\n")
     }
+
+    /// A horizontal rule (`---`, `* * *`) or a table's header rule (`|---|:--:|`).
+    private static let rulePattern = #"^\s*(([-*_])(\s*\2){2,}|\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?)\s*$"#
 
     // MARK: Rendering
 

@@ -11,8 +11,8 @@ public struct RevealPacer: Equatable, Sendable {
     public static let maxRate = 400.0
     public static let maxLag = 0.30         // seconds; time constant for draining a backlog
     public static let settleRate = 700.0    // once the stream has ended
-    public static let fadeDuration = 0.9    // seconds each glyph takes to fade in: slow enough to see
-    public static let edgeRange = 24.0...400.0
+    public static let fadeDuration = 9.0    // seconds each glyph takes to fade in
+    public static let edgeRange = 240.0...4000.0
     public static let maxStep = 0.1         // a stalled frame never jumps the cursor further than this
 
     /// Cursor position, in glyphs from the start of the text.

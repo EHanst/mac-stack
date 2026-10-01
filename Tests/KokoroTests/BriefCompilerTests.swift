@@ -261,8 +261,20 @@ struct BriefCompilerTests {
         var b = compactBrief(family: "gpt")
         b.input = "Steps\n1. One\n    - nested\n        - deeper\n```\n    keep\n```"
         let t = BriefCompiler.compile(b, compact: true).text
-        #expect(t.contains("\n1. One\n  - nested\n    - deeper\n"))
+        #expect(t.contains("\nOne\n  nested\n    deeper\n"))
         #expect(t.contains("\n    keep\n"))
+    }
+
+    @Test("compact form strips list markers, numbering, quotes, rules, emphasis, links and table rules; code is untouched")
+    func compactStripsMarkdown() {
+        var b = compactBrief(family: "gpt")
+        b.input = "1. First\n2) Second\n- bullet\n* star\n> quoted\n---\n*soft* and _under_ and snake_case\n[docs](https://x.io/a)\n| a | b |\n|---|---|\n| 1 | 2 |\n```\n1. keep\n- keep\n```\nversion 2.0 stays"
+        let t = BriefCompiler.compile(b, compact: true).text
+        #expect(t.contains("\nFirst\nSecond\nbullet\nstar\nquoted\nsoft and _under_ and snake_case\ndocs (https://x.io/a)\n"))
+        #expect(!t.contains("---") && !t.contains("|---"))
+        #expect(t.contains("a | b\n1 | 2\n"))
+        #expect(t.contains("```\n1. keep\n- keep\n```"))
+        #expect(t.contains("version 2.0 stays"))
     }
 
     @Test("compact form drops decoration and blank lines, keeps code and diffs")

@@ -155,15 +155,26 @@ struct BriefInputBar: View {
 
     private var model: BriefWorkbenchModel { services.briefs }
     private var feedback: BriefFeedbackModel { services.feedback }
-    private var editing: Bool { !fresh && feedback.phase == .editing }
+    private var improve: BriefImproveModel { services.improve }
+    /// While Improve is open on this brief, the bar edits Improve's working revision instead.
+    private var improving: Bool { improve.presentedBriefID != nil && improve.presentedBriefID == model.selected?.id }
+    private var optimizerRunning: Bool { if case .running = improve.optimizerPhase { return true }; return false }
+    private var editing: Bool {
+        improving ? improve.chatEditPhase == .editing || optimizerRunning : !fresh && feedback.phase == .editing
+    }
+    private var failure: String? {
+        if improving { if case .failed(let m) = improve.chatEditPhase { return m } else { return nil } }
+        if case .failed(let m) = feedback.phase { return m }
+        return nil
+    }
     private var blank: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if editing {
+            if editing && !optimizerRunning {
                 HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Editing…").font(.mtBodySmall) }
-            } else if case .failed(let message) = feedback.phase {
-                Text(message).font(.mtBodySmall).foregroundStyle(Color.mtError)
+            } else if let failure {
+                Text(failure).font(.mtBodySmall).foregroundStyle(Color.mtError)
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Button { attach() } label: { Image(systemName: "paperclip").font(.system(size: 18)) }
@@ -175,6 +186,7 @@ struct BriefInputBar: View {
                         ScrollView { ContextListView().padding(14) }.frame(width: 460, height: 340)
                     }
                 TextField(fresh ? "Describe the task, roughly…"
+                                : improving ? "Instruct this revision, e.g. “add acceptance criteria”"
                                 : "What to change, e.g. “clarify the acceptance criteria”",
                           text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -185,7 +197,9 @@ struct BriefInputBar: View {
                     .background(Color.mtSurfaceContainerHighest)
                     .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                     .onSubmit { send() }
-                if !fresh, let brief = model.selected {
+                if improving {
+                    Button("Undo") { improve.undoEdit() }.disabled(!improve.canUndoEdit)
+                } else if !fresh, let brief = model.selected {
                     Button("Undo") { feedback.undo(briefID: brief.id) }
                         .disabled(!feedback.canUndo(briefID: brief.id))
                 }
@@ -211,7 +225,9 @@ struct BriefInputBar: View {
     private func send() {
         let instruction = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty, !editing else { return }
-        if fresh {
+        if improving {
+            improve.applyEdit(instruction)
+        } else if fresh {
             if model.selected != nil {
                 model.setInput(instruction)
             } else {

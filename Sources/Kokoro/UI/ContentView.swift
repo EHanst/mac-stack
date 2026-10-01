@@ -194,12 +194,7 @@ struct MainLayout: View {
 
     @ViewBuilder
     private var detailPanel: some View {
-        if let id = services.improve.presentedBriefID,
-           let brief = services.briefs.briefs.first(where: { $0.id == id }) {
-            ImproveWorkspaceView(brief: brief)
-        } else {
-            BriefStudioView()
-        }
+        BriefStudioView()
     }
 }
 

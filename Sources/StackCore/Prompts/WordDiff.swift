@@ -15,6 +15,43 @@ public enum WordDiff {
         public var text: String { segments.map(\.text).joined() }
     }
 
+    /// One change in plain terms: what was there, what replaced it, and a few words either side
+    /// so a reader can find the place. `id` matches the same hunk in `hunks` and `merge`.
+    public struct Change: Equatable, Sendable, Identifiable {
+        public enum Kind: Sendable { case added, removed, reworded }
+        public let id: Int
+        public let before: String
+        public let after: String
+        public let lead: String
+        public let trail: String
+        public var kind: Kind { before.isEmpty ? .added : after.isEmpty ? .removed : .reworded }
+    }
+
+    public static func changes(from old: String, to new: String, contextWords: Int = 6) -> [Change] {
+        let all = segments(from: old, to: new)
+        var out: [Change] = []
+        var index = 0
+        while index < all.count {
+            guard all[index].kind != .same else { index += 1; continue }
+            var before = "", after = ""
+            var end = index
+            while end < all.count, all[end].kind != .same {
+                if all[end].kind == .removed { before += all[end].text } else { after += all[end].text }
+                end += 1
+            }
+            let lead = index > 0 ? words(all[index - 1].text).suffix(contextWords).joined(separator: " ") : ""
+            let trail = end < all.count ? words(all[end].text).prefix(contextWords).joined(separator: " ") : ""
+            out.append(Change(id: out.count,
+                              before: before.trimmingCharacters(in: .whitespacesAndNewlines),
+                              after: after.trimmingCharacters(in: .whitespacesAndNewlines),
+                              lead: lead, trail: trail))
+            index = end
+        }
+        return out
+    }
+
+    private static func words(_ text: String) -> [String] { text.split(whereSeparator: \.isWhitespace).map(String.init) }
+
     public static func segments(from old: String, to new: String) -> [Segment] {
         let a = tokens(old), b = tokens(new)
         let diff = b.difference(from: a)

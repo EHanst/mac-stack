@@ -32,7 +32,11 @@ struct BriefPane: View {
             VStack(alignment: .leading, spacing: 12) {
                 targetPicker(brief)
                 meter(brief, compiled)
-                editor(brief, compiled: compiled)
+                if improve.presentedBriefID == brief.id {
+                    ImproveInlineView(brief: brief)
+                } else {
+                    editor(brief, compiled: compiled)
+                }
                 CappedScroll(maxHeight: 160) {
                     VStack(alignment: .leading, spacing: 8) {
                         attachmentsFooter(brief)
@@ -194,12 +198,32 @@ struct BriefPane: View {
                 ForEach(exportRoots, id: \.self) { root in
                     Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }
                 }
-                if exportRoots.isEmpty { Text("Add a project first") }
+                if !exportRoots.isEmpty { Divider() }
+                Button("Add folder…") { addFolderAndSave() }
             }
             .disabled(empty)
             .onHover { if $0 { Task { exportRoots = await model.exportRoots() } } }
             Button("Versions") { showVersions = true }
                 .disabled(model.selected?.versions.isEmpty ?? true)
+        }
+    }
+
+    /// Adds a folder as a project, then saves the brief into it.
+    private func addFolderAndSave() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add and save"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        Task {
+            await services.workspacesModel.add(folder)
+            exportRoots = await model.exportRoots()
+            if let error = services.workspacesModel.lastError {
+                exportMessage = error
+            } else {
+                exportMessage = model.exportSelected(to: folder)
+            }
         }
     }
 
