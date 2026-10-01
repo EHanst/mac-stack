@@ -5,7 +5,7 @@ import Foundation
 public enum PromptLint {
 
     public struct Finding: Sendable, Equatable, Identifiable {
-        public enum Rule: String, Sendable { case tooShort, noTarget, noSuccessCriterion, errorWithoutQuestion, multipleAsks, tooLong }
+        public enum Rule: String, Sendable { case tooShort, noTarget, noSuccessCriterion, errorWithoutQuestion, multipleAsks, tooLong, unbalancedXML, chainOfThought, goalNotFirst }
         public let rule: Rule
         public let message: String
         /// Text the user can append with one click, if there is an obvious one.
@@ -16,9 +16,11 @@ public enum PromptLint {
     public struct Context: Sendable {
         public var maxTokens: Int?
         public var intent: String?
-        public init(maxTokens: Int? = nil, intent: String? = nil) {
+        public var modelFamily: String?
+        public init(maxTokens: Int? = nil, intent: String? = nil, modelFamily: String? = nil) {
             self.maxTokens = maxTokens
             self.intent = intent
+            self.modelFamily = modelFamily
         }
     }
 
@@ -57,6 +59,17 @@ public enum PromptLint {
         if let max = context.maxTokens, PromptTokens.estimate(trimmed) > max {
             out.append(.init(rule: .tooLong, message: "This is longer than this model handles well (about \(max) tokens). Trim it or split it.", suggestion: nil))
         }
+
+        switch context.modelFamily {
+        case "claude" where unbalancedTags(trimmed):
+            out.append(.init(rule: .unbalancedXML, message: "A tag is opened but not closed.", suggestion: nil))
+        case "reasoning" where hasChainOfThoughtPhrase(trimmed):
+            out.append(.init(rule: .chainOfThought, message: "This model reasons on its own. Drop the reasoning instruction.", suggestion: nil))
+        case "gpt" where !startsWithGoal(trimmed):
+            out.append(.init(rule: .goalNotFirst, message: "Open with a one-line goal before the list.", suggestion: nil))
+        default: break
+        }
+
         return out
     }
 
@@ -87,5 +100,171 @@ public enum PromptLint {
         guard lines.contains(where: isError) else { return false }
         let prose = lines.filter { !isError($0) }.joined(separator: " ").split(whereSeparator: { $0.isWhitespace })
         return prose.count < 3 && !text.contains("?")
+    }
+
+    /// True if the text has unbalanced XML-style tags (well-formed names only; < in prose like "a < b" is ignored).
+    /// Ignores tags inside fenced blocks (```), inline backticks (`), self-closing tags (<tag/>),
+    /// and HTML void tags (br, hr, img, input, meta, link).
+    private static func unbalancedTags(_ text: String) -> Bool {
+        // Remove fenced code blocks
+        var working = text
+        let fencePattern = "```[\\s\\S]*?```"
+        if let fenceRegex = try? NSRegularExpression(pattern: fencePattern) {
+            let nsWorking = working as NSString
+            let fenceMatches = fenceRegex.matches(in: working, range: NSRange(location: 0, length: nsWorking.length))
+            for match in fenceMatches.reversed() {
+                let range = match.range
+                let start = working.index(working.startIndex, offsetBy: range.location)
+                let end = working.index(start, offsetBy: range.length)
+                working.replaceSubrange(start..<end, with: "")
+            }
+        }
+
+        // Remove inline backticks with contents
+        let backtickPattern = "`[^`]*`"
+        if let backtickRegex = try? NSRegularExpression(pattern: backtickPattern) {
+            let nsWorking = working as NSString
+            let backtickMatches = backtickRegex.matches(in: working, range: NSRange(location: 0, length: nsWorking.length))
+            for match in backtickMatches.reversed() {
+                let range = match.range
+                let start = working.index(working.startIndex, offsetBy: range.location)
+                let end = working.index(start, offsetBy: range.length)
+                working.replaceSubrange(start..<end, with: "")
+            }
+        }
+
+        let regex = try! NSRegularExpression(pattern: "<(/?)([A-Za-z][A-Za-z0-9_-]*)[^<>]*?(/?)>")
+        var stack: [String] = []
+        let ns = working as NSString
+        let voidTags = Set(["br", "hr", "img", "input", "meta", "link"])
+
+        for m in regex.matches(in: working, range: NSRange(location: 0, length: ns.length)) {
+            let closing = ns.substring(with: m.range(at: 1)) == "/"
+            let name = ns.substring(with: m.range(at: 2)).lowercased()
+            let selfClosing = ns.substring(with: m.range(at: 3)) == "/"
+
+            // Skip void tags and self-closing tags
+            if voidTags.contains(name) || selfClosing {
+                continue
+            }
+
+            if closing {
+                guard stack.last?.lowercased() == name else { return true }
+                stack.removeLast()
+            } else {
+                stack.append(name)
+            }
+        }
+        return !stack.isEmpty
+    }
+
+    /// True if the text doesn't start with a goal (no leading list marker or header).
+    /// Trims leading whitespace. Numbered items (1., 2), indented bullets (-, *, +),
+    /// headings (#), blockquotes (>), and fences (```) are NOT goals.
+    /// A single backtick followed by prose (e.g., "`loadItems` should...") IS a goal.
+    private static func startsWithGoal(_ text: String) -> Bool {
+        guard let first = text.split(separator: "\n").first else { return true }
+        let trimmed = first.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return true }
+
+        // Check for numbered list items: "1.", "2)", etc.
+        if let firstChar = trimmed.first, firstChar.isNumber {
+            let digits = trimmed.prefix(while: { $0.isNumber })
+            let afterDigits = String(trimmed.dropFirst(digits.count))
+            if afterDigits.hasPrefix(".") || afterDigits.hasPrefix(")") {
+                return false // Not a goal
+            }
+        }
+
+        // Check for bullet markers
+        let bulletMarkers = ["-", "*", "+"]
+        if bulletMarkers.contains(where: { trimmed.hasPrefix($0) }) {
+            return false // Not a goal
+        }
+
+        // Check for headings, blockquotes, and triple-backtick fences
+        if trimmed.hasPrefix("#") || trimmed.hasPrefix(">") || trimmed.hasPrefix("```") {
+            return false // Not a goal
+        }
+
+        // Check for single backtick: if it starts with ` but not ```, and contains prose, it's a goal
+        if trimmed.hasPrefix("`") && !trimmed.hasPrefix("```") {
+            return true // Single backtick with prose is a goal
+        }
+
+        return true // Everything else is a goal
+    }
+
+    /// True if text contains chain-of-thought phrases, excluding those in quotes, backticks, fences, or negated forms.
+    private static func hasChainOfThoughtPhrase(_ text: String) -> Bool {
+        let phrases = ["step by step", "show your reasoning", "think aloud", "chain of thought"]
+        let lower = text.lowercased()
+
+        // Remove fenced code blocks
+        var working = lower
+        let fencePattern = "```[\\s\\S]*?```"
+        if let fenceRegex = try? NSRegularExpression(pattern: fencePattern) {
+            let nsWorking = working as NSString
+            let fenceMatches = fenceRegex.matches(in: working, range: NSRange(location: 0, length: nsWorking.length))
+            for match in fenceMatches.reversed() {
+                let range = match.range
+                let start = working.index(working.startIndex, offsetBy: range.location)
+                let end = working.index(start, offsetBy: range.length)
+                working.replaceSubrange(start..<end, with: "")
+            }
+        }
+
+        // Remove quoted strings (double and single quotes)
+        let quotePattern = "\"[^\"]*\"|'[^']*'"
+        if let quoteRegex = try? NSRegularExpression(pattern: quotePattern) {
+            let nsWorking = working as NSString
+            let quoteMatches = quoteRegex.matches(in: working, range: NSRange(location: 0, length: nsWorking.length))
+            for match in quoteMatches.reversed() {
+                let range = match.range
+                let start = working.index(working.startIndex, offsetBy: range.location)
+                let end = working.index(start, offsetBy: range.length)
+                working.replaceSubrange(start..<end, with: "")
+            }
+        }
+
+        // Remove backtick contents
+        let backtickPattern = "`[^`]*`"
+        if let backtickRegex = try? NSRegularExpression(pattern: backtickPattern) {
+            let nsWorking = working as NSString
+            let backtickMatches = backtickRegex.matches(in: working, range: NSRange(location: 0, length: nsWorking.length))
+            for match in backtickMatches.reversed() {
+                let range = match.range
+                let start = working.index(working.startIndex, offsetBy: range.location)
+                let end = working.index(start, offsetBy: range.length)
+                working.replaceSubrange(start..<end, with: "")
+            }
+        }
+
+        // Remove negated clauses: "(don't|do not|never|no) [^.!?]*"
+        let negationPattern = "\\b(don't|do not|never|no)\\b[^.!?]*"
+        if let negationRegex = try? NSRegularExpression(pattern: negationPattern) {
+            let nsWorking = working as NSString
+            let negationMatches = negationRegex.matches(in: working, range: NSRange(location: 0, length: nsWorking.length))
+            for match in negationMatches.reversed() {
+                let range = match.range
+                let start = working.index(working.startIndex, offsetBy: range.location)
+                let end = working.index(start, offsetBy: range.length)
+                working.replaceSubrange(start..<end, with: " ")
+            }
+        }
+
+        // Check if any phrase appears with word boundaries
+        for phrase in phrases {
+            let escapedPhrase = NSRegularExpression.escapedPattern(for: phrase)
+            let pattern = "\\b\(escapedPhrase)\\b"
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                let nsWorking = working as NSString
+                if regex.firstMatch(in: working, range: NSRange(location: 0, length: nsWorking.length)) != nil {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 }

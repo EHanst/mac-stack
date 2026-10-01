@@ -217,6 +217,14 @@ struct PromptOptimizerTests {
         #expect(!PromptOptimizer.metaPrompt(context: OptimizeContext(), mode: .adapt).contains("more granular"))
     }
 
+    @Test("the meta-prompt carries the target's typed style rules; plain families are unchanged")
+    func typedStyleRules() {
+        let reasoning = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .reasoning), mode: .improve)
+        let claude = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .claude), mode: .improve)
+        #expect(reasoning.contains("Do not ask the model to think step by step."))
+        #expect(claude.contains(ModelPromptProfile.claude.guidance) && !claude.contains("think step by step"))
+    }
+
     @Test("expand depth follows the target unless overridden")
     func expandDepth() {
         let small = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall), mode: .expand)
@@ -225,6 +233,15 @@ struct PromptOptimizerTests {
         #expect(small.contains("short specification") && !small.contains("acceptance criteria"))
         #expect(big.contains("acceptance criteria") && !big.contains("be exhaustive"))
         #expect(deep.contains("be exhaustive") && deep.contains("risks and trade-offs"))
+    }
+
+    @Test("defaultDepth returns concise for profiles with concise verbosity")
+    func defaultDepthConciseVerbosity() {
+        #expect(OptimizeDepth.defaultDepth(for: .localSmall) == .concise)
+        #expect(OptimizeDepth.defaultDepth(for: .reasoning) == .concise)
+        #expect(OptimizeDepth.defaultDepth(for: .deepseekR1) == .concise)
+        #expect(OptimizeDepth.defaultDepth(for: .claude) == .standard)
+        #expect(OptimizeDepth.defaultDepth(for: .gpt) == .standard)
     }
 
     @Test("conflicts and assumptions are separated from other changes")

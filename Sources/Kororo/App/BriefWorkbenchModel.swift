@@ -413,5 +413,26 @@ public final class BriefWorkbenchModel {
     }
 
     private func record(_ error: Error) { saveError = error.localizedDescription }
-    private func recompile() { compiled = selected.map(BriefCompiler.compile) }
+    private func recompile() {
+        guard let brief = selected else { compiled = nil; return }
+        var compiled = BriefCompiler.compile(brief)
+
+        // Add lint findings for the brief's model family
+        let lintContext = PromptLint.Context(
+            maxTokens: brief.target.tokenBudget,
+            modelFamily: brief.target.modelFamily
+        )
+        let lintFindings = PromptLint.check(brief.effectiveBody, context: lintContext)
+
+        // Convert PromptLint findings to BriefWarnings, avoiding duplicates with compiler warnings
+        let compilerWarnings = Set(compiled.warnings.map { $0.message })
+        for finding in lintFindings {
+            // Skip if this finding's message is already in the compiler warnings (e.g., tooLong)
+            if !compilerWarnings.contains(finding.message) {
+                compiled.warnings.append(BriefWarning(code: .lintFinding, message: finding.message, itemID: nil))
+            }
+        }
+
+        self.compiled = compiled
+    }
 }

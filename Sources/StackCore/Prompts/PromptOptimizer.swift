@@ -17,8 +17,9 @@ public enum OptimizeDepth: String, Sendable, CaseIterable {
     case concise, standard, exhaustive
 
     /// Small local models lose the thread on long instructions, so they default to the lighter version.
+    /// Also return concise when the profile's verbosity is concise.
     static func defaultDepth(for profile: ModelPromptProfile) -> OptimizeDepth {
-        profile.family == "local" ? .concise : .standard
+        profile.verbosity == .concise || profile.family == "local" ? .concise : .standard
     }
 }
 
@@ -317,7 +318,7 @@ public struct PromptOptimizer: Sendable {
             }
         }
         lines.append("")
-        lines.append(context.profile.guidance)
+        lines.append(context.profile.rewriterGuidance)
         var facts: [String] = []
         if let workspace = context.workspaceName { facts.append("The project is called \(workspace).") }
         if let intent = context.intent, intent != "general" { facts.append("The request looks like a \(intent) task.") }

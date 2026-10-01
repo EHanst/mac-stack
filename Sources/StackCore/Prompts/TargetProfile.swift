@@ -38,11 +38,13 @@ public struct TargetProfile: Codable, Sendable, Equatable {
     }
 
     public static func make(modelFamily: String, surface: Surface) -> TargetProfile {
-        let model = profile(forFamily: modelFamily)
-        return TargetProfile(modelFamily: modelFamily, surface: surface, tokenBudget: model.maxUsefulTokens)
+        let target = TargetProfile(modelFamily: modelFamily, surface: surface, tokenBudget: 0)
+        return TargetProfile(modelFamily: modelFamily, surface: surface, tokenBudget: target.model.maxUsefulTokens)
     }
 
-    public var model: ModelPromptProfile { Self.profile(forFamily: modelFamily) }
+    public var model: ModelPromptProfile {
+        modelFamily == "claude" && surface == .claudeCode ? .claudeCode : Self.profile(forFamily: modelFamily)
+    }
     public var structure: ModelPromptProfile.Structure { model.structure }
 
     private static func profile(forFamily family: String) -> ModelPromptProfile {
@@ -50,6 +52,9 @@ public struct TargetProfile: Codable, Sendable, Equatable {
         case "claude": .claude
         case "gpt": .gpt
         case "local": .localSmall
+        case "gemini": .gemini
+        case "reasoning": .reasoning
+        case "deepseek": .deepseekR1
         default: .generic
         }
     }

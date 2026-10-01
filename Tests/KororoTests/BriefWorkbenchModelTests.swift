@@ -580,4 +580,20 @@ struct BriefWorkbenchModelTests {
         #expect(second?.body == nil)
         #expect(second?.input == "Input 2")
     }
+
+    @Test("Claude brief with unclosed <context> tag yields unbalancedXML lint finding")
+    func lintUnclosedContextTag() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "<context>some info")
+        let warnings = m.compiled?.warnings ?? []
+        #expect(warnings.contains { $0.message.contains("<context>") || $0.message.contains("tag") || $0.message.contains("closed") })
+    }
+
+    @Test("Claude brief with balanced <context> tag has no unbalancedXML lint finding")
+    func lintBalancedContextTag() async {
+        let (m, _) = make()
+        await m.newBrief(title: "t", input: "<context>some info</context>")
+        let warnings = m.compiled?.warnings ?? []
+        #expect(!warnings.contains { $0.message.contains("tag") && $0.message.contains("closed") })
+    }
 }

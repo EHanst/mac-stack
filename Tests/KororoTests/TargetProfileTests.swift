@@ -34,4 +34,18 @@ struct TargetProfileTests {
         let back = try JSONDecoder().decode(TargetProfile.self, from: JSONEncoder().encode(t))
         #expect(back == t)
     }
+
+    @Test("legacy families unchanged and unknown falls back")
+    func legacyFamiliesAndFallback() {
+        #expect(TargetProfile.make(modelFamily: "gpt", surface: .other).model == .gpt)
+        #expect(TargetProfile.make(modelFamily: "nonsense", surface: .other).model == .generic)
+    }
+
+    @Test("Claude Code surface is concise")
+    func claudeCodeSurfaceConcise() {
+        let t = TargetProfile.make(modelFamily: "claude", surface: .claudeCode)
+        #expect(t.model.verbosity == .concise)
+        #expect(t.model.structure == .xmlTags)
+        #expect(TargetProfile.make(modelFamily: "claude", surface: .claudeDesktop).model == .claude)
+    }
 }
