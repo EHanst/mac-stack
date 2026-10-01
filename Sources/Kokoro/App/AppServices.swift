@@ -63,6 +63,7 @@ public final class AppServices {
     public let workspacesModel: WorkspacesModel
     public let externalServersModel: ExternalServersModel
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
+    private var reindexTask: Task<Void, Never>?
 
     /// Local only / Local first / Cloud allowed. Observable so the menu bar and Settings agree.
     public private(set) var routingPolicy: RoutingPolicy
@@ -206,8 +207,11 @@ public final class AppServices {
                 try await pipeline.open()
                 indexingPipeline = pipeline
                 if let workspaceURL = workspaceURL ?? detectWorkspaceURL() {
-                    Task.detached(priority: .background) {
-                        try? await pipeline.reindexWorkspace(workspaceURL)
+                    reindexTask?.cancel()
+                    reindexTask = Task.detached(priority: .background) { [logger] in
+                        do { try await pipeline.reindexWorkspace(workspaceURL) }
+                        catch is CancellationError {}
+                        catch { logger.error("Workspace reindex failed: \(error.localizedDescription, privacy: .public)") }
                     }
                     await pipeline.watch(workspaceURL)
                 }

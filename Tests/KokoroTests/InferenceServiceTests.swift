@@ -416,6 +416,21 @@ struct SlowReasonTests {
         #expect(await log.recent.map(\.date.timeIntervalSince1970) == [2, 3, 4])
         #expect(await RequestLog(capacity: 3, fileURL: url).recent.count == 3)
     }
+
+    @Test("an unreadable log file is kept aside for support, not overwritten by the next record")
+    func corruptLogIsKeptAside() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("rl-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("request-log.json")
+        try Data("not json {".utf8).write(to: url)
+        let log = RequestLog(capacity: 3, fileURL: url)
+        #expect(await log.recent.isEmpty)
+        await log.record(rec(1))
+        let aside = dir.appendingPathComponent("request-log.corrupt.json")
+        #expect(try String(contentsOf: aside, encoding: .utf8) == "not json {")
+        #expect(await RequestLog(capacity: 3, fileURL: url).recent.count == 1)
+    }
 }
 
 @Suite("Support bundle")

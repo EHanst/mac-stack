@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// What happened to one generation request. Deliberately has no field for prompt or answer text:
 /// the log (and the support bundle built from it) can be shared without leaking a conversation.
@@ -50,7 +51,17 @@ public actor RequestLog {
         self.fileURL = fileURL
         if let fileURL, let data = try? Data(contentsOf: fileURL) {
             let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-            records = (try? decoder.decode([RequestRecord].self, from: data)) ?? []
+            do {
+                records = try decoder.decode([RequestRecord].self, from: data)
+            } catch {
+                // Keep the unreadable file next to the log: the next record() would overwrite it.
+                let aside = fileURL.deletingPathExtension().appendingPathExtension("corrupt.json")
+                try? FileManager.default.removeItem(at: aside)
+                try? FileManager.default.moveItem(at: fileURL, to: aside)
+                Logger(subsystem: "com.vibecockpit", category: "RequestLog")
+                    .error("Request log unreadable, kept as \(aside.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                records = []
+            }
         } else {
             records = []
         }
@@ -75,8 +86,13 @@ public actor RequestLog {
     private func persist() {
         guard let fileURL else { return }
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
-        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? encoder.encode(records) { try? data.write(to: fileURL, options: .atomic) }
+        do {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try encoder.encode(records).write(to: fileURL, options: .atomic)
+        } catch {
+            Logger(subsystem: "com.vibecockpit", category: "RequestLog")
+                .error("Request log not saved: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }
 

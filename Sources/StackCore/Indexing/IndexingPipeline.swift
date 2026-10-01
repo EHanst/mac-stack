@@ -37,6 +37,8 @@ public actor IndexingPipeline {
     }
 
     /// Re-index all Swift files in a workspace root.
+    private static let reindexConcurrency = 8
+
     public func reindexWorkspace(_ rawRoot: URL) async throws {
         let rootURL = rawRoot.canonicalPath
         let start = Date()
@@ -50,11 +52,17 @@ public actor IndexingPipeline {
         let swiftURLs = enumerator.compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" }
 
+        // At most a few files in flight: a workspace can hold thousands of Swift files.
         try await withThrowingTaskGroup(of: Void.self) { group in
-            for url in swiftURLs {
+            var iterator = swiftURLs.makeIterator()
+            for _ in 0..<Self.reindexConcurrency {
+                guard let url = iterator.next() else { break }
                 group.addTask { try await self.index(fileURL: url) }
             }
-            try await group.waitForAll()
+            while try await group.next() != nil {
+                try Task.checkCancellation()
+                if let url = iterator.next() { group.addTask { try await self.index(fileURL: url) } }
+            }
         }
         try await store.pruneFiles(under: rootURL.path, keeping: Set(swiftURLs.map(\.path)))
         logger.info("Workspace indexed: \(swiftURLs.count) files in \(Date().timeIntervalSince(start), privacy: .public)s")
