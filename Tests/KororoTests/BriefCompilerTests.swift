@@ -300,16 +300,6 @@ struct BriefCompilerTests {
         #expect(t.contains("#REF B .swift"))
     }
 
-    @Test("machine form produces correct output for every structure")
-    func compactSmaller() {
-        for family in ["claude", "gpt", "local"] {
-            let b = compactBrief(family: family)
-            let machine = BriefCompiler.compile(b, compact: true)
-            // Verify machine form compiles without error (token count varies with structure overhead)
-            #expect(!machine.text.isEmpty)
-        }
-    }
-
     @Test("machine form is deterministic")
     func compactDeterministic() {
         let b = compactBrief(family: "claude")
@@ -336,10 +326,13 @@ struct BriefCompilerTests {
 
     @Test("machine form is strictly smaller for a decorated brief (estimate is characters / 2.5)")
     func compactStrictlySmaller() {
-        for family in ["claude", "gpt"] {
+        for family in ["claude", "gpt", "local"] {
             var b = compactBrief(family: family)
+            // Enough blank lines that the local form's one-line legend is paid back.
+            b.contextItems[0].text = String(repeating: "let a = 1\n\n\n", count: 100)
             b.input = "## Goal\n\n**Fix** the __login__ timeout.\n\n\n## Notes\n\nKeep the API stable.   \n"
-            #expect(BriefCompiler.compile(b, compact: true).tokens < BriefCompiler.compile(b).tokens, "\(family)")
+            let machine = BriefCompiler.compile(b, compact: true).tokens, human = BriefCompiler.compile(b).tokens
+            #expect(machine < human, "\(family): machine \(machine) vs human \(human)")
         }
     }
 
