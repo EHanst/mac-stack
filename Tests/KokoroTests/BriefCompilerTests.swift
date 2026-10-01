@@ -256,6 +256,15 @@ struct BriefCompilerTests {
         return b
     }
 
+    @Test("compact form halves list indentation outside code and keeps code indentation")
+    func compactIndent() {
+        var b = compactBrief(family: "gpt")
+        b.input = "Steps\n1. One\n    - nested\n        - deeper\n```\n    keep\n```"
+        let t = BriefCompiler.compile(b, compact: true).text
+        #expect(t.contains("\n1. One\n  - nested\n    - deeper\n"))
+        #expect(t.contains("\n    keep\n"))
+    }
+
     @Test("compact form drops decoration and blank lines, keeps code and diffs")
     func compact() {
         var b = compactBrief(family: "local")

@@ -14,6 +14,7 @@ struct BriefPane: View {
     @State private var copied: CopyKind?
     @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
     @State private var showVersions = false
+    @State private var editingHuman = false
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?
     @State private var copyNote: String?
@@ -72,11 +73,9 @@ struct BriefPane: View {
     private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
         let empty = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let compact = BriefCompiler.compile(brief, compact: true)
-        let compactTokens = compact.tokens
-        let savings = TokenSavings.percent(plain: compiled.tokens, compact: compactTokens)
+        let savings = TokenSavings.percent(plain: compiled.tokens, compact: compact.tokens)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Brief").font(.mtLabelLarge)
                 Picker("View", selection: Binding(
                     get: { viewMode },
                     set: { viewMode = $0 }
@@ -84,36 +83,45 @@ struct BriefPane: View {
                     ForEach(BriefViewMode.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
-                Text("Machine copy ~\(compactTokens) tokens (saves \(savings)%)")
-                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                if viewMode == .machine {
+                    Text("\(BriefViewMode.machineCaption(for: brief.target)) · ~\(compact.tokens) tokens (saves \(savings)%)")
+                        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                } else {
+                    Toggle("Edit", isOn: $editingHuman).toggleStyle(.button).controlSize(.small)
+                }
                 Spacer()
                 Button("Improve") { improve.open(brief, studio: services.promptStudio) }
                     .disabled(empty)
                     .keyboardShortcut("i", modifiers: [.command, .shift])
             }
-            if viewMode == .machine {
-                Text(BriefViewMode.machineCaption(for: brief.target))
-                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                ScrollView {
-                    Text(empty ? "Nothing to show yet." : compact.text)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if viewMode == .machine {
+                    ScrollView {
+                        Text(empty ? "Nothing to show yet." : compact.text)
+                            .font(AppTypography.monoFont(size: 13))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else if editingHuman {
+                    EchoGuardedEditor(external: brief.effectiveBody) { model.setBody($0) }
+                        .id("\(brief.id)-body")
+                        .font(.mtBodyMedium)
+                        .scrollContentBackground(.hidden)
+                } else {
+                    ScrollView {
+                        if empty {
+                            Text("Nothing to show yet.").font(.mtBodyMedium).foregroundStyle(Color.mtOnSurfaceVariant)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            MarkdownText(text: brief.effectiveBody)
+                        }
+                    }
                 }
-                .padding(10)
-                .frame(minHeight: 200, maxHeight: .infinity)
-                .background(Color.mtSurfaceContainerHighest)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                EchoGuardedEditor(external: brief.effectiveBody) { model.setBody($0) }
-                    .id("\(brief.id)-body")
-                    .font(.system(.caption, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .padding(10)
-                    .frame(minHeight: 200, maxHeight: .infinity)
-                    .background(Color.mtSurfaceContainerHighest)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
+            .padding(10)
+            .frame(minHeight: 200, maxHeight: .infinity)
+            .background(Color.mtSurfaceContainerHighest)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 
@@ -143,17 +151,20 @@ struct BriefPane: View {
     }
 
     private func targetPicker(_ brief: Brief) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Picker("Model", selection: Binding(get: { brief.target.modelFamily },
-                                               set: { model.setTarget(modelFamily: $0, surface: brief.target.surface) })) {
+        HStack(spacing: 16) {
+            Picker("Target model", selection: Binding(get: { brief.target.modelFamily },
+                                                      set: { model.setTarget(modelFamily: $0, surface: brief.target.surface) })) {
                 Text("Claude").tag("claude"); Text("GPT").tag("gpt"); Text("Gemini").tag("gemini"); Text("Reasoning").tag("reasoning"); Text("Local").tag("local"); Text("Other").tag("generic")
             }
             Picker("Where", selection: Binding(get: { brief.target.surface },
                                                set: { model.setTarget(modelFamily: brief.target.modelFamily, surface: $0) })) {
                 ForEach(Surface.allCases, id: \.self) { Text($0.displayName).tag($0) }
             }
+            Spacer()
         }
+        .font(.mtBodyMedium)
         .pickerStyle(.menu)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func meter(_ brief: Brief, _ compiled: CompiledPrompt) -> some View {

@@ -186,7 +186,7 @@ public enum BriefCompiler {
             .filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
-    /// Strips heading markers and `**`/`__` emphasis from prose lines; fenced code passes through.
+    /// Strips heading markers and `**`/`__` emphasis from prose lines and halves leading indentation; fenced code passes through.
     private static func compactProse(_ text: String) -> String {
         var inFence = false
         var lines: [String] = []
@@ -197,6 +197,8 @@ public enum BriefCompiler {
             if inFence { lines.append(line); continue }
             if line.isEmpty { continue }
             if let r = line.range(of: #"^\s{0,3}#{1,6}\s+"#, options: .regularExpression) { line.removeSubrange(r) }
+            let pad = line.prefix { $0 == " " }.count
+            if pad > 1 { line = String(repeating: " ", count: pad / 2) + line.dropFirst(pad) }
             line = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
             lines.append(line)
         }

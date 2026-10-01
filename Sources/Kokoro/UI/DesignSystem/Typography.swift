@@ -22,6 +22,11 @@ enum AppTypography {
 
     static func scaled(_ size: CGFloat) -> CGFloat { size * scale }
 
+    /// Monospaced at a size that follows the system text-size setting, for code and machine text.
+    static func monoFont(size: CGFloat) -> Font {
+        .system(size: scaled(size), design: .monospaced)
+    }
+
     static func font(size: CGFloat, weight: Font.Weight) -> Font {
         font(current, size: size, weight: weight)
     }
