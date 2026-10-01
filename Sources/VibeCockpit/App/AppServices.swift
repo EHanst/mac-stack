@@ -60,7 +60,7 @@ public final class AppServices {
     public let promptStudio: PromptStudioModel
     public let sidecar: BriefSidecarModel
     public let feedback: BriefFeedbackModel
-    public let improve = BriefImproveModel()
+    public let improve: BriefImproveModel
     /// The sidecar model's lasting knowledge (accepted-brief history, packs) and its opt-in.
     public let knowledge: KnowledgeModel
     private let knowledgeStore: KnowledgeStore
@@ -139,6 +139,7 @@ public final class AppServices {
         }
         self.sidecar = BriefSidecarModel(sidecar: briefSidecar)
         self.feedback = BriefFeedbackModel(sidecar: briefSidecar, workbench: self.briefs)
+        self.improve = BriefImproveModel(sidecar: briefSidecar, workbench: self.briefs)
         let briefModel = self.briefs
         briefModel.onBriefAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }
         self.sidecar.onAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }

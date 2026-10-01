@@ -49,7 +49,7 @@ enum OptimizerEval {
                         do {
                             for try await e in await provider.generate(
                                 messages: messages, tools: [],
-                                options: GenerationOptions(maxTokens: PromptOptimizer.outputCap(mode: m, servedLocally: true), sampling: params, cacheSnapshots: false)) {
+                                options: GenerationOptions(maxTokens: 8_000, sampling: params, cacheSnapshots: false)) {
                                 if case .token(let t) = e { raw += t; tokens += 1 }
                             }
                         } catch { print("    generation error: \(error)"); raw = "" }

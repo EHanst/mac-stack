@@ -131,6 +131,27 @@ public final class BriefWorkbenchModel {
         }
     }
 
+    /// Saves (or clears, with nil/blank) the Improve workspace's working revision as the brief's draft.
+    public func setDraft(_ text: String?, briefID: String) {
+        guard briefs.contains(where: { $0.id == briefID }) else { return }
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        mutate(id: briefID) { brief in
+            brief.draft = (trimmed?.isEmpty == false) ? trimmed : nil
+            brief.updatedAt = Date()
+        }
+    }
+
+    /// Before a new improvement session starts, keeps a differing draft as a recoverable version.
+    public func snapshotDraftIfChanged(id: String, newStartingText: String) {
+        guard let brief = briefs.first(where: { $0.id == id }),
+              let draft = brief.draft, draft != newStartingText else { return }
+        mutate(id: id) { brief in
+            brief.versions.append(Brief.Version(date: Date(), input: brief.input, body: draft, inputAtEdit: brief.inputAtEdit))
+            if brief.versions.count > Brief.maxVersions { brief.versions.removeFirst(brief.versions.count - Brief.maxVersions) }
+            brief.updatedAt = Date()
+        }
+    }
+
     /// Restores both the body and its linked-input snapshot in one call. Used by the undo stack.
     /// If `text` is nil, the brief is relinked to its input (body cleared, inputAtEdit cleared).
     public func restoreBody(_ text: String?, inputAtEdit: String?, briefID: String) {

@@ -51,7 +51,7 @@ struct BriefWorkbenchView: View {
         HStack(spacing: 10) {
             Picker("Brief", selection: Binding(get: { model.selectedID }, set: { model.select($0); services.sidecar.clear() })) {
                 if model.briefs.isEmpty { Text("No briefs").tag(String?.none) }
-                ForEach(model.briefs) { Text($0.title).tag(Optional($0.id)) }
+                ForEach(model.briefs) { Text($0.isDraft ? "\($0.title) (draft)" : $0.title).tag(Optional($0.id)) }
             }
             .labelsHidden()
             .disabled(model.briefs.isEmpty)
@@ -124,7 +124,7 @@ struct BriefWorkbenchView: View {
             }
             HStack {
                 Text("Input").font(.mtLabelLarge)
-                Button("⌘↩ to improve") { services.improve.open(brief, studio: services.promptStudio) }
+                Button("⌘↩ to improve") { services.improve.open(brief.input, brief: brief, studio: services.promptStudio) }
                     .buttonStyle(.plain)
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     .keyboardShortcut(.return, modifiers: .command)
