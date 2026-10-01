@@ -20,13 +20,15 @@ public actor InferenceScheduler {
     }
 
     private let maxConcurrent: Int
+    private let maxQueued: Int
     private var running = 0
     private var waiters: [Waiter] = []          // insertion order == FIFO
     private var nextID: UInt64 = 0
     private var cancelledEarly: Set<UInt64> = []
 
-    public init(maxConcurrent: Int = 1) {
+    public init(maxConcurrent: Int = 1, maxQueued: Int = 128) {
         self.maxConcurrent = max(1, maxConcurrent)
+        self.maxQueued = max(1, maxQueued)
     }
 
     public var queuedCount: Int { waiters.count }
@@ -86,6 +88,9 @@ public actor InferenceScheduler {
         if running < maxConcurrent, waiters.isEmpty {
             running += 1
             return
+        }
+        guard waiters.count < maxQueued else {
+            throw CancellationError()
         }
         let id = nextID
         nextID += 1

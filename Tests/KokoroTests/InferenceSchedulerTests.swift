@@ -138,4 +138,33 @@ struct InferenceSchedulerTests {
         #expect(await s.runningCount == 0)
         #expect(await terminated.events == ["terminated"])
     }
+
+    @Test("exceeding maxQueued capacity fast-fails with CancellationError")
+    func queueCapacityBounded() async throws {
+        let s = InferenceScheduler(maxConcurrent: 1, maxQueued: 2)
+        let gate = AsyncStream<Void>.makeStream()
+        let holder = Task {
+            try await s.run(priority: .api) {
+                for await _ in gate.stream { break }
+            }
+        }
+        try await Task.sleep(for: .milliseconds(10))
+
+        let w1 = Task { try await s.run(priority: .api) {} }
+        let w2 = Task { try await s.run(priority: .api) {} }
+        try await Task.sleep(for: .milliseconds(10))
+
+        // Third waiter exceeds maxQueued of 2
+        let w3 = Task { try await s.run(priority: .api) {} }
+        let res3 = await w3.result
+        switch res3 {
+        case .failure(is CancellationError): #expect(true)
+        default: Issue.record("expected CancellationError when queue is full, got \(res3)")
+        }
+
+        gate.continuation.finish()
+        _ = await holder.result
+        _ = await w1.result
+        _ = await w2.result
+    }
 }

@@ -28,12 +28,35 @@ public struct SearchResult: Sendable, Identifiable {
     }
 }
 
+private final class DBBox: @unchecked Sendable {
+    var writeDB: OpaquePointer?
+    var readPool: [OpaquePointer] = []
+
+    func close() {
+        if let db = writeDB { sqlite3_close_v2(db) }
+        readPool.forEach { sqlite3_close_v2($0) }
+        writeDB = nil
+        readPool = []
+    }
+
+    deinit {
+        close()
+    }
+}
+
 /// SQLite-backed hybrid vector + full-text search store.
 /// WAL mode + read connection pool for concurrent queries.
 public actor VectorStore {
 
-    private var writeDB: OpaquePointer?
-    private var readPool: [OpaquePointer] = []
+    private let dbBox = DBBox()
+    private var writeDB: OpaquePointer? {
+        get { dbBox.writeDB }
+        set { dbBox.writeDB = newValue }
+    }
+    private var readPool: [OpaquePointer] {
+        get { dbBox.readPool }
+        set { dbBox.readPool = newValue }
+    }
     private let readPoolSize = 4
     private let dbURL: URL
     private let embeddingDimension: Int
@@ -63,6 +86,9 @@ public actor VectorStore {
     }
 
     public func open() throws {
+        if writeDB != nil {
+            try? close()
+        }
         try FileManager.default.createDirectory(
             at: dbURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -71,7 +97,7 @@ public actor VectorStore {
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(dbURL.path, &db, flags, nil) == SQLITE_OK, let db else {
             let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "out of memory"
-            if let db { sqlite3_close(db) }
+            if let db { sqlite3_close_v2(db) }
             throw StoreError.openFailed(message)
         }
         self.writeDB = db
@@ -85,7 +111,9 @@ public actor VectorStore {
         sqlite3_busy_timeout(db, 3000)
 
         // Load sqlite-vec extension
-        sqlite3_vec_init(db, nil, nil)
+        guard sqlite3_vec_init(db, nil, nil) == SQLITE_OK else {
+            throw StoreError.setupFailed("Failed to initialize sqlite-vec extension")
+        }
 
         try exec(db: db, sql: "PRAGMA journal_mode=WAL;")
         try exec(db: db, sql: "PRAGMA synchronous=NORMAL;")
@@ -101,8 +129,11 @@ public actor VectorStore {
             if sqlite3_open_v2(dbURL.path, &rdb, rflags, nil) == SQLITE_OK, let rdb {
                 sqlite3_busy_timeout(rdb, 3000)
                 sqlite3_exec(rdb, "PRAGMA mmap_size=268435456;", nil, nil, nil)
-                sqlite3_vec_init(rdb, nil, nil)
-                readPool.append(rdb)
+                if sqlite3_vec_init(rdb, nil, nil) == SQLITE_OK {
+                    readPool.append(rdb)
+                } else {
+                    sqlite3_close_v2(rdb)
+                }
             }
         }
         logger.info("VectorStore opened at \(self.dbURL.lastPathComponent, privacy: .public)")
@@ -312,9 +343,13 @@ public actor VectorStore {
         let blobPtr = sqlite3_column_blob(stmt, 0)
         let blobSize = sqlite3_column_bytes(stmt, 0)
         guard let ptr = blobPtr else { return nil }
-        let count = Int(blobSize) / MemoryLayout<Float>.stride
-        guard Int(blobSize) == embeddingDimension * MemoryLayout<Float>.stride else { return nil }
-        return Array(UnsafeBufferPointer(start: ptr.assumingMemoryBound(to: Float.self), count: count))
+        let expectedBytes = embeddingDimension * MemoryLayout<Float>.stride
+        guard Int(blobSize) == expectedBytes else { return nil }
+        var floats = [Float](repeating: 0, count: embeddingDimension)
+        floats.withUnsafeMutableBytes { dest in
+            dest.copyMemory(from: UnsafeRawBufferPointer(start: ptr, count: expectedBytes))
+        }
+        return floats
     }
 
     public func cacheQueryEmbedding(_ embedding: [Float], for query: String) {
@@ -350,10 +385,7 @@ public actor VectorStore {
     }
 
     public func close() throws {
-        if let db = writeDB { sqlite3_close(db) }
-        readPool.forEach { sqlite3_close($0) }
-        writeDB = nil
-        readPool = []
+        dbBox.close()
     }
 
     // MARK: - Private

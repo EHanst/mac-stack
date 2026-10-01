@@ -5,9 +5,9 @@ import StackCore
 #endif
 import SwiftUI
 
-/// Shows brainstorming questions and tips for the selected brief. Tapping a question hands it to
-/// `onPick`, which starts an instruction in the input bar. Refreshes after a 2s debounce when the
-/// brief has been edited or improved, or on manual refresh.
+/// Brainstorming questions and tips for the selected brief, shown in a popover from the top bar so
+/// they never move the brief. Tapping a question hands it to `onPick`, which starts an instruction
+/// in the input bar.
 struct BrainstormBanner: View {
     var onPick: (String) -> Void
     @Environment(AppServices.self) private var services
@@ -63,15 +63,28 @@ struct BrainstormBanner: View {
                 }
             }
             .padding(12)
-            .background(Color.mtSurfaceContainerHigh.opacity(0.6))
-            .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-            .task(id: brief.effectiveBody) {
-                // Auto-refresh after 2s only for edited/improved briefs (body != nil).
-                guard brief.body != nil else { return }
-                try? await Task.sleep(for: .seconds(2))
-                guard !Task.isCancelled else { return }
-                feedback.refreshBrainstorm(brief: brief)
-            }
+        } else {
+            Text("No suggestions yet. They appear after the brief is edited.")
+                .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                .padding(12)
+        }
+    }
+}
+
+/// Keeps brainstorming current without taking any space: always mounted, draws nothing.
+struct BrainstormAutoRefresh: View {
+    @Environment(AppServices.self) private var services
+
+    var body: some View {
+        if let brief = services.briefs.selected {
+            Color.clear.frame(width: 0, height: 0)
+                .task(id: brief.effectiveBody) {
+                    // Auto-refresh after 2s only for edited/improved briefs (body != nil).
+                    guard brief.body != nil else { return }
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    services.feedback.refreshBrainstorm(brief: brief)
+                }
         }
     }
 }

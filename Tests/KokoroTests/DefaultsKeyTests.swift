@@ -6,7 +6,7 @@ struct DefaultsKeyTests {
     @Test("persisted key names do not change and never collide")
     func frozenAndUnique() {
         #expect(DefaultsKey.all.sorted() == [
-            "apiSharingEnabled", "apiSharingPort", "appFont", "appTheme", "brief.viewMode",
+            "apiSharingEnabled", "apiSharingPort", "appFont", "appTheme", "brief.lastCopy", "brief.viewMode",
             "optimizerModelPin", "routingPolicy", "updateCheckDaily", "updateLastCheck",
         ])
         #expect(Set(DefaultsKey.all).count == DefaultsKey.all.count)

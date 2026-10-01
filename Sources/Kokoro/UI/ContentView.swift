@@ -48,10 +48,6 @@ struct MainLayout: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
-        // The Improve workspace is a long working session: it takes over the window until closed.
-        .onChange(of: services.improve.presentedBriefID) { _, id in
-            columnVisibility = id == nil && selectedDestination != .briefs ? .all : .detailOnly
-        }
         // Briefs get the whole window; every other screen keeps the sidebar.
         .onChange(of: selectedDestination) { _, destination in
             columnVisibility = destination == .briefs ? .detailOnly : .all
@@ -61,7 +57,7 @@ struct MainLayout: View {
     /// Briefs fill the whole area; every other screen fills it with its own content.
     @ViewBuilder
     private var mainArea: some View {
-        if selectedDestination == .briefs || services.improve.presentedBriefID != nil {
+        if selectedDestination == .briefs {
             detailPanel
         } else {
             contentPanel
@@ -194,12 +190,7 @@ struct MainLayout: View {
 
     @ViewBuilder
     private var detailPanel: some View {
-        if let id = services.improve.presentedBriefID,
-           let brief = services.briefs.briefs.first(where: { $0.id == id }) {
-            ImproveWorkspaceView(brief: brief)
-        } else {
-            BriefStudioView()
-        }
+        BriefStudioView()
     }
 }
 
@@ -222,12 +213,10 @@ struct SettingsView: View {
                 generationSection
                 startupSection
                 AssistantCard()
-                KnowledgeCard()
                 CloudUsageCard()
                 SharingCard()
                 DiagnosticsCard()
                 WorkspacesCard()
-                ExternalServersCard()
                 ConnectCard()
                 indexingSection
                 aboutSection

@@ -91,9 +91,6 @@ public actor MCPToolHost {
     /// Tools for every project the user opened (see `WorkspaceManager`); asked for on every list and call.
     public func setProjectTools(_ provider: (@Sendable () async -> [any AgentToolHandler])?) { projectTools = provider }
 
-    public func setExternalTools(_ provider: (@Sendable () async -> [any AgentToolHandler])?) { externalTools = provider }
-
-    /// Called when a client works in a folder that isn't an open project; opens it as one.
     public func setWorkspaceOpener(_ opener: (@Sendable (URL) async throws -> Void)?) { workspaceOpener = opener }
 
     fileprivate func openWorkspace(_ url: URL) async -> Bool {
@@ -118,7 +115,7 @@ public actor MCPToolHost {
                        OptimizePromptTool(inference: inference)]
         }
         if let briefProvider { tools += [ListBriefsTool(provider: briefProvider), GetBriefTool(provider: briefProvider)] }
-        return tools + workspaceTools + (await projectTools?() ?? []) + (await externalTools?() ?? [])
+        return tools + workspaceTools + (await projectTools?() ?? [])
     }
 
     // MARK: Prompts

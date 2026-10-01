@@ -38,11 +38,23 @@ public struct UnifiedDiff: Sendable {
     }
 }
 
+private final class RepoBox: @unchecked Sendable {
+    var repo: OpaquePointer?
+    deinit {
+        if let repo { git_repository_free(repo) }
+        git_libgit2_shutdown()
+    }
+}
+
 /// In-memory git snapshot management via libgit2.
 /// All operations serialized on this actor. No shell git calls.
 public actor GitSnapshotManager {
 
-    nonisolated(unsafe) private var repo: OpaquePointer?
+    private let repoBox = RepoBox()
+    private var repo: OpaquePointer? {
+        get { repoBox.repo }
+        set { repoBox.repo = newValue }
+    }
     private let workspaceURL: URL
     private let logger = Logger(subsystem: "com.vibecockpit", category: "GitSnapshotManager")
 
@@ -69,12 +81,11 @@ public actor GitSnapshotManager {
         git_libgit2_init()
     }
 
-    deinit {
-        if let repo { git_repository_free(repo) }
-        git_libgit2_shutdown()
-    }
-
     public func open() throws {
+        if let existing = repo {
+            git_repository_free(existing)
+            self.repo = nil
+        }
         var r: OpaquePointer?
         let rc = git_repository_open(&r, workspaceURL.path)
         guard rc == 0, let r else {
@@ -127,8 +138,13 @@ public actor GitSnapshotManager {
         guard git_index_add_all(index, nil, 0, nil, nil) == 0 else {
             throw GitError.operationFailed(lastGitError())
         }
-        guard git_index_write(index) == 0 else {
-            throw GitError.operationFailed(lastGitError())
+        let writeRc = git_index_write(index)
+        guard writeRc == 0 else {
+            let msg = lastGitError()
+            if writeRc == -14 || msg.localizedCaseInsensitiveContains("lock") {
+                throw GitError.lockContention
+            }
+            throw GitError.operationFailed(msg)
         }
 
         // Write tree

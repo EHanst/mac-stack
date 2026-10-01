@@ -32,6 +32,21 @@ public enum BriefCompiler {
     public static func compile(_ original: Brief) -> CompiledPrompt { compile(original, compact: false) }
 
     public static func compile(_ original: Brief, compact: Bool) -> CompiledPrompt {
+        compile(original, form: compact ? .compact : .readable)
+    }
+
+    /// `json` is the same content as one JSON object, for programs that need to parse it.
+    public enum Form: Sendable { case readable, compact, json, jsonMinified }
+
+    /// Tokens of the brief as first written, for showing what Improve cost or saved. Nil until it has been edited.
+    public static func draftTokens(_ brief: Brief) -> Int? {
+        guard brief.body != nil else { return nil }
+        var draft = brief
+        draft.body = nil
+        return compile(draft, form: .readable).tokens
+    }
+
+    public static func compile(_ original: Brief, form: Form) -> CompiledPrompt {
         var warnings: [BriefWarning] = []
         var totalRedactions = 0
         var brief = original
@@ -46,13 +61,13 @@ public enum BriefCompiler {
                                   itemID: nil))
         }
 
-        for i in brief.contextItems.indices {
+        for i in brief.contextItems.indices where brief.contextItems[i].included {
             let redactedText = ContextRedactor.redact(brief.contextItems[i].text)
             let redactedRef = ContextRedactor.redact(brief.contextItems[i].ref)
             brief.contextItems[i].text = redactedText.text
             brief.contextItems[i].ref = redactedRef.text
-            if brief.contextItems[i].included, redactedText.count + redactedRef.count > 0 {
-                let n = redactedText.count + redactedRef.count
+            let n = redactedText.count + redactedRef.count
+            if n > 0 {
                 totalRedactions += n
                 warnings.append(.init(code: .secretRedacted,
                                       message: "\(n) secret\(n == 1 ? " was" : "s were") removed from \(brief.contextItems[i].ref).",
@@ -83,8 +98,12 @@ public enum BriefCompiler {
         }
 
         func render(_ items: [ContextItem]) -> String {
-            compact ? renderCompact(body.text, items: items, structure: structure)
-                    : renderText(body.text, items: items, structure: structure)
+            switch form {
+            case .readable: renderText(body.text, items: items, structure: structure)
+            case .compact: renderCompact(body.text, items: items, structure: structure)
+            case .json: renderJSON(body.text, items: items, target: brief.target, minified: false)
+            case .jsonMinified: renderJSON(body.text, items: items, target: brief.target, minified: true)
+            }
         }
 
         var text = render(items)
@@ -172,6 +191,23 @@ public enum BriefCompiler {
         return out.joined(separator: "\n")
     }
 
+    private static func renderJSON(_ body: String, items: [ContextItem], target: TargetProfile, minified: Bool) -> String {
+        let files: [[String: String]] = items.map { item in
+            var entry = ["path": item.ref, "kind": item.kind.rawValue,
+                         "mode": item.mode == .reference ? "reference" : "inline"]
+            if item.mode != .reference { entry["text"] = item.text }
+            return entry
+        }
+        let object: [String: Any] = [
+            "task": body.trimmingCharacters(in: .whitespacesAndNewlines),
+            "target": ["model": target.modelFamily, "surface": target.surface.rawValue],
+            "files": files,
+        ]
+        let data = try? JSONSerialization.data(withJSONObject: object,
+                                               options: minified ? [.sortedKeys, .withoutEscapingSlashes] : [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
     private static func compactItemText(_ item: ContextItem) -> String {
         item.kind == .gitDiff ? item.text.trimmingCharacters(in: .newlines) : dropBlankLines(item.text)
     }
@@ -186,7 +222,9 @@ public enum BriefCompiler {
             .filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
-    /// Strips heading markers and `**`/`__` emphasis from prose lines and halves leading indentation; fenced code passes through.
+    /// Strips what a model reads no differently: heading, bullet and quote markers, rules, table
+    /// rules, emphasis, link syntax. Step numbers stay (they carry order and are cited as "step 3");
+    /// nesting is kept as halved indentation; fenced code passes through.
     private static func compactProse(_ text: String) -> String {
         var inFence = false
         var lines: [String] = []
@@ -195,15 +233,26 @@ public enum BriefCompiler {
             while line.last == " " || line.last == "\t" { line.removeLast() }
             if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { inFence.toggle(); lines.append(line); continue }
             if inFence { lines.append(line); continue }
-            if line.isEmpty { continue }
+            if line.isEmpty || line.range(of: rulePattern, options: .regularExpression) != nil { continue }
             if let r = line.range(of: #"^\s{0,3}#{1,6}\s+"#, options: .regularExpression) { line.removeSubrange(r) }
             let pad = line.prefix { $0 == " " }.count
-            if pad > 1 { line = String(repeating: " ", count: pad / 2) + line.dropFirst(pad) }
-            line = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
-            lines.append(line)
+            var body = String(line.dropFirst(pad))
+            while let r = body.range(of: #"^>\s?"#, options: .regularExpression) { body.removeSubrange(r) }
+            if let r = body.range(of: #"^[-*+•]\s+"#, options: .regularExpression) { body.removeSubrange(r) }
+            if body.hasPrefix("|"), body.hasSuffix("|"), body.count > 1 {
+                body = String(body.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+            }
+            body = body.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
+            body = body.replacingOccurrences(of: #"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])"#, with: "$1", options: .regularExpression)
+            body = body.replacingOccurrences(of: #"\[([^\]\n]+)\]\(([^)\s]+)\)"#, with: "$1 ($2)", options: .regularExpression)
+            if body.isEmpty { continue }
+            lines.append(String(repeating: " ", count: pad > 1 ? pad / 2 : pad) + body)
         }
         return lines.joined(separator: "\n")
     }
+
+    /// A horizontal rule (`---`, `* * *`) or a table's header rule (`|---|:--:|`).
+    private static let rulePattern = #"^\s*(([-*_])(\s*\2){2,}|\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?)\s*$"#
 
     // MARK: Rendering
 

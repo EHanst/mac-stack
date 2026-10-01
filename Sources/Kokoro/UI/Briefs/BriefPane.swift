@@ -10,9 +10,10 @@ import AppKit
 /// The model receives the compiled text (brief plus attachments), not this editor's raw contents.
 struct BriefPane: View {
     @Environment(AppServices.self) private var services
-    private enum CopyKind: String { case machine, standard }
+    private enum CopyKind: String { case machine, standard, json, jsonMinified }
     @State private var copied: CopyKind?
     @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
+    @AppStorage(DefaultsKey.briefLastCopy) private var lastCopyStorage: String = CopyKind.machine.rawValue
     @State private var showVersions = false
     @State private var editingHuman = false
     @State private var exportRoots: [URL] = []
@@ -21,6 +22,9 @@ struct BriefPane: View {
 
     private var model: BriefWorkbenchModel { services.briefs }
     private var improve: BriefImproveModel { services.improve }
+
+    /// The format copied last time: it gets the filled button once the brief has been improved.
+    private var lastCopy: CopyKind { CopyKind(rawValue: lastCopyStorage) ?? .machine }
 
     private var viewMode: BriefViewMode {
         get { BriefViewMode.from(stored: viewModeStorage) }
@@ -32,31 +36,24 @@ struct BriefPane: View {
             VStack(alignment: .leading, spacing: 12) {
                 targetPicker(brief)
                 meter(brief, compiled)
-                editor(brief, compiled: compiled)
-                CappedScroll(maxHeight: 160) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        attachmentsFooter(brief)
-                        ForEach(Array(compiled.warnings.enumerated()), id: \.offset) { _, w in
-                            Label(w.message, systemImage: "exclamationmark.triangle")
-                                .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                        }
-                    }
+                let improving = improve.presentedBriefID == brief.id
+                if improving {
+                    ImproveInlineView(brief: brief)
+                } else {
+                    editor(brief, compiled: compiled)
                 }
-                copyBar
-                if let copyNote {
-                    Text(copyNote)
-                        .font(.mtBodySmall)
-                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                statusLine(brief, compiled)
+                // Same slot either way: Copy and Save while editing, Save and Discard while improving.
+                Group {
+                    if improving { ImproveActionBar() } else { copyBar }
                 }
-                if let exportMessage {
-                    Text(exportMessage).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                }
+                .frame(minHeight: 30)
             }
             .padding(16)
             .sheet(isPresented: $showVersions) {
                 BriefVersionsSheet(brief: brief, onRestore: { model.restoreVersion($0) }, onClose: { showVersions = false })
             }
-            .task(id: model.selectedID) { exportMessage = nil; exportRoots = await model.exportRoots() }
+            .task(id: model.selectedID) { editingHuman = false; exportMessage = nil; exportRoots = await model.exportRoots() }
             .background(Color.mtSurfaceContainerLowest)
         } else {
             VStack(spacing: 8) {
@@ -70,10 +67,17 @@ struct BriefPane: View {
         }
     }
 
+    /// Improve is the main step until the brief has been improved; after that Copy takes over.
+    @ViewBuilder
+    private func improveButton(_ brief: Brief, empty: Bool) -> some View {
+        let button = Button("Improve") { improve.open(brief, studio: services.promptStudio) }
+            .disabled(empty)
+            .keyboardShortcut("i", modifiers: [.command, .shift])
+        if brief.isEdited { button } else { button.buttonStyle(MTFilledButtonStyle()) }
+    }
+
     private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
         let empty = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let compact = BriefCompiler.compile(brief, compact: true)
-        let savings = TokenSavings.percent(plain: compiled.tokens, compact: compact.tokens)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Picker("View", selection: Binding(
@@ -84,18 +88,34 @@ struct BriefPane: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 if viewMode == .machine {
+                    let compact = BriefCompiler.compile(brief, compact: true)
+                    let savings = TokenSavings.percent(plain: compiled.tokens, compact: compact.tokens)
                     Text("\(BriefViewMode.machineCaption(for: brief.target)) · ~\(compact.tokens) tokens (saves \(savings)%)")
+                        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                } else if viewMode == .json {
+                    let json = BriefCompiler.compile(brief, form: .json)
+                    Text("For programs that parse the brief · ~\(json.tokens) tokens")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 } else {
                     Toggle("Edit", isOn: $editingHuman).toggleStyle(.button).controlSize(.small)
                 }
                 Spacer()
-                Button("Improve") { improve.open(brief, studio: services.promptStudio) }
-                    .disabled(empty)
-                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                Button("Revert") { model.restoreVersion(brief.versions.count - 1) }
+                    .disabled(!brief.isEdited || brief.versions.isEmpty)
+                    .help("Put back the previous version. What you have now is saved first, so this can be undone.")
+                improveButton(brief, empty: empty)
             }
+            .frame(height: 28)
             Group {
-                if viewMode == .machine {
+                if viewMode == .json {
+                    ScrollView {
+                        Text(empty ? "Nothing to show yet." : BriefCompiler.compile(brief, form: .json).text)
+                            .font(AppTypography.monoFont(size: 13))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else if viewMode == .machine {
+                    let compact = BriefCompiler.compile(brief, compact: true)
                     ScrollView {
                         Text(empty ? "Nothing to show yet." : compact.text)
                             .font(AppTypography.monoFont(size: 13))
@@ -125,29 +145,24 @@ struct BriefPane: View {
         }
     }
 
-    @ViewBuilder
-    private func attachmentsFooter(_ brief: Brief) -> some View {
+    /// One reserved line for attachments, warnings and the last copy or save result, so none of
+    /// them ever moves the brief. Attachments are managed from the paperclip.
+    private func statusLine(_ brief: Brief, _ compiled: CompiledPrompt) -> some View {
         let included = brief.contextItems.filter(\.included)
-        if !included.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Attachments").font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                ForEach(included) { item in
-                    HStack {
-                        Text("\(item.ref) (~\(item.tokens) tokens)")
-                            .font(.mtBodySmall)
-                            .foregroundStyle(Color.mtOnSurfaceVariant)
-                        Spacer()
-                        Toggle(item.mode == .inline ? "inline" : "by path", isOn: Binding(
-                            get: { item.mode == .inline },
-                            set: { model.setContextMode($0 ? .inline : .reference, id: item.id) }
-                        ))
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .disabled(item.ref.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
+        let attachments = included.isEmpty ? nil
+            : "\(included.count) attachment\(included.count == 1 ? "" : "s"), about \(included.reduce(0) { $0 + $1.tokens }.formatted()) tokens"
+        let warning = compiled.warnings.first?.message
+        let text = BriefStatusLine.text(note: copyNote, export: exportMessage, warning: warning, attachments: attachments)
+        return Label {
+            Text(text).lineLimit(1).truncationMode(.tail)
+        } icon: {
+            if copyNote == nil && exportMessage == nil && warning != nil {
+                Image(systemName: "exclamationmark.triangle")
             }
         }
+        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+        .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
+        .help(compiled.warnings.map(\.message).joined(separator: "\n"))
     }
 
     private func targetPicker(_ brief: Brief) -> some View {
@@ -167,33 +182,43 @@ struct BriefPane: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// " · draft was 640 (+62)" once Improve has changed the text, so its cost is visible.
+    private static func draftNote(_ brief: Brief, now: Int) -> String {
+        guard let draft = BriefCompiler.draftTokens(brief) else { return "" }
+        let delta = now - draft
+        return " · draft was \(draft.formatted()) (\(delta >= 0 ? "+" : "−")\(abs(delta).formatted()))"
+    }
+
     private func meter(_ brief: Brief, _ compiled: CompiledPrompt) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ProgressView(value: min(Double(compiled.tokens), Double(brief.target.tokenBudget)),
                          total: Double(max(brief.target.tokenBudget, 1)))
-            Text("About \(compiled.tokens.formatted()) of \(brief.target.tokenBudget.formatted()) tokens")
+            Text("About \(compiled.tokens.formatted()) of \(brief.target.tokenBudget.formatted()) tokens\(Self.draftNote(brief, now: compiled.tokens))")
                 .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
         }
     }
 
     private var copyBar: some View {
         let empty = !model.canCopy
+        let primary = model.selected?.isEdited == true ? lastCopy : nil
         return HStack {
-            Button { copy(compact: true) } label: {
-                Label(copied == .machine ? "Copied" : "Copy for machine", systemImage: "cpu")
+            copyButton(.machine, primary: primary, empty: empty, title: "Copy for machine", icon: "cpu",
+                       help: "Compact, data-dense text that uses fewer tokens")
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            if viewMode == .json {
+                copyButton(.json, primary: primary, empty: empty, title: "Copy JSON", icon: "curlybraces",
+                           help: "Pretty-printed JSON")
+                copyButton(.jsonMinified, primary: primary, empty: empty, title: "Minified", icon: "arrow.down.right.and.arrow.up.left",
+                           help: "The same JSON on one line, for pipelines")
             }
-            .buttonStyle(MTFilledButtonStyle())
-            .help("Compact, data-dense text that uses fewer tokens")
-            .keyboardShortcut("c", modifiers: [.command, .shift])
-            .disabled(empty)
-            Button { copy() } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
+            copyButton(.standard, primary: primary, empty: empty, title: "Copy", icon: "doc.on.doc", help: "Readable text")
                 .keyboardShortcut("c", modifiers: [.command, .option])
-                .disabled(empty)
             Menu("Save to project") {
                 ForEach(exportRoots, id: \.self) { root in
                     Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }
                 }
-                if exportRoots.isEmpty { Text("Add a project first") }
+                if !exportRoots.isEmpty { Divider() }
+                Button("Add folder…") { addFolderAndSave() }
             }
             .disabled(empty)
             .onHover { if $0 { Task { exportRoots = await model.exportRoots() } } }
@@ -202,15 +227,57 @@ struct BriefPane: View {
         }
     }
 
-    private func copy(compact: Bool = false) {
+    @ViewBuilder
+    private func copyButton(_ kind: CopyKind, primary: CopyKind?, empty: Bool, title: String, icon: String, help: String) -> some View {
+        let button = Button { copy(kind) } label: {
+            Label(copied == kind ? "Copied" : title, systemImage: icon)
+        }
+        .help(help)
+        .disabled(empty)
+        if primary == kind { button.buttonStyle(MTFilledButtonStyle()) } else { button }
+    }
+
+    /// Adds a folder as a project, then saves the brief into it.
+    private func addFolderAndSave() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Add and save"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        Task {
+            await services.workspacesModel.add(folder)
+            exportRoots = await model.exportRoots()
+            if let error = services.workspacesModel.lastError {
+                exportMessage = error
+            } else {
+                exportMessage = model.exportSelected(to: folder)
+            }
+        }
+    }
+
+    private func copy(_ kind: CopyKind) {
         guard let brief = model.selected else { return }
-        let compiledForCopy = BriefCompiler.compile(brief, compact: compact)
-        let text = model.copyForClipboard(for: nil, compact: compact)
+        let form: BriefCompiler.Form = switch kind {
+        case .machine: .compact
+        case .standard: .readable
+        case .json: .json
+        case .jsonMinified: .jsonMinified
+        }
+        let compiledForCopy = BriefCompiler.compile(brief, form: form)
+        let text = model.copyForClipboard(for: nil, form: form)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        copied = compact ? .machine : .standard
+        copied = kind
+        lastCopyStorage = kind.rawValue
         let secretWord = compiledForCopy.redactedCount == 1 ? "secret" : "secrets"
-        copyNote = "\(compact ? "Copied for machine" : "Copied"), ~\(compiledForCopy.tokens) tokens, \(compiledForCopy.redactedCount) \(secretWord) redacted"
+        let what = switch kind {
+        case .machine: "Copied for machine"
+        case .standard: "Copied"
+        case .json: "Copied JSON"
+        case .jsonMinified: "Copied minified JSON"
+        }
+        copyNote = "\(what), ~\(compiledForCopy.tokens) tokens, \(compiledForCopy.redactedCount) \(secretWord) redacted"
         Task { try? await Task.sleep(for: .seconds(2)); copyNote = nil }
     }
 }

@@ -25,12 +25,17 @@ enum ChatPromptRenderer {
         Rendered(segments: messages.map(segment), generation: generationPrompt)
     }
 
+    private static func sanitizeDelimiters(_ text: String) -> String {
+        text.replacingOccurrences(of: "<|", with: "<\u{200B}|")
+    }
+
     private static func segment(_ msg: Message) -> String {
+        let content = sanitizeDelimiters(msg.content)
         switch msg.role {
-        case .system:    "<|im_start|>system\n\(msg.content)<|im_end|>\n"
-        case .user:      "<|im_start|>user\n\(msg.content)<|im_end|>\n"
-        case .assistant: "<|im_start|>assistant\n\(emptyThink)\(msg.content)<|im_end|>\n"
-        case .tool:      "<|im_start|>tool\n\(msg.content)<|im_end|>\n"
+        case .system:    return "<|im_start|>system\n\(msg.content)<|im_end|>\n"
+        case .user:      return "<|im_start|>user\n\(content)<|im_end|>\n"
+        case .assistant: return "<|im_start|>assistant\n\(emptyThink)\(content)<|im_end|>\n"
+        case .tool:      return "<|im_start|>tool\n\(content)<|im_end|>\n"
         }
     }
 }

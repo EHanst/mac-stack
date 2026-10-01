@@ -44,7 +44,6 @@ struct Options {
     var noMTP = false
     var draftVocab: Int?
     var sidecarTest = false
-    var knowledgeEval = false
     var compactionTest = false
     var longChatTest = false
     var idleCancelTest = false
@@ -84,7 +83,6 @@ struct Options {
             case "--modes": if let v = it.next() { evalModes = v.split(separator: ",").map(String.init) }
             case "--repeats": if let v = it.next(), let n = Int(v) { evalRepeats = max(1, n) }
             case "--sidecar-test": sidecarTest = true
-            case "--knowledge-eval": knowledgeEval = true
             case "--compaction-test": compactionTest = true
             case "--long-chat-test": longChatTest = true
             case "--idle-cancel-test": idleCancelTest = true
@@ -259,20 +257,6 @@ func modelDims(_ dir: URL) -> (hidden: Int, intermediate: Int, bits: Int, group:
 
 func userMessage(_ text: String) -> Message { Message(role: .user, content: text) }
 func generationOptions(_ maxTokens: Int) -> GenerationOptions { GenerationOptions(maxTokens: maxTokens, temperature: 0, sampling: .greedy) }
-
-/// One sidecar critique on the bench's local model, with guidance from `retriever` when given.
-func knowledgeCritique(_ brief: Brief, provider: LocalMLXProvider, timeout: Double,
-                       retriever: KnowledgeRetriever?) async throws -> SidecarResult {
-    var provide: BriefSidecar.GuidanceProvider?
-    if let r = retriever {
-        provide = { b, _ in await r.guidance(for: b) }
-    }
-    let sidecar = BriefSidecar(guidance: provide) { messages in
-        await measure(provider, messages, gen: BriefSidecar.generationOptions.maxTokens,
-                      timeout: timeout, cacheSnapshots: false).text
-    }
-    return try await sidecar.run(brief: brief, operation: .critique)
-}
 
 func run() async throws {
     setvbuf(stdout, nil, _IOLBF, 0)   // line-buffered so `> log` shows progress live
@@ -533,31 +517,6 @@ func run() async throws {
             let pct = base > 0 ? (t - base) / base * 100 : .nan
             print("    next-turn TTFT vs baseline: \(fmt(pct, 1))% (\(pct <= 10 ? "OK" : "OVER the 10% limit"))")
         }
-        print("")
-    }
-
-    // ── Knowledge store: does retrieved guidance change what the sidecar produces? ─────────────────
-    if opts.knowledgeEval {
-        print("[knowledge eval] critique with vs without guidance (text search over Bench/knowledge-fixture)")
-        let store = KnowledgeStore(dbURL: FileManager.default.temporaryDirectory
-            .appendingPathComponent("knowledge-eval-\(UUID().uuidString)/knowledge.db"), dimension: 384)
-        let fixture = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("Bench/knowledge-fixture")
-        let loaded = (try? await KnowledgePackLoader.load(directory: fixture, into: store)) ?? 0
-        print("  fixture entries loaded: \(loaded)")
-        let retriever = KnowledgeRetriever(store: store)
-        let goals = ["Make uploads more reliable.", "Add retry to the sync call.", "Speed up the search screen.",
-                     "Clean up the settings code.", "Add a dark mode toggle."]
-        let briefs: [Brief] = goals.enumerated().map { i, goal in
-            Brief.new(title: "eval \(i + 1)", input: goal, target: .make(modelFamily: "claude", surface: .claudeCode))
-        }
-        let evalTimeout = opts.timeout
-        let rows = await KnowledgeEval.compare(briefs: briefs) { brief, guided in
-            try await knowledgeCritique(brief, provider: provider, timeout: evalTimeout, retriever: guided ? retriever : nil)
-        }
-        for r in rows {
-            print("  \(r.title): with \(r.withParsed ? "ok" : "none")/\(r.withCount)  without \(r.withoutParsed ? "ok" : "none")/\(r.withoutCount)")
-        }
-        print(KnowledgeEval.summary(rows).split(separator: "\n").map { "  " + $0 }.joined(separator: "\n"))
         print("")
     }
 

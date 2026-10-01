@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import StackCore
 
@@ -261,8 +262,20 @@ struct BriefCompilerTests {
         var b = compactBrief(family: "gpt")
         b.input = "Steps\n1. One\n    - nested\n        - deeper\n```\n    keep\n```"
         let t = BriefCompiler.compile(b, compact: true).text
-        #expect(t.contains("\n1. One\n  - nested\n    - deeper\n"))
+        #expect(t.contains("\n1. One\n  nested\n    deeper\n"))
         #expect(t.contains("\n    keep\n"))
+    }
+
+    @Test("compact form strips bullets, quotes, rules, emphasis, links and table rules; code is untouched")
+    func compactStripsMarkdown() {
+        var b = compactBrief(family: "gpt")
+        b.input = "1. First\n2) Second\n- bullet\n* star\n> quoted\n---\n*soft* and _under_ and snake_case\n[docs](https://x.io/a)\n| a | b |\n|---|---|\n| 1 | 2 |\n```\n1. keep\n- keep\n```\nversion 2.0 stays"
+        let t = BriefCompiler.compile(b, compact: true).text
+        #expect(t.contains("\n1. First\n2) Second\nbullet\nstar\nquoted\nsoft and _under_ and snake_case\ndocs (https://x.io/a)\n"))
+        #expect(!t.contains("---") && !t.contains("|---"))
+        #expect(t.contains("a | b\n1 | 2\n"))
+        #expect(t.contains("```\n1. keep\n- keep\n```"))
+        #expect(t.contains("version 2.0 stays"))
     }
 
     @Test("compact form drops decoration and blank lines, keeps code and diffs")
@@ -307,6 +320,22 @@ struct BriefCompilerTests {
         #expect(t.contains("#TASK\nGoal\nFix the login timeout."))
         #expect(t.contains("#FILE A.swift\nlet a = 1\nlet b = 2"))
         #expect(t.contains("#REF B .swift"))
+    }
+
+    @Test("JSON form is valid, carries task, target and files, and omits text for references")
+    func jsonForm() throws {
+        var b = compactBrief(family: "claude")
+        b.input = "## Goal\n\nFix the \"login\" timeout.\n```\nlet a = 1\n```"
+        let out = BriefCompiler.compile(b, form: .json)
+        let obj = try #require(JSONSerialization.jsonObject(with: Data(out.text.utf8)) as? [String: Any])
+        #expect((obj["task"] as? String)?.contains("Fix the \"login\" timeout.\n```\nlet a = 1\n```") == true)
+        #expect((obj["target"] as? [String: Any])?["model"] as? String == "claude")
+        let files = try #require(obj["files"] as? [[String: Any]])
+        #expect(files.count == 2)
+        #expect(files[0]["path"] as? String == "A.swift" && files[0]["text"] as? String == "let a = 1\n\n\nlet b = 2")
+        #expect(files[1]["mode"] as? String == "reference" && files[1]["text"] == nil)
+        #expect(out.text == BriefCompiler.compile(b, form: .json).text)
+        #expect(out.tokens > 0)
     }
 
     @Test("machine form is deterministic")
@@ -357,5 +386,15 @@ struct BriefCompilerTests {
         var b = compactBrief(family: "gpt")
         b.contextItems[0].text = "```\ninner\n```"
         #expect(BriefCompiler.compile(b, compact: true).text.contains("# file A.swift\n````\n```\ninner\n```\n````"))
+    }
+
+    @Test func minifiedJSONIsOneLineAndEquivalent() throws {
+        let brief = Brief.new(title: "t", input: "do the thing\nsecond line", target: .make(modelFamily: "claude", surface: .other))
+        let pretty = BriefCompiler.compile(brief, form: .json).text
+        let mini = BriefCompiler.compile(brief, form: .jsonMinified).text
+        #expect(!mini.contains("\n") && mini.count < pretty.count)
+        let a = try JSONSerialization.jsonObject(with: Data(pretty.utf8)) as? NSDictionary
+        let b = try JSONSerialization.jsonObject(with: Data(mini.utf8)) as? NSDictionary
+        #expect(a != nil && a == b)
     }
 }
