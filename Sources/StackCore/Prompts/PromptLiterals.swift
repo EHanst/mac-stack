@@ -34,6 +34,30 @@ public enum PromptLiterals {
         return found.filter { seen.insert($0).inserted }
     }
 
+    private static let stopwords: Set<String> = [
+        "about", "above", "after", "again", "also", "because", "been", "before", "being", "could", "does", "doing",
+        "each", "from", "have", "having", "here", "into", "just", "like", "make", "more", "most", "need", "only",
+        "other", "should", "some", "such", "than", "that", "their", "them", "then", "there", "these", "they", "this",
+        "those", "through", "want", "were", "what", "when", "where", "which", "while", "will", "with", "would", "your",
+        "please", "using", "used", "work", "working", "something", "thing", "things", "really", "very",
+    ]
+
+    /// Plain words from `original` the rewrite should still carry: the requirements a short prose request is made of
+    /// ("speed", "size"), which the literal check can't see. Matches on a 5-letter stem so "faster"/"fast" and
+    /// "optimizing"/"optimize" don't count as dropped. Short drafts must keep every term; long ones may reword
+    /// up to a quarter of theirs.
+    public static func missingTerms(from original: String, in rewritten: String) -> [String] {
+        func stem(_ w: String) -> String { String(w.prefix(w.count > 5 ? 5 : w.count)) }
+        let words = original.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
+        var seen = Set<String>()
+        let terms = words.filter { $0.count >= 4 && !stopwords.contains($0) && seen.insert(stem($0)).inserted }
+        guard !terms.isEmpty else { return [] }
+        let haystack = rewritten.lowercased()
+        let missing = terms.filter { !haystack.contains(stem($0)) }
+        let allowed = words.count <= 60 ? 0 : terms.count / 4
+        return missing.count > allowed ? missing : []
+    }
+
     /// Literals from `original` that don't appear in `rewritten`.
     public static func missing(from original: String, in rewritten: String) -> [String] {
         extract(from: original).filter { !isPresent($0, in: rewritten) }

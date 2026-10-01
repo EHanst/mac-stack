@@ -136,6 +136,16 @@ struct PromptOptimizerTests {
         #expect(r.improved == original && !r.didChange)
     }
 
+    @Test("a rewrite that drops a plain-prose requirement is rejected with the missing terms")
+    func rejectsDroppedRequirement() {
+        let r = result("<improved>Refactor the codebase in the current directory.</improved>",
+                       original: "I'd like to refactor a codebase for speed and size")
+        #expect(r.rejection?.missing == ["speed", "size"])
+        let ok = result("<improved>Refactor the codebase to improve speed and reduce size.</improved>",
+                        original: "I'd like to refactor a codebase for speed and size")
+        #expect(ok.rejection == nil)
+    }
+
     @Test("persona words that weren't in the draft are rejected")
     func rejectsPersona() {
         let r = result("<improved>Sugoi, Senpai! Please fix the crash in the loader code now.</improved>", original: "fix the crash in the loader")
@@ -144,7 +154,7 @@ struct PromptOptimizerTests {
 
     @Test("the size limit is what the model can hold, not a multiple of the draft")
     func lengthCap() {
-        let long = String(repeating: "extra detail here. ", count: 40)   // ~300 tokens
+        let long = "Fix the crash in the loader code please. " + String(repeating: "extra detail here. ", count: 40)   // ~300 tokens
         let draft = "fix the crash in the loader code please"
         // Plenty of room: accepted even though it is far longer than the draft, with a nudge to check it.
         let roomy = PromptOptimizer.result(raw: "<improved>\(long)</improved>", original: draft, mode: .improve,
@@ -204,7 +214,7 @@ struct PromptOptimizerTests {
 
     @Test("conflicts and assumptions are separated from other changes")
     func groupedChanges() {
-        let r = result("<improved>Reply in JSON with a summary field for the loader crash.</improved><changes>\n- Conflict: asked for prose and JSON; kept JSON\n- Assumed: the loader is in Loader.swift\n- named the output\n</changes>",
+        let r = result("<improved>Reply in JSON, not prose, with a summary field for the loader crash.</improved><changes>\n- Conflict: asked for prose and JSON; kept JSON\n- Assumed: the loader is in Loader.swift\n- named the output\n</changes>",
                        original: "reply in prose or JSON about the loader crash")
         #expect(r.conflicts == ["asked for prose and JSON; kept JSON"])
         #expect(r.assumptions == ["the loader is in Loader.swift"])
@@ -221,7 +231,7 @@ struct PromptOptimizerTests {
 
     @Test("a long expand rewrite gets no 'much longer' warning")
     func noLengthNudgeForDetailModes() {
-        let long = String(repeating: "extra detail here. ", count: 40)
+        let long = "Fix the crash in the loader code please. " + String(repeating: "extra detail here. ", count: 40)
         for mode in [OptimizeMode.expand] {
             let r = PromptOptimizer.result(raw: "<improved>\(long)</improved>", original: "fix the crash in the loader code please",
                                            mode: mode, model: nil, ceiling: 4_000)
@@ -356,7 +366,7 @@ struct PromptOptimizerSharingTests {
     func tooLongFallsBack() async throws {
         let cap = Captured()
         let registry = ModelRegistry()
-        await registry.register(LimitedProvider(captured: cap, limit: 1_000))
+        await registry.register(LimitedProvider(captured: cap, limit: 1_200))
         let svc = InferenceService(registry: registry, policy: .localOnly)
         let long = prefix + [Message(role: .user, content: String(repeating: "word ", count: 400))]
         for try await _ in PromptOptimizer(inference: svc).optimize(
