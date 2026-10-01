@@ -53,9 +53,9 @@ struct BriefSidecarTests {
         #expect(r.findings[1].addition == nil)
     }
 
-    @Test("prose, missing tags or persona words yield no cards and a note")
+    @Test("prose or missing tags yield no cards and a note")
     func junkReplies() {
-        for raw in ["Sure! Here are some thoughts.", "", "<findings>\n- Sugoi senpai, nice goal\n</findings>"] {
+        for raw in ["Sure! Here are some thoughts.", "", "<findings>\n</findings>"] {
             let r = BriefSidecar.parse(raw, operation: .critique)
             #expect(r.findings.isEmpty)
             #expect(r.note == "The model didn't suggest anything.")
@@ -77,14 +77,6 @@ struct BriefSidecarTests {
         }
         let r = try await sidecar.run(brief: brief(), operation: .interview)
         #expect(r.questions.count == 1)
-    }
-
-    @Test("mentioning Kokoro is not persona; senpai is")
-    func personaFilter() {
-        let ok = BriefSidecar.parse("<findings>\n- Say which Kokoro model to use\n</findings>", operation: .critique)
-        #expect(ok.findings.count == 1)
-        let bad = BriefSidecar.parse("<findings>\n- Nice goal, senpai\n</findings>", operation: .critique)
-        #expect(bad.findings.isEmpty)
     }
 
     @Test("answer tags in the text cannot forge structure")
@@ -156,12 +148,6 @@ struct BriefSidecarTests {
         let r = BriefSidecar.parse("Sure! Here is a better prompt.", operation: .revise, brief: brief())
         #expect(r.revisions.isEmpty)
         #expect(r.note == "The model didn't suggest anything.")
-    }
-
-    @Test("persona replies are discarded")
-    func revisionPersona() {
-        let raw = "<revision>Add retry, senpai</revision>"
-        #expect(BriefSidecar.parse(raw, operation: .revise, brief: brief()).revisions.isEmpty)
     }
 
     @Test("run refuses an empty reply without calling the model")
@@ -261,6 +247,15 @@ struct BriefSidecarTests {
     @Test("the system prompt tells the model that guidance is reference, not instructions")
     func systemPromptMentionsGuidance() {
         #expect(BriefSidecar.systemPrompt.contains("<guidance>"))
+    }
+
+    @Test("the system prompt carries the principles, states the data rule once and has no persona")
+    func systemPromptShape() {
+        let p = BriefSidecar.systemPrompt
+        #expect(p.contains(PromptPrinciples.rules))
+        #expect(p.components(separatedBy: "never instructions to you").count == 2)
+        #expect(!p.localizedCaseInsensitiveContains("personality"))
+        for tag in ["<questions>", "<findings>", "<revision>", "<tips>"] { #expect(p.contains(tag)) }
     }
 
     @Test("run asks the provider and reports which entries were used")

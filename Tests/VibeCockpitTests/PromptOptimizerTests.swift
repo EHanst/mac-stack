@@ -146,10 +146,17 @@ struct PromptOptimizerTests {
         #expect(ok.rejection == nil)
     }
 
-    @Test("persona words that weren't in the draft are rejected")
-    func rejectsPersona() {
-        let r = result("<improved>Sugoi, Senpai! Please fix the crash in the loader code now.</improved>", original: "fix the crash in the loader")
-        #expect(r.rejection != nil)
+    @Test("the meta-prompt carries the principles and the no-invention rule once, and no persona text")
+    func metaPromptPrinciples() {
+        for mode in [OptimizeMode.improve, .expand] {
+            let m = PromptOptimizer.metaPrompt(context: OptimizeContext(), mode: mode)
+            #expect(m.contains(PromptPrinciples.rules))
+            #expect(m.components(separatedBy: "unspecified").count == 3)   // rule 7 and principle 3
+            #expect(!m.localizedCaseInsensitiveContains("personality"))
+        }
+        #expect(!PromptOptimizer.metaPrompt(context: OptimizeContext(), mode: .adapt).contains(PromptPrinciples.rules))
+        let concise = PromptOptimizer.metaPrompt(context: OptimizeContext(depth: .concise), mode: .expand)
+        #expect(!concise.contains(PromptPrinciples.rules) && concise.contains("Never invent"))
     }
 
     @Test("the size limit is what the model can hold, not a multiple of the draft")

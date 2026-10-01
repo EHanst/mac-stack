@@ -44,6 +44,7 @@ public enum BuiltInPrompts {
                 - Use Swift Testing (@Test, #expect) for new test files. Only use XCTest if the existing suite already uses it.
                 - Each test should cover exactly one behaviour. Name tests descriptively.
                 - Include at least one edge-case and one failure-path test per function under test.
+                - Say how to run the tests and what passing looks like.
                 """
         case "review":
             return """
@@ -53,7 +54,7 @@ public enum BuiltInPrompts {
                 - Distinguish must-fix from nice-to-have.
                 """
         default:
-            return "Think step by step before responding. Be concise and specific to the codebase."
+            return "Be concise and specific to the codebase. If the request is ambiguous, ask one short question before acting."
         }
     }
 

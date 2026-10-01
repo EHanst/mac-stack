@@ -39,8 +39,8 @@ public enum PromptLint {
                              suggestion: "\n\nFile: "))
         }
 
-        if ["generate", "debug"].contains(context.intent ?? ""), words.count < 30,
-           !containsAny(lower, ["should", "must", "expect", "so that", "returns", "instead of", "result"]) {
+        if ["generate", "debug", "refactor", "test"].contains(context.intent ?? ""), words.count < 30,
+           !containsAny(lower, ["should", "must", "expect", "so that", "returns", "instead of", "result", "done when", "passes", "verify"]) {
             out.append(.init(rule: .noSuccessCriterion, message: "Say what a good result looks like.",
                              suggestion: "\n\nIt should: "))
         }
