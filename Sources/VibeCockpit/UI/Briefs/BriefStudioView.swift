@@ -29,11 +29,12 @@ struct BriefStudioView: View {
             topBar
             continuationStatus
             MTDivider()
-            if fresh { welcome } else { BriefPane() }
             if !fresh {
-                CappedScroll(maxHeight: 140) { BrainstormBanner() }
-                    .padding(.horizontal, 16)
+                // Same place as the Improve workspace's strip, so suggestions never change position.
+                CappedScroll(maxHeight: 150) { BrainstormBanner() }
+                    .padding(.horizontal, 16).padding(.top, 8)
             }
+            if fresh { welcome } else { BriefPane() }
             MTDivider()
             BriefInputBar(text: $draft, fresh: fresh, focused: $inputFocused)
         }
