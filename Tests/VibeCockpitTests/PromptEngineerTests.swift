@@ -173,13 +173,12 @@ struct IdentityPromptTests {
         #expect(text.contains("the prompts you draft"))
     }
 
-    @Test("the user can rewrite Kokoro's personality; the safety and stack rules stay")
+    @Test("the user can rewrite Kokoro's personality; the safety rules stay")
     func customPersonality() {
         let text = AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: "You are Mochi, a calm, terse pair programmer.")
         #expect(text.hasPrefix("You are Mochi, a calm, terse pair programmer."))
         #expect(!text.contains("You are Kokoro") && !text.contains("calm, concise assistant"))
         #expect(text.contains("never use it in code, diffs, commit messages"))
-        #expect(text.contains("Never suggest Python, Node, Docker"))
         #expect(text.contains("Substance comes first"))
     }
 
@@ -201,9 +200,10 @@ struct IdentityPromptTests {
         #expect(!text.contains("Mochi"))
     }
 
-    @Test("the assistant is never told to use Python, Docker or Node")
-    func projectRules() {
+    @Test("the assistant is always told to be correct and safe")
+    func safetyRules() {
         let text = AppServices.identityPrompt(persona: true, addressName: nil)
-        #expect(text.contains("Never suggest Python, Node, Docker"))
+        #expect(text.contains("Substance comes first"))
+        #expect(text.contains("never invent"))
     }
 }

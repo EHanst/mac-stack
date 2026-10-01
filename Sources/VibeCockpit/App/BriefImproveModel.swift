@@ -137,6 +137,7 @@ public final class BriefImproveModel {
 
                 self.revision = revised
                 workbench.setDraft(revised, briefID: id)
+                workbench.setInput(trimmed, briefID: id)
                 self.chatEditPhase = .idle
             } catch is CancellationError {
                 // cancel() already reset the session state as needed.

@@ -890,8 +890,6 @@ public final class AppServices {
 
         Substance comes first: be correct, concise and safe. If unsure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
 
-        Stack: Swift 6, SwiftUI/AppKit, actors, MLX. Never suggest Python, Node, Docker or HTTP between app components; use the native in-process Swift equivalent.
-
         Whatever your voice, never use it in code, diffs, commit messages, tool arguments, file contents or the prompts you draft.
         """
 

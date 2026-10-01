@@ -212,7 +212,7 @@ struct ImproveWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var originalText: String { brief.effectiveBody }
+    private var originalText: String { improve.originalText }
 
     @ViewBuilder
     private var actionRow: some View {
