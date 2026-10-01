@@ -16,6 +16,8 @@ public struct ChatQuery: Sendable {
 
     public static let defaultMaxTokens = 1024
     public static let maxAllowedTokens = 8192
+    public static let maxMessages = 100
+    public static let maxTotalCharacters = 500_000
 
     /// One rule for every endpoint: missing or non-positive means the default; the top is capped.
     public static func clampedMaxTokens(_ requested: Int?) -> Int {
@@ -37,6 +39,7 @@ public struct EmbedQuery: Sendable {
     public var model: String?
     public var origin: QueryOrigin
     public static let maxTexts = 256
+    public static let maxTextLength = 32_000
     public init(texts: [String], model: String? = nil, origin: QueryOrigin) {
         self.texts = texts; self.model = model; self.origin = origin
     }
@@ -117,6 +120,13 @@ public actor QueryGateway {
         guard query.messages.contains(where: { !$0.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw QueryError.invalid(param: "messages", message: "Send at least one non-empty message.")
         }
+        guard query.messages.count <= ChatQuery.maxMessages else {
+            throw QueryError.invalid(param: "messages", message: "At most \(ChatQuery.maxMessages) messages per call.")
+        }
+        let totalChars = query.messages.reduce(0) { $0 + $1.content.count }
+        guard totalChars <= ChatQuery.maxTotalCharacters else {
+            throw QueryError.invalid(param: "messages", message: "Total messages content exceeds maximum length (\(ChatQuery.maxTotalCharacters) characters).")
+        }
         let routed = RouteBox()
         do {
             let events = try await inference.generate(
@@ -145,6 +155,9 @@ public actor QueryGateway {
         guard !query.texts.isEmpty else { throw QueryError.invalid(param: "input", message: "Send at least one text to embed.") }
         guard query.texts.count <= EmbedQuery.maxTexts else {
             throw QueryError.invalid(param: "input", message: "At most \(EmbedQuery.maxTexts) texts per call.")
+        }
+        guard query.texts.allSatisfy({ $0.count <= EmbedQuery.maxTextLength }) else {
+            throw QueryError.invalid(param: "input", message: "Individual text exceeds maximum length (\(EmbedQuery.maxTextLength) characters).")
         }
         do {
             let r = try await inference.embed(query.texts, pin: InferenceService.pin(for: query.model))

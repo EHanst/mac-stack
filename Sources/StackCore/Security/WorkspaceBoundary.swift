@@ -30,14 +30,20 @@ public struct WorkspaceBoundary: Sendable {
     public func validateWrite(_ url: URL) throws {
         try validateContainment(url)
         let ext = url.pathExtension
-        guard ext.isEmpty || context.policy.allowedExtensions.contains(ext) else {
+        guard !ext.isEmpty, context.policy.allowedExtensions.contains(ext) else {
             throw BoundaryError.disallowedExtension(ext)
         }
     }
 
     public func validateExecution(_ command: String) throws {
-        let executable = command.components(separatedBy: " ").first ?? command
-        let allowed = context.policy.executablePrefixes.contains { executable.hasPrefix($0) }
+        let dangerousChars: CharacterSet = [";", "&", "|", "`", "\n", "\r"]
+        guard command.unicodeScalars.allSatisfy({ !dangerousChars.contains($0) }) else {
+            throw BoundaryError.disallowedCommand(command)
+        }
+        let executable = command.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? command
+        let allowed = context.policy.executablePrefixes.contains { prefix in
+            executable == prefix || executable.hasSuffix("/" + prefix)
+        }
         guard allowed else { throw BoundaryError.disallowedCommand(executable) }
     }
 

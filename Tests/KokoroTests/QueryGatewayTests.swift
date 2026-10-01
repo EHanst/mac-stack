@@ -103,6 +103,17 @@ private func expectError(_ expected: QueryError, _ body: () async throws -> Void
         await expectError(.invalid(param: "input", message: "At most \(EmbedQuery.maxTexts) texts per call.")) {
             _ = try await gw.embed(EmbedQuery(texts: Array(repeating: "x", count: EmbedQuery.maxTexts + 1), origin: .http))
         }
+        await expectError(.invalid(param: "input", message: "Individual text exceeds maximum length (\(EmbedQuery.maxTextLength) characters).")) {
+            _ = try await gw.embed(EmbedQuery(texts: [String(repeating: "a", count: EmbedQuery.maxTextLength + 1)], origin: .http))
+        }
+    }
+
+    @Test func chatRefusesExcessiveMessages() async {
+        let gw = await makeGateway()
+        let msgs = (0...ChatQuery.maxMessages).map { Message(role: .user, content: "msg \($0)") }
+        await expectError(.invalid(param: "messages", message: "At most \(ChatQuery.maxMessages) messages per call.")) {
+            _ = try await gw.chat(ChatQuery(messages: msgs, origin: .http))
+        }
     }
 
     @Test func modelsListsEverythingRegistered() async {

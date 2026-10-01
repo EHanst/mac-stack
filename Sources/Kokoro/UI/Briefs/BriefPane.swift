@@ -56,7 +56,7 @@ struct BriefPane: View {
             .sheet(isPresented: $showVersions) {
                 BriefVersionsSheet(brief: brief, onRestore: { model.restoreVersion($0) }, onClose: { showVersions = false })
             }
-            .task(id: model.selectedID) { exportMessage = nil; exportRoots = await model.exportRoots() }
+            .task(id: model.selectedID) { editingHuman = false; exportMessage = nil; exportRoots = await model.exportRoots() }
             .background(Color.mtSurfaceContainerLowest)
         } else {
             VStack(spacing: 8) {
@@ -72,8 +72,6 @@ struct BriefPane: View {
 
     private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
         let empty = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let compact = BriefCompiler.compile(brief, compact: true)
-        let savings = TokenSavings.percent(plain: compiled.tokens, compact: compact.tokens)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Picker("View", selection: Binding(
@@ -84,6 +82,8 @@ struct BriefPane: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 if viewMode == .machine {
+                    let compact = BriefCompiler.compile(brief, compact: true)
+                    let savings = TokenSavings.percent(plain: compiled.tokens, compact: compact.tokens)
                     Text("\(BriefViewMode.machineCaption(for: brief.target)) · ~\(compact.tokens) tokens (saves \(savings)%)")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 } else {
@@ -96,6 +96,7 @@ struct BriefPane: View {
             }
             Group {
                 if viewMode == .machine {
+                    let compact = BriefCompiler.compile(brief, compact: true)
                     ScrollView {
                         Text(empty ? "Nothing to show yet." : compact.text)
                             .font(AppTypography.monoFont(size: 13))
