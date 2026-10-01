@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build-and-test:
@@ -39,8 +39,8 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Build libgit2
-        run: brew install cmake && ./Scripts/build-libgit2.sh
+      - name: Install build tools & libgit2
+        run: brew install cmake xcodegen xcbeautify && ./Scripts/build-libgit2.sh
 
       # Cache the SPM build artefacts between runs.
       - name: Cache SPM build
@@ -49,15 +49,35 @@ jobs:
           path: |
             .build
             ~/.swiftpm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}-${{ github.sha }}
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
 
       - name: Resolve dependencies
         run: swift package resolve
 
-      - name: Run tests
-        run: set -o pipefail; swift test --parallel 2>&1 | tee /tmp/test-results.log
+      - name: Run tests with coverage
+        run: set -o pipefail; swift test --parallel --enable-code-coverage 2>&1 | tee /tmp/test-results.log
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          BIN=$(find .build -name "KokoroTests.xctest" -type d | head -1)/Contents/MacOS/KokoroTests
+          PROF=$(find .build -name "default.profdata" | head -1)
+          if [ -f "$BIN" ] && [ -f "$PROF" ]; then
+            echo "### Test Code Coverage Summary" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            xcrun llvm-cov report "$BIN" -instr-profile="$PROF" -ignore-filename-regex=".build|Tests/|Modules/" | tail -n 15 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Build macOS App bundle
+        run: |
+          xcodegen generate
+          set -o pipefail
+          xcodebuild build -scheme Kokoro -project Kokoro.xcodeproj -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            -destination 'platform=macOS,arch=arm64' 2>&1 | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
 
       # Release build only matters for what ships from main; PRs skip it.
       - name: Build (release)
