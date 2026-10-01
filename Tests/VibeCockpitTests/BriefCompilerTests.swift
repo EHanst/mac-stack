@@ -245,4 +245,21 @@ struct BriefCompilerTests {
         #expect(!out.text.isEmpty)
         #expect(best < .milliseconds(100))
     }
+
+    @Test("compact form drops decoration and blank lines, keeps code and diffs")
+    func compact() {
+        var b = brief()
+        b.input = "## Goal\n\nFix the **login** timeout.   \n\n\n```\n\n  keep  \n```\n"
+        b.contextItems = [
+            ContextItem(id: "a", kind: .file, ref: "A.swift", text: "let a = 1  \n\n\nlet b = 2", mode: .inline),
+            ContextItem(id: "b", kind: .file, ref: "B.swift", text: "x", mode: .reference),
+            ContextItem(id: "c", kind: .gitDiff, ref: "diff", text: "-a\n \n+b", mode: .inline),
+        ]
+        let plain = BriefCompiler.compile(b), c = BriefCompiler.compile(b, compact: true)
+        #expect(c.text.contains("#TASK\nGoal\nFix the login timeout.\n```\n\n  keep\n```"))
+        #expect(c.text.contains("#FILE A.swift\nlet a = 1\nlet b = 2"))
+        #expect(c.text.contains("#REF B.swift") && !c.text.contains("x\n"))
+        #expect(c.text.contains("#FILE diff\n-a\n \n+b"))
+        #expect(!c.text.contains("**") && !plain.text.isEmpty)
+    }
 }

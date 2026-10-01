@@ -14,20 +14,27 @@ public struct CompiledPrompt: Sendable, Equatable {
     public var tokens: Int
     public var warnings: [BriefWarning]
     public var includedItemIDs: [String]
+    public var redactedCount: Int = 0
 }
 
 /// Turns a `Brief` into the text a frontier model receives. Pure: no model calls, no I/O, so the
 /// same brief always compiles to the same text. Nothing is dropped without a warning.
 public enum BriefCompiler {
 
-    public static func compile(_ original: Brief) -> CompiledPrompt {
+    /// `compact` renders the machine form (see `renderCompact`): same content and the same budget
+    /// handling, fewer tokens. The default is the readable form.
+    public static func compile(_ original: Brief) -> CompiledPrompt { compile(original, compact: false) }
+
+    public static func compile(_ original: Brief, compact: Bool) -> CompiledPrompt {
         var warnings: [BriefWarning] = []
+        var totalRedactions = 0
         var brief = original
 
         // Nothing leaves the app with a credential in it, whether from the text or an attached item.
         // Only what will actually be emitted is counted, so a hidden secret does not raise a warning.
         let body = ContextRedactor.redact(original.effectiveBody)
         if body.count > 0 {
+            totalRedactions += body.count
             warnings.append(.init(code: .secretRedacted,
                                   message: "\(body.count) secret\(body.count == 1 ? " was" : "s were") removed from your text.",
                                   itemID: nil))
@@ -40,6 +47,7 @@ public enum BriefCompiler {
             brief.contextItems[i].ref = redactedRef.text
             if brief.contextItems[i].included, redactedText.count + redactedRef.count > 0 {
                 let n = redactedText.count + redactedRef.count
+                totalRedactions += n
                 warnings.append(.init(code: .secretRedacted,
                                       message: "\(n) secret\(n == 1 ? " was" : "s were") removed from \(brief.contextItems[i].ref).",
                                       itemID: brief.contextItems[i].id))
@@ -69,7 +77,8 @@ public enum BriefCompiler {
         }
 
         func render(_ items: [ContextItem]) -> String {
-            renderText(body.text, items: items, structure: structure)
+            compact ? renderCompact(body.text, items: items)
+                    : renderText(body.text, items: items, structure: structure)
         }
 
         var text = render(items)
@@ -101,7 +110,8 @@ public enum BriefCompiler {
                 warnings.append(.init(code: .bodyOverBudget, message: "Your text is longer than this target handles well. Shorten it.", itemID: nil))
             }
         }
-        return CompiledPrompt(text: text, tokens: tokens, warnings: warnings, includedItemIDs: items.map(\.id))
+        return CompiledPrompt(text: text, tokens: tokens, warnings: warnings,
+                              includedItemIDs: items.map(\.id), redactedCount: totalRedactions)
     }
 
     private static func hasNoPath(_ item: ContextItem) -> Bool {
@@ -116,6 +126,50 @@ public enum BriefCompiler {
     private static func attribute(_ s: String) -> String {
         oneLine(s).replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
             .replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    // MARK: Compact rendering
+
+    /// Data-dense form for a model reader: no prose framing, no markdown decoration, no blank lines.
+    /// Code, diffs and anything inside a fenced block keep their text; only trailing spaces go.
+    private static func renderCompact(_ body: String, items: [ContextItem]) -> String {
+        var out = ["#FMT task first. #FILE <path> = file text follows, until the next # line. #REF <path> = read it yourself."]
+        let task = compactProse(body)
+        if !task.isEmpty { out.append("#TASK\n" + task) }
+        for item in items {
+            if item.mode == .reference { out.append("#REF " + oneLine(item.ref)); continue }
+            let text = item.kind == .gitDiff ? item.text.trimmingCharacters(in: .newlines)
+                                             : dropBlankLines(item.text)
+            out.append("#FILE " + oneLine(item.ref) + "\n" + text)
+        }
+        return out.joined(separator: "\n")
+    }
+
+    private static func dropBlankLines(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> String in
+                var l = String(line)
+                while l.last == " " || l.last == "\t" { l.removeLast() }
+                return l
+            }
+            .filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+
+    /// Strips heading markers and `**`/`__` emphasis from prose lines; fenced code passes through.
+    private static func compactProse(_ text: String) -> String {
+        var inFence = false
+        var lines: [String] = []
+        for raw in text.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false) {
+            var line = String(raw)
+            while line.last == " " || line.last == "\t" { line.removeLast() }
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { inFence.toggle(); lines.append(line); continue }
+            if inFence { lines.append(line); continue }
+            if line.isEmpty { continue }
+            if let r = line.range(of: #"^\s{0,3}#{1,6}\s+"#, options: .regularExpression) { line.removeSubrange(r) }
+            line = line.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "__", with: "")
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: Rendering

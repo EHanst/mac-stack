@@ -208,7 +208,7 @@ public final class PromptStudioModel {
     public var isRunning: Bool { if case .running = phase { true } else { false } }
 
     /// Starts a rewrite of `draft`. Nothing is sent to the chat; the result waits in `.review`.
-    public func startOptimize(draft: String, mode: OptimizeMode, intent: String?, depth: OptimizeDepth? = nil) {
+    public func startOptimize(draft: String, mode: OptimizeMode, intent: String?, depth: OptimizeDepth? = nil, finer: Bool = false) {
         task?.cancel()
         phase = .running(partial: "")
         task = Task { [weak self] in
@@ -218,7 +218,7 @@ public final class PromptStudioModel {
             let pin = self.optimizerPin
             let prefix = self.conversationPrefix?() ?? []
             // The rewrite is tailored to the model that will *receive* the prompt, not the one rewriting it.
-            let context = OptimizeContext(workspaceName: self.workspaceName, intent: intent, profile: self.profile, pin: pin, sharedPrefix: prefix, depth: depth)
+            let context = OptimizeContext(workspaceName: self.workspaceName, intent: intent, profile: self.profile, pin: pin, sharedPrefix: prefix, depth: depth, finer: finer)
             do {
                 for try await event in self.optimizer.optimize(draft: draft, context: context, mode: mode) {
                     if Task.isCancelled { return }

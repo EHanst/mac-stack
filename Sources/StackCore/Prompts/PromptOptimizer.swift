@@ -38,11 +38,14 @@ public struct OptimizeContext: Sendable {
     /// prefix survives (a separate prompt would evict it; see docs/plans/2026-09-29-prompt-studio-plan.md).
     /// Never sent to a cloud model.
     public var sharedPrefix: [Message]
+    /// Marks a follow-up finer-grained pass: split steps one level finer, do not repeat.
+    public var finer: Bool
 
     public init(workspaceName: String? = nil, intent: String? = nil,
                 profile: ModelPromptProfile = .generic, pin: ProviderID? = nil,
                 priority: InferenceScheduler.Priority = .interactive,
-                sharedPrefix: [Message] = [], depth: OptimizeDepth? = nil) {
+                sharedPrefix: [Message] = [], depth: OptimizeDepth? = nil,
+                finer: Bool = false) {
         self.depth = depth
         self.priority = priority
         self.sharedPrefix = sharedPrefix
@@ -50,6 +53,7 @@ public struct OptimizeContext: Sendable {
         self.intent = intent
         self.profile = profile
         self.pin = pin
+        self.finer = finer
     }
 }
 
@@ -232,6 +236,21 @@ public struct PromptOptimizer: Sendable {
                 Message(role: .user, content: userBody(draft: draft, context: context, mode: mode))]
     }
 
+    /// Each pass must make the instructions finer-grained, not just longer. The draft may already be the
+    /// output of an earlier pass, so the rule is written to apply again to text that is already detailed.
+    static let granularityRule = """
+        5a. Assume the model that will read the rewrite is not smart: it takes every instruction literally, fills no gaps \
+        and guesses wrong when a step is vague. Every pass must make the instructions more granular, not just longer. \
+        For each instruction already in the draft: (a) split it into the separate actions it contains, in the order \
+        they happen, as numbered steps or sub-steps (1, 1a, 1b); (b) name the exact thing each step acts on, such as \
+        the file, function, value, command or screen, using only names the draft gives; (c) say what done looks like \
+        for that step, so the reader can check it; (d) turn each vague word ("handle", "properly", "clean up", "as \
+        needed") into a concrete action or rule; (e) say what to do when a step fails or an input is missing. If the \
+        draft is already detailed, go one level finer than it is: break its smallest steps into smaller ones. Never \
+        fill the extra length with repetition, filler or generic advice. Granularity must come from new, specific \
+        sub-steps and checks.
+        """
+
     static func metaPrompt(context: OptimizeContext, mode: OptimizeMode) -> String {
         var lines = [
             "You rewrite a user's request to an AI coding assistant so the assistant can act on it better. You do not answer the request.",
@@ -247,7 +266,7 @@ public struct PromptOptimizer: Sendable {
         ]
         switch mode {
         case .improve:
-            lines.append("5. Start from the draft as it is now and make it better: fix vagueness and order, and sharpen weak points. Never remove or condense sections, requirements, examples or detail the draft already has; if the draft is already long and detailed, return all of it, improved, and it may grow slightly. Do not pad short drafts.")
+            lines.append("5. Start from the draft as it is now and make it better: fix vagueness and order, and sharpen weak points. Never remove or condense sections, requirements, examples or detail the draft already has; if the draft is already long and detailed, return all of it, improved, and it will grow as its steps get finer. Do not pad short drafts with filler.")
         case .adapt:
             lines.append("5. Keep the wording and length. Only restructure it for the target's preferred style; add nothing new.")
         case .expand:
@@ -281,6 +300,13 @@ public struct PromptOptimizer: Sendable {
                     Do not invent file names, APIs or facts that are not in the request; write "unspecified" or ask instead.
                     """)
             }
+        }
+        if mode != .adapt {
+            var rule = granularityRule
+            if context.finer {
+                rule += " This is a further pass: take every step the draft already has and split it one level finer than it is now; do not repeat what is already there."
+            }
+            lines.append(rule)
         }
         lines.append("6. If the request is too vague to rewrite honestly, ask at most 2 short questions instead.")
         lines.append("")

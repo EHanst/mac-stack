@@ -10,14 +10,30 @@ import AppKit
 /// The model receives the compiled text (brief plus attachments), not this editor's raw contents.
 struct BriefPane: View {
     @Environment(AppServices.self) private var services
-    @State private var copied = false
+    private enum CopyKind: String { case machine, standard }
+    @State private var copied: CopyKind?
+    private enum ViewMode: String { case markdown = "Markdown", machine = "Machine" }
+    @AppStorage("brief.viewMode") private var viewModeStorage: String = ViewMode.markdown.rawValue
+    @AppStorage("brief.primaryCopy") private var primaryCopyStorage: String = CopyKind.machine.rawValue
     @State private var showVersions = false
+    @State private var showReplySheet = false
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?
+    @State private var copyNote: String?
 
     private var model: BriefWorkbenchModel { services.briefs }
     private var improve: BriefImproveModel { services.improve }
     private var feedback: BriefFeedbackModel { services.feedback }
+
+    private var viewMode: ViewMode {
+        get { ViewMode(rawValue: viewModeStorage) ?? .markdown }
+        nonmutating set { viewModeStorage = newValue.rawValue }
+    }
+
+    private var primaryCopy: CopyKind {
+        get { CopyKind(rawValue: primaryCopyStorage) ?? .machine }
+        nonmutating set { primaryCopyStorage = newValue.rawValue }
+    }
 
     var body: some View {
         if let brief = model.selected, let compiled = model.compiled {
@@ -25,7 +41,7 @@ struct BriefPane: View {
                 targetPicker(brief)
                 meter(brief, compiled)
                 statusLine(brief)
-                editor(brief)
+                editor(brief, compiled: compiled)
                 CappedScroll(maxHeight: 160) {
                     VStack(alignment: .leading, spacing: 8) {
                         attachmentsFooter(brief)
@@ -37,6 +53,11 @@ struct BriefPane: View {
                 }
                 BriefFeedbackBar(brief: brief)
                 copyBar
+                if let copyNote {
+                    Text(copyNote)
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                }
                 if let exportMessage {
                     Text(exportMessage).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 }
@@ -44,6 +65,13 @@ struct BriefPane: View {
             .padding(16)
             .sheet(isPresented: $showVersions) {
                 BriefVersionsSheet(brief: brief, onRestore: { model.restoreVersion($0) }, onClose: { showVersions = false })
+            }
+            .sheet(isPresented: $showReplySheet) {
+                ReplySheet(title: "Paste reply",
+                           prompt: "Paste the assistant's reply; it will be added to the brief under “Previous reply”.",
+                           action: "Add reply",
+                           onSubmit: { addReply($0) },
+                           onClose: { showReplySheet = false })
             }
             .task(id: model.selectedID) { exportMessage = nil; exportRoots = await model.exportRoots() }
             .background(Color.mtSurfaceContainerLowest)
@@ -81,24 +109,59 @@ struct BriefPane: View {
         }
     }
 
-    private func editor(_ brief: Brief) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
+        let machine = viewMode == .machine
+        let machineText = machine ? model.copyText(for: nil, compact: true) : ""
+        let empty = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let plainTokens = compiled.tokens
+        let compactTokens = BriefCompiler.compile(brief, compact: true).tokens
+        let savings = TokenSavings.percent(plain: plainTokens, compact: compactTokens)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Brief").font(.mtLabelLarge)
-                Text("~\(PromptTokens.estimate(brief.effectiveBody)) tokens")
+                Picker("View", selection: Binding(
+                    get: { viewMode },
+                    set: { viewMode = $0 }
+                )) {
+                    ForEach([ViewMode.markdown, .machine], id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Text("~\(machine ? PromptTokens.estimate(machineText) : plainTokens) tokens")
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                Text("Machine ~\(compactTokens) tokens (saves \(savings)%)")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 Spacer()
                 Button("Improve") { improve.open(brief, studio: services.promptStudio) }
-                    .disabled(brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(empty || machine)
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                Button("") { viewMode = viewMode == .markdown ? .machine : .markdown }
+                    .keyboardShortcut("m", modifiers: [.command, .shift])
+                    .frame(width: 0, height: 0)
+                    .hidden()
             }
-            EchoGuardedEditor(external: brief.effectiveBody) { model.setBody($0) }
-                .id("\(brief.id)-body")
+            if machine {
+                ScrollView {
+                    Text(machineText.isEmpty ? "Nothing to show yet." : machineText)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 .font(.system(.caption, design: .monospaced))
-                .scrollContentBackground(.hidden)
                 .padding(10)
                 .frame(minHeight: 200, maxHeight: .infinity)
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                Text("Read-only: what Copy for machine puts on the clipboard, attachments included. Switch to Markdown to edit.")
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+            } else {
+                EchoGuardedEditor(external: brief.effectiveBody) { model.setBody($0) }
+                    .id("\(brief.id)-body")
+                    .font(.system(.caption, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .padding(10)
+                    .frame(minHeight: 200, maxHeight: .infinity)
+                    .background(Color.mtSurfaceContainerHighest)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
         }
     }
 
@@ -109,10 +172,23 @@ struct BriefPane: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Attachments").font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 ForEach(included) { item in
-                    Text("\(item.ref) (~\(item.tokens) tokens, \(item.mode == .inline ? "inline" : "by path"))")
-                        .font(.mtBodySmall)
-                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                    HStack {
+                        Text("\(item.ref) (~\(item.tokens) tokens)")
+                            .font(.mtBodySmall)
+                            .foregroundStyle(Color.mtOnSurfaceVariant)
+                        Spacer()
+                        Toggle(item.mode == .inline ? "inline" : "by path", isOn: Binding(
+                            get: { item.mode == .inline },
+                            set: { model.setContextMode($0 ? .inline : .reference, id: item.id) }
+                        ))
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .disabled(item.ref.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
                 }
+                Text("Attachments ~\(included.reduce(0) { $0 + $1.tokens }) of \(brief.target.tokenBudget) tokens")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
             }
         }
     }
@@ -143,14 +219,44 @@ struct BriefPane: View {
     private var copyBar: some View {
         let empty = !model.canCopy
         return HStack {
-            Button { copy(nil) } label: { Label(copied ? "Copied" : "Copy", systemImage: "doc.on.doc") }
+            if primaryCopy == .machine {
+                Button { copy(nil, compact: true) } label: {
+                    Label(copied == .machine ? "Copied" : "Copy for machine", systemImage: "cpu")
+                }
                 .buttonStyle(MTFilledButtonStyle())
+                .help("Compact, data-dense text that uses fewer tokens")
+                .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(empty)
+                Button { copy(nil) } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+                    .disabled(empty)
+            } else {
+                Button { copy(nil) } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
+                    .buttonStyle(MTFilledButtonStyle())
+                    .keyboardShortcut("c", modifiers: [.command, .option])
+                    .disabled(empty)
+                Button { copy(nil, compact: true) } label: {
+                    Label(copied == .machine ? "Copied" : "Copy for machine", systemImage: "cpu")
+                }
+                .help("Compact, data-dense text that uses fewer tokens")
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(empty)
+            }
             Menu("Copy for…") {
                 Button("Claude Code") { copy(.claudeCode) }
                 Button("ChatGPT") { copy(.chatGPTWeb) }
             }
             .disabled(empty)
+            Menu("Primary button") {
+                Button(primaryCopy == .machine ? "✓ Copy for machine" : "Copy for machine") {
+                    primaryCopyStorage = CopyKind.machine.rawValue
+                }
+                Button(primaryCopy == .standard ? "✓ Copy" : "Copy") {
+                    primaryCopyStorage = CopyKind.standard.rawValue
+                }
+            }
+            Button("Paste reply") { showReplySheet = true }
+                .disabled(empty)
             Menu("Save to project") {
                 ForEach(exportRoots, id: \.self) { root in
                     Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }
@@ -164,11 +270,26 @@ struct BriefPane: View {
         }
     }
 
-    private func copy(_ surface: Surface?) {
+    private func copy(_ surface: Surface?, compact: Bool = false) {
+        guard let brief = model.selected else { return }
+        let compiledForCopy = BriefCompiler.compile(brief, compact: compact)
+        let text = model.copyForClipboard(for: surface, compact: compact)
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(model.copyForClipboard(for: surface), forType: .string)
-        copied = true
-        Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
+        NSPasteboard.general.setString(text, forType: .string)
+        copied = compact ? .machine : .standard
+        let secretWord = compiledForCopy.redactedCount == 1 ? "secret" : "secrets"
+        copyNote = "\(compact ? "Copied for machine" : "Copied"), ~\(compiledForCopy.tokens) tokens, \(compiledForCopy.redactedCount) \(secretWord) redacted"
+        Task { try? await Task.sleep(for: .seconds(2)); copyNote = nil }
+    }
+
+    private func addReply(_ source: String) {
+        guard let brief = model.selected else { return }
+        let text = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let heading = "## Previous reply"
+        let current = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newBody = current.isEmpty ? heading + "\n" + text : current + "\n\n" + heading + "\n" + text
+        model.setBody(newBody, briefID: brief.id)
     }
 }
 #endif

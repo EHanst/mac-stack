@@ -14,6 +14,7 @@ struct ImproveWorkspaceView: View {
 
     @State private var tab = Tab.preview
     @State private var instruction = ""
+    @State private var acceptedHunkIndexes: Set<Int> = []
 
     private enum Tab: String, CaseIterable {
         case preview = "Preview"
@@ -39,7 +40,11 @@ struct ImproveWorkspaceView: View {
         .padding(16)
         .background(Color.mtSurfaceContainerLowest)
         .onChange(of: studio.phase) { _, phase in improve.receiveOptimizerPhase(phase) }
-        .onAppear { improve.receiveOptimizerPhase(studio.phase) }
+        .onAppear {
+            improve.receiveOptimizerPhase(studio.phase)
+            resetAcceptedHunks()
+        }
+        .onChange(of: improve.revision) { _ in resetAcceptedHunks() }
         .task(id: brief.effectiveBody) {
             guard brief.body != nil else { return }
             try? await Task.sleep(for: .seconds(2))
@@ -189,15 +194,7 @@ struct ImproveWorkspaceView: View {
                     .background(Color.mtSurfaceContainerHighest)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 case .changes:
-                    ScrollView {
-                        Text(Self.diffAttributed(WordDiff.segments(from: originalText, to: improve.revision)))
-                            .font(.mtBodyMedium)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }
-                    .padding(10)
-                    .background(Color.mtSurfaceContainerHighest)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    changesEditor
                 case .edit:
                     TextEditor(text: editBinding())
                         .font(.mtBodyMedium)
@@ -214,6 +211,40 @@ struct ImproveWorkspaceView: View {
 
     private var originalText: String { improve.originalText }
 
+    private var changesEditor: some View {
+        let hunks = WordDiff.hunks(from: originalText, to: improve.revision)
+        return VStack(alignment: .leading, spacing: 8) {
+            if hunks.isEmpty {
+                Text("No differences from the previous text.")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(hunks.enumerated()), id: \.offset) { index, hunk in
+                            Toggle(isOn: hunkBinding(for: index)) {
+                                Text(Self.diffAttributed(hunk.segments))
+                                    .font(.mtBodyMedium)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                }
+                HStack {
+                    Spacer()
+                    Button("Apply accepted changes") { applyAcceptedHunks() }
+                        .buttonStyle(MTOutlinedButtonStyle())
+                        .disabled(acceptedHunkIndexes.isEmpty)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     @ViewBuilder
     private var actionRow: some View {
         if isOptimizerRunning {
@@ -223,6 +254,8 @@ struct ImproveWorkspaceView: View {
                 Button("Keep mine") { improve.keepMine() }.buttonStyle(MTTextButtonStyle())
                 Button("Expand") { improve.expand(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
                     .help("Try again and turn this into a detailed specification")
+                Button("Finer") { improve.expand(studio: studio, finer: true) }.buttonStyle(MTOutlinedButtonStyle())
+                    .help("Split the current steps one level finer")
                 Spacer()
                 Button("Accept and continue") { improve.acceptAndContinue(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
                 Button("Accept") { improve.accept() }.buttonStyle(MTFilledButtonStyle())
@@ -274,6 +307,25 @@ struct ImproveWorkspaceView: View {
     private var isOptimizerRunning: Bool {
         if case .running = improve.optimizerPhase { return true }
         return false
+    }
+
+    private func hunkBinding(for index: Int) -> Binding<Bool> {
+        Binding(
+            get: { acceptedHunkIndexes.contains(index) },
+            set: { on in
+                if on { acceptedHunkIndexes.insert(index) } else { acceptedHunkIndexes.remove(index) }
+            }
+        )
+    }
+
+    private func applyAcceptedHunks() {
+        let merged = WordDiff.merge(original: originalText, proposed: improve.revision,
+                                    acceptedHunkIndexes: acceptedHunkIndexes)
+        improve.setRevision(merged)
+    }
+
+    private func resetAcceptedHunks() {
+        acceptedHunkIndexes = Set(WordDiff.hunks(from: originalText, to: improve.revision).map(\.id))
     }
 
     private static func diffAttributed(_ segments: [WordDiff.Segment]) -> AttributedString {

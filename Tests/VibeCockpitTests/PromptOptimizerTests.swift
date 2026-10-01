@@ -202,6 +202,14 @@ struct PromptOptimizerTests {
         #expect(improve.contains("Never remove or condense"))
     }
 
+    @Test("improve and expand demand finer-grained steps; adapt does not")
+    func granularityRule() {
+        for mode in [OptimizeMode.improve, .expand] {
+            #expect(PromptOptimizer.metaPrompt(context: OptimizeContext(), mode: mode).contains("more granular"))
+        }
+        #expect(!PromptOptimizer.metaPrompt(context: OptimizeContext(), mode: .adapt).contains("more granular"))
+    }
+
     @Test("expand depth follows the target unless overridden")
     func expandDepth() {
         let small = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall), mode: .expand)
@@ -366,9 +374,9 @@ struct PromptOptimizerSharingTests {
     func tooLongFallsBack() async throws {
         let cap = Captured()
         let registry = ModelRegistry()
-        await registry.register(LimitedProvider(captured: cap, limit: 1_200))
+        await registry.register(LimitedProvider(captured: cap, limit: 2_000))
         let svc = InferenceService(registry: registry, policy: .localOnly)
-        let long = prefix + [Message(role: .user, content: String(repeating: "word ", count: 400))]
+        let long = prefix + [Message(role: .user, content: String(repeating: "word ", count: 1_500))]
         for try await _ in PromptOptimizer(inference: svc).optimize(
             draft: "fix the crash in the loader", context: OptimizeContext(sharedPrefix: long)) {}
         #expect(await cap.messages.count == 2)
