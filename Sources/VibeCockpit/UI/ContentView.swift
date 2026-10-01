@@ -34,6 +34,7 @@ struct ContentView: View {
 
 struct MainLayout: View {
     @Environment(AppCoordinator.self) private var coordinator
+    @Environment(AppServices.self) private var services
     @State private var selectedDestination: NavDestination = .briefs
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// Re-identifies the panels when the font changes so every `Font.mt*` is re-read.
@@ -51,6 +52,10 @@ struct MainLayout: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
+        // The Improve workspace is a long working session: it takes over the window until closed.
+        .onChange(of: services.improve.presentedBriefID) { _, id in
+            columnVisibility = id == nil ? .all : .detailOnly
+        }
     }
 
     // MARK: Sidebar
@@ -198,7 +203,10 @@ struct MainLayout: View {
 
     private var detailPanel: some View {
         VStack(spacing: 0) {
-            if selectedDestination == .briefs {
+            if let id = services.improve.presentedBriefID,
+               let brief = services.briefs.briefs.first(where: { $0.id == id }) {
+                ImproveWorkspaceView(brief: brief)
+            } else if selectedDestination == .briefs {
                 BriefPane()
             } else if selectedDestination == .diff {
                 // Diff is already the content panel; show preview or placeholder

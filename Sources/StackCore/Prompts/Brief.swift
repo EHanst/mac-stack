@@ -67,13 +67,16 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
     public var versions: [Version]
     public var createdAt: Date
     public var updatedAt: Date
+    /// Auto-saved working revision from an open Improve workspace. Never shown as the brief body.
+    public var draft: String?
 
     public var effectiveBody: String { body ?? input }
     public var isEdited: Bool { body != nil }
+    public var isDraft: Bool { draft != nil }
 
     public init(id: String, schemaVersion: Int, title: String, workspace: String?, target: TargetProfile,
                 input: String, body: String?, inputAtEdit: String?, contextItems: [ContextItem],
-                versions: [Version], createdAt: Date, updatedAt: Date) {
+                versions: [Version], createdAt: Date, updatedAt: Date, draft: String? = nil) {
         self.id = id
         self.schemaVersion = schemaVersion
         self.title = title
@@ -86,6 +89,7 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
         self.versions = versions
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.draft = draft
     }
 
     public static func new(title: String, input: String = "", target: TargetProfile,
@@ -102,7 +106,7 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, schemaVersion, title, workspace, target
-        case input, body, inputAtEdit, contextItems, versions, createdAt, updatedAt
+        case input, body, inputAtEdit, draft, contextItems, versions, createdAt, updatedAt
         case sections
     }
 
@@ -116,6 +120,7 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
         contextItems = try c.decodeIfPresent([ContextItem].self, forKey: .contextItems) ?? []
+        draft = try c.decodeIfPresent(String.self, forKey: .draft)
 
         if schemaVersion <= 1 {
             let legacySections = try c.decodeIfPresent([LegacySection].self, forKey: .sections) ?? []
@@ -149,6 +154,7 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
         try c.encode(input, forKey: .input)
         try c.encodeIfPresent(body, forKey: .body)
         try c.encodeIfPresent(inputAtEdit, forKey: .inputAtEdit)
+        try c.encodeIfPresent(draft, forKey: .draft)
         try c.encode(contextItems, forKey: .contextItems)
         try c.encode(versions, forKey: .versions)
         try c.encode(createdAt, forKey: .createdAt)

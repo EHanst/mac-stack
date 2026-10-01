@@ -45,10 +45,6 @@ struct BriefPane: View {
             .sheet(isPresented: $showVersions) {
                 BriefVersionsSheet(brief: brief, onRestore: { model.restoreVersion($0) }, onClose: { showVersions = false })
             }
-            .sheet(isPresented: Binding(
-                get: { improve.presentedBriefID == brief.id },
-                set: { if !$0 { improve.close() } }
-            )) { improveSheet(brief) }
             .task(id: model.selectedID) { exportMessage = nil; exportRoots = await model.exportRoots() }
             .background(Color.mtSurfaceContainerLowest)
         } else {
@@ -119,30 +115,6 @@ struct BriefPane: View {
                 }
             }
         }
-    }
-
-    private func improveSheet(_ brief: Brief) -> some View {
-        let draft = brief.effectiveBody
-        let id = brief.id
-        return OptimizeReviewSheet(
-            studio: services.promptStudio,
-            draft: draft,
-            onAccept: {
-                model.setBody($0, briefID: id)
-                services.promptStudio.clearUndo()
-                improve.close()
-            },
-            onExpand: { services.promptStudio.startOptimize(draft: draft, mode: .expand,
-                                                           intent: PromptEngineer.Intent.general.rawValue) },
-            onAskQuestions: { questions in
-                model.appendToBody(questions.map { "Q: \($0)\nA: " }.joined(separator: "\n"), briefID: id)
-                services.promptStudio.dismissReview()
-                improve.close()
-            },
-            onClose: {
-                services.promptStudio.dismissReview()
-                improve.close()
-            })
     }
 
     private func targetPicker(_ brief: Brief) -> some View {

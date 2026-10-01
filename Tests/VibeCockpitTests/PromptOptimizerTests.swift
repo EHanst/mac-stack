@@ -180,13 +180,16 @@ struct PromptOptimizerTests {
         #expect(improve.contains("Do not add requirements they did not imply"))
     }
 
-    @Test("detail modes get a larger output budget")
-    func detailBudget() {
+    @Test("expand is the only mode that adds detail")
+    func detailModes() {
         #expect(OptimizeMode.expand.addsDetail)
         #expect(!OptimizeMode.improve.addsDetail && !OptimizeMode.adapt.addsDetail)
-        #expect(PromptOptimizer.outputCap(mode: .expand, servedLocally: false) == PromptOptimizer.maxDetailedOutputTokens)
-        #expect(PromptOptimizer.outputCap(mode: .expand, servedLocally: true) == PromptOptimizer.maxOutputTokens)
-        #expect(PromptOptimizer.outputCap(mode: .improve, servedLocally: false) == PromptOptimizer.maxOutputTokens)
+    }
+
+    @Test("improve tells the model to build on a long draft, not condense it")
+    func improveKeepsLongDrafts() {
+        let improve = PromptOptimizer.metaPrompt(context: OptimizeContext(), mode: .improve)
+        #expect(improve.contains("Never remove or condense"))
     }
 
     @Test("expand depth follows the target unless overridden")
