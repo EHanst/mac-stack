@@ -5,7 +5,7 @@ import Foundation
 public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
     case system, light, dark
 
-    public static let storageKey = "appTheme"
+    public static let storageKey = DefaultsKey.appTheme
     public static let `default`: AppTheme = .system
 
     public var id: String { rawValue }
@@ -29,7 +29,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
 public enum AppFont: String, CaseIterable, Identifiable, Sendable {
     case osaka, skia, system, rounded, serif, mono
 
-    public static let storageKey = "appFont"
+    public static let storageKey = DefaultsKey.appFont
     public static let `default`: AppFont = .osaka
 
     public var id: String { rawValue }

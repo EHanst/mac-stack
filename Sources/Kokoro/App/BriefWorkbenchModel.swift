@@ -172,11 +172,8 @@ public final class BriefWorkbenchModel {
     public func appendToBody(_ text: String, briefID: String) -> Bool {
         guard briefs.contains(where: { $0.id == briefID }) else { return false }
         mutate(id: briefID) { brief in
-            if brief.body == nil {
-                brief.body = brief.input + (brief.input.isEmpty ? "" : "\n\n") + text
-            } else {
-                brief.body! += (brief.body!.isEmpty ? "" : "\n\n") + text
-            }
+            let base = brief.body ?? brief.input
+            brief.body = base + (base.isEmpty ? "" : "\n\n") + text
             brief.updatedAt = Date()
         }
         return true

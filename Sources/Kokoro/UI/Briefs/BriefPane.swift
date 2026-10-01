@@ -12,7 +12,7 @@ struct BriefPane: View {
     @Environment(AppServices.self) private var services
     private enum CopyKind: String { case machine, standard }
     @State private var copied: CopyKind?
-    @AppStorage("brief.viewMode") private var viewModeStorage: String = BriefViewMode.human.rawValue
+    @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
     @State private var showVersions = false
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?

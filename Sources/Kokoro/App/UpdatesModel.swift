@@ -17,8 +17,8 @@ public final class UpdatesModel {
         case failed(String)
     }
 
-    public static let dailyKey = "updateCheckDaily"
-    static let lastCheckKey = "updateLastCheck"
+    public static let dailyKey = DefaultsKey.updateCheckDaily
+    static let lastCheckKey = DefaultsKey.updateLastCheck
 
     public private(set) var status: Status = .idle
     public private(set) var automaticChecks: Bool

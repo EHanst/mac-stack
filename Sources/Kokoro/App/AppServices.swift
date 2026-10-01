@@ -157,7 +157,7 @@ public final class AppServices {
         self.sharing = APISharingModel(inference: inference, defaults: defaults, mcp: MCPHTTPSessions(host: host))
     }
 
-    private static let policyKey = "routingPolicy"
+    private static let policyKey = DefaultsKey.routingPolicy
 
     /// Local only / Local first / Cloud allowed. Persisted; takes effect on the next request.
     public func setRoutingPolicy(_ policy: RoutingPolicy) async {

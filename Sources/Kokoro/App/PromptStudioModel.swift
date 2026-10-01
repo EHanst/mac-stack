@@ -38,7 +38,7 @@ public final class PromptStudioModel {
     /// Set by `AppServices`; empty means "start from the draft alone".
     public var conversationPrefix: (@MainActor () -> [Message])?
 
-    static let pinKey = "optimizerModelPin"
+    static let pinKey = DefaultsKey.optimizerModelPin
 
     private let library: PromptLibrary
     private let projectStore: WorkspacePromptStore?

@@ -34,8 +34,8 @@ public final class APISharingModel {
     /// Set when the saved list of apps couldn't be read; sharing stays off until it's fixed.
     public private(set) var loadError: String?
 
-    public static let enabledKey = "apiSharingEnabled"
-    public static let portKey = "apiSharingPort"
+    public static let enabledKey = DefaultsKey.apiSharingEnabled
+    public static let portKey = DefaultsKey.apiSharingPort
 
     public let port: Int
     private let defaults: UserDefaults
