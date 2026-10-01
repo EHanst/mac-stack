@@ -37,6 +37,7 @@ struct Options {
     var evalRepeats = 1
     var evalJSON: URL?
     var evalSampling = "rewrite"
+    var evalProfile = "local"
     var evalRepair = true
     var mtpProbe = false
     var mtpCheck = false
@@ -78,6 +79,7 @@ struct Options {
             case "--no-mtp": noMTP = true
             case "--draft-vocab": if let v = it.next(), let n = Int(v) { draftVocab = n }
             case "--no-repair": evalRepair = false
+            case "--profile": if let v = it.next() { evalProfile = v }
             case "--sampling": if let v = it.next() { evalSampling = v }
             case "--modes": if let v = it.next() { evalModes = v.split(separator: ",").map(String.init) }
             case "--repeats": if let v = it.next(), let n = Int(v) { evalRepeats = max(1, n) }
@@ -455,7 +457,7 @@ func run() async throws {
     }
 
     if opts.optimizerEval {
-        await OptimizerEval.run(provider: provider, modes: opts.evalModes, repeats: opts.evalRepeats, json: opts.evalJSON, sampling: opts.evalSampling, repair: opts.evalRepair)
+        await OptimizerEval.run(provider: provider, modes: opts.evalModes, repeats: opts.evalRepeats, json: opts.evalJSON, sampling: opts.evalSampling, repair: opts.evalRepair, profile: opts.evalProfile)
         print("")
     }
 

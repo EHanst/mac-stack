@@ -2,11 +2,17 @@ import Foundation
 
 public struct BriefWarning: Sendable, Equatable {
     public enum Code: String, Sendable {
-        case emptyInput, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, bodyOverBudget, secretRedacted
+        case emptyInput, overBudget, itemDowngraded, itemDropped, referenceWithoutPath, bodyOverBudget, secretRedacted, lintFinding
     }
     public var code: Code
     public var message: String
     public var itemID: String?
+
+    public init(code: Code, message: String, itemID: String? = nil) {
+        self.code = code
+        self.message = message
+        self.itemID = itemID
+    }
 }
 
 public struct CompiledPrompt: Sendable, Equatable {

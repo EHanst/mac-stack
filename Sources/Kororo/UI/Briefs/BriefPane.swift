@@ -146,7 +146,7 @@ struct BriefPane: View {
         VStack(alignment: .leading, spacing: 6) {
             Picker("Model", selection: Binding(get: { brief.target.modelFamily },
                                                set: { model.setTarget(modelFamily: $0, surface: brief.target.surface) })) {
-                Text("Claude").tag("claude"); Text("GPT").tag("gpt"); Text("Other").tag("generic")
+                Text("Claude").tag("claude"); Text("GPT").tag("gpt"); Text("Gemini").tag("gemini"); Text("Reasoning").tag("reasoning"); Text("Local").tag("local"); Text("Other").tag("generic")
             }
             Picker("Where", selection: Binding(get: { brief.target.surface },
                                                set: { model.setTarget(modelFamily: brief.target.modelFamily, surface: $0) })) {

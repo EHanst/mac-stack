@@ -184,7 +184,7 @@ public final class PromptStudioModel {
     // MARK: Instant checks
 
     public func lint(_ draft: String, intent: String?) -> [PromptLint.Finding] {
-        PromptLint.check(draft, context: .init(maxTokens: profile.maxUsefulTokens, intent: intent))
+        PromptLint.check(draft, context: .init(maxTokens: profile.maxUsefulTokens, intent: intent, modelFamily: profile.family))
     }
 
     // MARK: Improve

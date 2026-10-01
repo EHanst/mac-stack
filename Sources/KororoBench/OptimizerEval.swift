@@ -24,13 +24,23 @@ enum OptimizerEval {
         ["improve": .improve, "expand": .expand, "adapt": .adapt][name]
     }
 
-    static func run(provider: LocalMLXProvider, modes: [String], repeats: Int, json: URL?, sampling: String, repair: Bool) async {
+    static func run(provider: LocalMLXProvider, modes: [String], repeats: Int, json: URL?, sampling: String, repair: Bool, profile: String = "local") async {
         let params: SamplingParameters? = switch sampling {
         case "greedy": .greedy
         case "chat": .bonsaiInstruct
         default: .rewrite   // what the optimizer uses
         }
-        let context = OptimizeContext(profile: .localSmall)
+        let target: ModelPromptProfile = switch profile {
+        case "claude": .claude
+        case "claudecode": .claudeCode
+        case "gpt": .gpt
+        case "gemini": .gemini
+        case "reasoning": .reasoning
+        case "deepseek": .deepseekR1
+        case "generic": .generic
+        default: .localSmall
+        }
+        let context = OptimizeContext(profile: target)
         var rows: [[String: Any]] = []
         var specCycles = 0, specAccepted = 0
         defer { if specCycles > 0 { print("  draft acceptance: \(specAccepted * 100 / specCycles)% over \(specCycles) cycles") } }

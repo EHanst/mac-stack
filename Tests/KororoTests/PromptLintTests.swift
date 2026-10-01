@@ -59,4 +59,138 @@ struct PromptLintTests {
         #expect(ModelPromptProfile.profile(forProviderID: "openrouter").family == "generic")
         #expect(ModelPromptProfile.profile(forProviderID: nil).family == "generic")
     }
+
+    @Test("Claude flags unbalanced XML tags")
+    func claudeUnbalancedXML() {
+        let c = PromptLint.Context(modelFamily: "claude")
+        #expect(PromptLint.check("Fix this. <task>do the thing", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Fix this. <task>do the thing</task>", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Return nil when a < b in Parser.swift", context: c).contains { $0.rule == .unbalancedXML })
+    }
+
+    @Test("Claude does not flag self-closing tags")
+    func claudeSelfClosingTags() {
+        let c = PromptLint.Context(modelFamily: "claude")
+        #expect(!PromptLint.check("Add a line break <br/> here", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Use <tag/> for self-closing", context: c).contains { $0.rule == .unbalancedXML })
+    }
+
+    @Test("Claude does not flag HTML void tags")
+    func claudeHTMLVoidTags() {
+        let c = PromptLint.Context(modelFamily: "claude")
+        #expect(!PromptLint.check("Add a <br> break here", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Include <hr> separator", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Add <img src='x'> image", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Use <input type='text'> field", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Add <meta name='x'> tag", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Link <link rel='x'> here", context: c).contains { $0.rule == .unbalancedXML })
+    }
+
+    @Test("Claude ignores text inside fenced code blocks")
+    func claudeTagsInFences() {
+        let c = PromptLint.Context(modelFamily: "claude")
+        #expect(!PromptLint.check("Example:\n```\n<task>incomplete\n```", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Inline `<tag>` code is ignored", context: c).contains { $0.rule == .unbalancedXML })
+    }
+
+    @Test("Claude compares tag names case-insensitively")
+    func claudeTagCaseInsensitive() {
+        let c = PromptLint.Context(modelFamily: "claude")
+        #expect(!PromptLint.check("Fix this. <Task>do the thing</task>", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(!PromptLint.check("Fix this. <TASK>do the thing</Task>", context: c).contains { $0.rule == .unbalancedXML })
+    }
+
+    @Test("Claude still flags unmatched closing tags")
+    func claudeUnmatchedClosingTags() {
+        let c = PromptLint.Context(modelFamily: "claude")
+        #expect(PromptLint.check("Fix this. </x>", context: c).contains { $0.rule == .unbalancedXML })
+        #expect(PromptLint.check("Fix this. <task>thing</other>", context: c).contains { $0.rule == .unbalancedXML })
+    }
+
+    @Test("Reasoning flags chain-of-thought instructions")
+    func reasoningFlagsChainOfThought() {
+        let c = PromptLint.Context(modelFamily: "reasoning")
+        #expect(PromptLint.check("Fix the parser. Think step by step.", context: c).contains { $0.rule == .chainOfThought })
+        #expect(!PromptLint.check("Fix the parser in Parser.swift.", context: c).contains { $0.rule == .chainOfThought })
+    }
+
+    @Test("Reasoning ignores chain-of-thought in quotes")
+    func reasoningIgnoresQuotedChainOfThought() {
+        let c = PromptLint.Context(modelFamily: "reasoning")
+        #expect(!PromptLint.check("Don't say \"think step by step\" in your output.", context: c).contains { $0.rule == .chainOfThought })
+        #expect(!PromptLint.check("Fix the parser. It says 'step by step' in the docs.", context: c).contains { $0.rule == .chainOfThought })
+    }
+
+    @Test("Reasoning ignores chain-of-thought in backticks")
+    func reasoningIgnoresBracktickChainOfThought() {
+        let c = PromptLint.Context(modelFamily: "reasoning")
+        #expect(!PromptLint.check("Don't output `step by step` analysis.", context: c).contains { $0.rule == .chainOfThought })
+        #expect(!PromptLint.check("Check that the output doesn't say `think aloud`.", context: c).contains { $0.rule == .chainOfThought })
+    }
+
+    @Test("Reasoning ignores negated chain-of-thought forms")
+    func reasoningIgnoresNegatedChainOfThought() {
+        let c = PromptLint.Context(modelFamily: "reasoning")
+        #expect(!PromptLint.check("Do not think step by step.", context: c).contains { $0.rule == .chainOfThought })
+        #expect(!PromptLint.check("Don't show your reasoning.", context: c).contains { $0.rule == .chainOfThought })
+        #expect(!PromptLint.check("Never use chain of thought.", context: c).contains { $0.rule == .chainOfThought })
+        #expect(!PromptLint.check("Don't think aloud.", context: c).contains { $0.rule == .chainOfThought })
+    }
+
+    @Test("Reasoning ignores chain-of-thought in fences")
+    func reasoningIgnoresFencedChainOfThought() {
+        let c = PromptLint.Context(modelFamily: "reasoning")
+        #expect(!PromptLint.check("Example:\n```\nThink step by step.\n```", context: c).contains { $0.rule == .chainOfThought })
+    }
+
+    @Test("GPT requires goal first")
+    func gptGoalFirst() {
+        let c = PromptLint.Context(modelFamily: "gpt")
+        #expect(PromptLint.check("- return nil\n- add tests for Parser.swift", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(!PromptLint.check("Add tests for Parser.swift.\n- return nil", context: c).contains { $0.rule == .goalNotFirst })
+    }
+
+    @Test("startsWithGoal trims leading whitespace")
+    func startsWithGoalTrimsWhitespace() {
+        let c = PromptLint.Context(modelFamily: "gpt")
+        #expect(!PromptLint.check("   Add tests for Parser.swift.\n- return nil", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(!PromptLint.check("\t\tFix the parser", context: c).contains { $0.rule == .goalNotFirst })
+    }
+
+    @Test("startsWithGoal treats numbered items as NOT a goal")
+    func startsWithGoalNumberedItems() {
+        let c = PromptLint.Context(modelFamily: "gpt")
+        #expect(PromptLint.check("1. Return nil\n2. Add tests", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(PromptLint.check("2) Add tests", context: c).contains { $0.rule == .goalNotFirst })
+    }
+
+    @Test("startsWithGoal treats indented bullets as NOT a goal")
+    func startsWithGoalIndentedBullets() {
+        let c = PromptLint.Context(modelFamily: "gpt")
+        #expect(PromptLint.check("   - return nil\n   - add tests", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(PromptLint.check("  * item 1", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(PromptLint.check("\t+ item", context: c).contains { $0.rule == .goalNotFirst })
+    }
+
+    @Test("startsWithGoal treats fences and blockquotes and headings as NOT a goal")
+    func startsWithGoalOtherMarkers() {
+        let c = PromptLint.Context(modelFamily: "gpt")
+        #expect(PromptLint.check("```\ncode here", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(PromptLint.check("> quoted text", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(PromptLint.check("# Heading", context: c).contains { $0.rule == .goalNotFirst })
+    }
+
+    @Test("startsWithGoal treats single backtick followed by prose as a goal")
+    func startsWithGoalSingleBacktick() {
+        let c = PromptLint.Context(modelFamily: "gpt")
+        #expect(!PromptLint.check("`loadItems` should return nil.", context: c).contains { $0.rule == .goalNotFirst })
+        #expect(!PromptLint.check("`myFunc()` must handle errors", context: c).contains { $0.rule == .goalNotFirst })
+    }
+
+    @Test("family-specific rules don't fire without a family")
+    func noFamilyRulesWithoutFamily() {
+        #expect(PromptLint.check("Think step by step <a>", context: .init()).allSatisfy {
+            ![.unbalancedXML, .chainOfThought, .goalNotFirst].contains($0.rule)
+        })
+    }
 }
