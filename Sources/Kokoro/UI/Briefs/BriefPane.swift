@@ -10,9 +10,10 @@ import AppKit
 /// The model receives the compiled text (brief plus attachments), not this editor's raw contents.
 struct BriefPane: View {
     @Environment(AppServices.self) private var services
-    private enum CopyKind: String { case machine, standard, json }
+    private enum CopyKind: String { case machine, standard, json, jsonMinified }
     @State private var copied: CopyKind?
     @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
+    @AppStorage(DefaultsKey.briefLastCopy) private var lastCopyStorage: String = CopyKind.machine.rawValue
     @State private var showVersions = false
     @State private var editingHuman = false
     @State private var exportRoots: [URL] = []
@@ -21,6 +22,9 @@ struct BriefPane: View {
 
     private var model: BriefWorkbenchModel { services.briefs }
     private var improve: BriefImproveModel { services.improve }
+
+    /// The format copied last time: it gets the filled button once the brief has been improved.
+    private var lastCopy: CopyKind { CopyKind(rawValue: lastCopyStorage) ?? .machine }
 
     private var viewMode: BriefViewMode {
         get { BriefViewMode.from(stored: viewModeStorage) }
@@ -63,6 +67,15 @@ struct BriefPane: View {
         }
     }
 
+    /// Improve is the main step until the brief has been improved; after that Copy takes over.
+    @ViewBuilder
+    private func improveButton(_ brief: Brief, empty: Bool) -> some View {
+        let button = Button("Improve") { improve.open(brief, studio: services.promptStudio) }
+            .disabled(empty)
+            .keyboardShortcut("i", modifiers: [.command, .shift])
+        if brief.isEdited { button } else { button.buttonStyle(MTFilledButtonStyle()) }
+    }
+
     private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
         let empty = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return VStack(alignment: .leading, spacing: 6) {
@@ -87,9 +100,10 @@ struct BriefPane: View {
                     Toggle("Edit", isOn: $editingHuman).toggleStyle(.button).controlSize(.small)
                 }
                 Spacer()
-                Button("Improve") { improve.open(brief, studio: services.promptStudio) }
-                    .disabled(empty)
-                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                Button("Revert") { model.restoreVersion(brief.versions.count - 1) }
+                    .disabled(!brief.isEdited || brief.versions.isEmpty)
+                    .help("Put back the previous version. What you have now is saved first, so this can be undone.")
+                improveButton(brief, empty: empty)
             }
             .frame(height: 28)
             Group {
@@ -138,7 +152,7 @@ struct BriefPane: View {
         let attachments = included.isEmpty ? nil
             : "\(included.count) attachment\(included.count == 1 ? "" : "s"), about \(included.reduce(0) { $0 + $1.tokens }.formatted()) tokens"
         let warning = compiled.warnings.first?.message
-        let text = copyNote ?? exportMessage ?? warning ?? attachments ?? " "
+        let text = BriefStatusLine.text(note: copyNote, export: exportMessage, warning: warning, attachments: attachments)
         return Label {
             Text(text).lineLimit(1).truncationMode(.tail)
         } icon: {
@@ -168,34 +182,37 @@ struct BriefPane: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// " · draft was 640 (+62)" once Improve has changed the text, so its cost is visible.
+    private static func draftNote(_ brief: Brief, now: Int) -> String {
+        guard let draft = BriefCompiler.draftTokens(brief) else { return "" }
+        let delta = now - draft
+        return " · draft was \(draft.formatted()) (\(delta >= 0 ? "+" : "−")\(abs(delta).formatted()))"
+    }
+
     private func meter(_ brief: Brief, _ compiled: CompiledPrompt) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ProgressView(value: min(Double(compiled.tokens), Double(brief.target.tokenBudget)),
                          total: Double(max(brief.target.tokenBudget, 1)))
-            Text("About \(compiled.tokens.formatted()) of \(brief.target.tokenBudget.formatted()) tokens")
+            Text("About \(compiled.tokens.formatted()) of \(brief.target.tokenBudget.formatted()) tokens\(Self.draftNote(brief, now: compiled.tokens))")
                 .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
         }
     }
 
     private var copyBar: some View {
         let empty = !model.canCopy
+        let primary = model.selected?.isEdited == true ? lastCopy : nil
         return HStack {
-            Button { copy(compact: true) } label: {
-                Label(copied == .machine ? "Copied" : "Copy for machine", systemImage: "cpu")
-            }
-            .buttonStyle(MTFilledButtonStyle())
-            .help("Compact, data-dense text that uses fewer tokens")
-            .keyboardShortcut("c", modifiers: [.command, .shift])
-            .disabled(empty)
+            copyButton(.machine, primary: primary, empty: empty, title: "Copy for machine", icon: "cpu",
+                       help: "Compact, data-dense text that uses fewer tokens")
+                .keyboardShortcut("c", modifiers: [.command, .shift])
             if viewMode == .json {
-                Button { copy(json: true) } label: {
-                    Label(copied == .json ? "Copied" : "Copy JSON", systemImage: "curlybraces")
-                }
-                .disabled(empty)
+                copyButton(.json, primary: primary, empty: empty, title: "Copy JSON", icon: "curlybraces",
+                           help: "Pretty-printed JSON")
+                copyButton(.jsonMinified, primary: primary, empty: empty, title: "Minified", icon: "arrow.down.right.and.arrow.up.left",
+                           help: "The same JSON on one line, for pipelines")
             }
-            Button { copy() } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
+            copyButton(.standard, primary: primary, empty: empty, title: "Copy", icon: "doc.on.doc", help: "Readable text")
                 .keyboardShortcut("c", modifiers: [.command, .option])
-                .disabled(empty)
             Menu("Save to project") {
                 ForEach(exportRoots, id: \.self) { root in
                     Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }
@@ -208,6 +225,16 @@ struct BriefPane: View {
             Button("Versions") { showVersions = true }
                 .disabled(model.selected?.versions.isEmpty ?? true)
         }
+    }
+
+    @ViewBuilder
+    private func copyButton(_ kind: CopyKind, primary: CopyKind?, empty: Bool, title: String, icon: String, help: String) -> some View {
+        let button = Button { copy(kind) } label: {
+            Label(copied == kind ? "Copied" : title, systemImage: icon)
+        }
+        .help(help)
+        .disabled(empty)
+        if primary == kind { button.buttonStyle(MTFilledButtonStyle()) } else { button }
     }
 
     /// Adds a folder as a project, then saves the brief into it.
@@ -229,15 +256,28 @@ struct BriefPane: View {
         }
     }
 
-    private func copy(compact: Bool = false, json: Bool = false) {
+    private func copy(_ kind: CopyKind) {
         guard let brief = model.selected else { return }
-        let compiledForCopy = BriefCompiler.compile(brief, form: json ? .json : compact ? .compact : .readable)
-        let text = model.copyForClipboard(for: nil, compact: compact, json: json)
+        let form: BriefCompiler.Form = switch kind {
+        case .machine: .compact
+        case .standard: .readable
+        case .json: .json
+        case .jsonMinified: .jsonMinified
+        }
+        let compiledForCopy = BriefCompiler.compile(brief, form: form)
+        let text = model.copyForClipboard(for: nil, form: form)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        copied = json ? .json : compact ? .machine : .standard
+        copied = kind
+        lastCopyStorage = kind.rawValue
         let secretWord = compiledForCopy.redactedCount == 1 ? "secret" : "secrets"
-        copyNote = "\(json ? "Copied JSON" : compact ? "Copied for machine" : "Copied"), ~\(compiledForCopy.tokens) tokens, \(compiledForCopy.redactedCount) \(secretWord) redacted"
+        let what = switch kind {
+        case .machine: "Copied for machine"
+        case .standard: "Copied"
+        case .json: "Copied JSON"
+        case .jsonMinified: "Copied minified JSON"
+        }
+        copyNote = "\(what), ~\(compiledForCopy.tokens) tokens, \(compiledForCopy.redactedCount) \(secretWord) redacted"
         Task { try? await Task.sleep(for: .seconds(2)); copyNote = nil }
     }
 }

@@ -32,7 +32,7 @@ public struct SupportBundleInput: Sendable {
     public init(appVersion: String, build: String, osVersion: String, chip: String, memoryGB: Int,
                 routingPolicy: String, systemLoad: SystemLoad, installedModels: [String], providers: [Provider],
                 requests: [RequestRecord], egress: [EgressEntry], tokensThisMonth: Int, monthlyTokenCap: Int?,
-                externalServers: [ExternalServer], projectCount: Int, crashReports: [CrashReport]) {
+                externalServers: [ExternalServer] = [], projectCount: Int, crashReports: [CrashReport]) {
         self.appVersion = appVersion; self.build = build; self.osVersion = osVersion; self.chip = chip
         self.memoryGB = memoryGB; self.routingPolicy = routingPolicy; self.systemLoad = systemLoad
         self.installedModels = installedModels; self.providers = providers; self.requests = requests

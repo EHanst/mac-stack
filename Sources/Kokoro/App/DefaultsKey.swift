@@ -12,7 +12,8 @@ public enum DefaultsKey {
     public static let updateCheckDaily = "updateCheckDaily"
     public static let updateLastCheck = "updateLastCheck"
     public static let briefViewMode = "brief.viewMode"
+    public static let briefLastCopy = "brief.lastCopy"
 
     static let all = [appTheme, appFont, routingPolicy, optimizerModelPin, apiSharingEnabled,
-                      apiSharingPort, updateCheckDaily, updateLastCheck, briefViewMode]
+                      apiSharingPort, updateCheckDaily, updateLastCheck, briefViewMode, briefLastCopy]
 }

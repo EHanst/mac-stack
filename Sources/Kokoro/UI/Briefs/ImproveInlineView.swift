@@ -15,6 +15,7 @@ struct ImproveInlineView: View {
     @State private var tab = Tab.result
     @State private var acceptedChanges: Set<Int> = []
     @State private var cachedChanges: [WordDiff.Change] = []
+    @State private var showFullText = false
 
     private enum Tab: String, CaseIterable {
         case result = "Result"
@@ -157,6 +158,8 @@ struct ImproveInlineView: View {
                     Text("Untick any you don't want, then apply.")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     Spacer()
+                    Toggle("Full text", isOn: $showFullText).toggleStyle(.button).controlSize(.small)
+                        .help("Show the whole text with every change marked in place")
                     Button("Keep all") { acceptedChanges = Set(list.map(\.id)) }.buttonStyle(MTTextButtonStyle())
                     Button("Drop all") { acceptedChanges = [] }.buttonStyle(MTTextButtonStyle())
                     Button("Apply") { applyAccepted() }
@@ -165,10 +168,22 @@ struct ImproveInlineView: View {
                         .help("Rewrite the result to keep only the ticked changes")
                 }
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(list) { changeCard($0) }
+                    if showFullText {
+                        Text(fullTextDiff)
+                            .font(.mtBodyMedium).lineSpacing(3)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(Array(list.enumerated()), id: \.element.id) { index, change in
+                                if let section = change.section, index == 0 || list[index - 1].section != section {
+                                    Text(section.uppercased()).font(.mtLabelLarge)
+                                        .padding(.top, index == 0 ? 0 : 6)
+                                }
+                                changeCard(change)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -194,6 +209,13 @@ struct ImproveInlineView: View {
                 if !change.before.isEmpty { diffLine("−", change.before, Color.mtError) }
                 if !change.after.isEmpty { diffLine("+", change.after, Color.mtHealthy) }
                 if !change.trail.isEmpty { contextLine(change.trail + "…") }
+                Text("Likely: " + change.reason.lowercased())
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                if !change.lostLiterals.isEmpty {
+                    Label("Drops " + change.lostLiterals.prefix(4).joined(separator: ", "),
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.mtBodySmall).foregroundStyle(Color.mtError)
+                }
             }
             .opacity(kept ? 1 : 0.45)
         }
@@ -216,6 +238,25 @@ struct ImproveInlineView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(tint.opacity(0.14))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// The whole revision with removals struck through in red and additions highlighted in green.
+    private var fullTextDiff: AttributedString {
+        var out = AttributedString()
+        for segment in WordDiff.segments(from: improve.originalText, to: improve.revision) {
+            var piece = AttributedString(segment.text)
+            switch segment.kind {
+            case .same: break
+            case .added:
+                piece.foregroundColor = Color.mtHealthy
+                piece.backgroundColor = Color.mtHealthy.opacity(0.14)
+            case .removed:
+                piece.foregroundColor = Color.mtError
+                piece.strikethroughStyle = .single
+            }
+            out += piece
+        }
+        return out
     }
 
     private func applyAccepted() {

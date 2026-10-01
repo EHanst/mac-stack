@@ -218,7 +218,6 @@ struct SettingsView: View {
                 SharingCard()
                 DiagnosticsCard()
                 WorkspacesCard()
-                ExternalServersCard()
                 ConnectCard()
                 indexingSection
                 aboutSection

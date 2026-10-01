@@ -387,4 +387,14 @@ struct BriefCompilerTests {
         b.contextItems[0].text = "```\ninner\n```"
         #expect(BriefCompiler.compile(b, compact: true).text.contains("# file A.swift\n````\n```\ninner\n```\n````"))
     }
+
+    @Test func minifiedJSONIsOneLineAndEquivalent() throws {
+        let brief = Brief.new(title: "t", input: "do the thing\nsecond line", target: .make(modelFamily: "claude", surface: .other))
+        let pretty = BriefCompiler.compile(brief, form: .json).text
+        let mini = BriefCompiler.compile(brief, form: .jsonMinified).text
+        #expect(!mini.contains("\n") && mini.count < pretty.count)
+        let a = try JSONSerialization.jsonObject(with: Data(pretty.utf8)) as? NSDictionary
+        let b = try JSONSerialization.jsonObject(with: Data(mini.utf8)) as? NSDictionary
+        #expect(a != nil && a == b)
+    }
 }

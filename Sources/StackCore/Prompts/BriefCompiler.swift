@@ -36,7 +36,15 @@ public enum BriefCompiler {
     }
 
     /// `json` is the same content as one JSON object, for programs that need to parse it.
-    public enum Form: Sendable { case readable, compact, json }
+    public enum Form: Sendable { case readable, compact, json, jsonMinified }
+
+    /// Tokens of the brief as first written, for showing what Improve cost or saved. Nil until it has been edited.
+    public static func draftTokens(_ brief: Brief) -> Int? {
+        guard brief.body != nil else { return nil }
+        var draft = brief
+        draft.body = nil
+        return compile(draft, form: .readable).tokens
+    }
 
     public static func compile(_ original: Brief, form: Form) -> CompiledPrompt {
         var warnings: [BriefWarning] = []
@@ -93,7 +101,8 @@ public enum BriefCompiler {
             switch form {
             case .readable: renderText(body.text, items: items, structure: structure)
             case .compact: renderCompact(body.text, items: items, structure: structure)
-            case .json: renderJSON(body.text, items: items, target: brief.target)
+            case .json: renderJSON(body.text, items: items, target: brief.target, minified: false)
+            case .jsonMinified: renderJSON(body.text, items: items, target: brief.target, minified: true)
             }
         }
 
@@ -182,7 +191,7 @@ public enum BriefCompiler {
         return out.joined(separator: "\n")
     }
 
-    private static func renderJSON(_ body: String, items: [ContextItem], target: TargetProfile) -> String {
+    private static func renderJSON(_ body: String, items: [ContextItem], target: TargetProfile, minified: Bool) -> String {
         let files: [[String: String]] = items.map { item in
             var entry = ["path": item.ref, "kind": item.kind.rawValue,
                          "mode": item.mode == .reference ? "reference" : "inline"]
@@ -195,7 +204,7 @@ public enum BriefCompiler {
             "files": files,
         ]
         let data = try? JSONSerialization.data(withJSONObject: object,
-                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+                                               options: minified ? [.sortedKeys, .withoutEscapingSlashes] : [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 

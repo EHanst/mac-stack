@@ -107,8 +107,17 @@ struct BriefStudioView: View {
                     ScrollView { SidecarRailView().padding(14) }.frame(width: 460, height: 340)
                 }
             if !fresh {
+                if let brief = model.selected {
+                    Text(BriefPhase.of(brief).rawValue)
+                        .font(.mtLabelSmall)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.mtSurfaceContainerHigh)
+                        .clipShape(Capsule())
+                }
                 Button { showBrainstorm = true } label: {
-                    Label(brainstormLabel, systemImage: "lightbulb")
+                    Label { Text(brainstormLabel) } icon: {
+                        Image(systemName: "lightbulb").symbolEffect(.bounce, value: brainstormCount)
+                    }
                 }
                 .popover(isPresented: $showBrainstorm, arrowEdge: .bottom) {
                     ScrollView {
@@ -129,8 +138,10 @@ struct BriefStudioView: View {
         .padding(.horizontal, 16).padding(.vertical, 10)
     }
 
+    private var brainstormCount: Int { services.feedback.questions.count + services.feedback.tips.count }
+
     private var brainstormLabel: String {
-        let count = services.feedback.questions.count + services.feedback.tips.count
+        let count = brainstormCount
         return count > 0 ? "Brainstorm (\(count))" : "Brainstorm"
     }
 
