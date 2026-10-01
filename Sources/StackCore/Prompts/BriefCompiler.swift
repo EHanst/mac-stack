@@ -83,7 +83,7 @@ public enum BriefCompiler {
         }
 
         func render(_ items: [ContextItem]) -> String {
-            compact ? renderCompact(body.text, items: items)
+            compact ? renderCompact(body.text, items: items, structure: structure)
                     : renderText(body.text, items: items, structure: structure)
         }
 
@@ -138,17 +138,42 @@ public enum BriefCompiler {
 
     /// Data-dense form for a model reader: no prose framing, no markdown decoration, no blank lines.
     /// Code, diffs and anything inside a fenced block keep their text; only trailing spaces go.
-    private static func renderCompact(_ body: String, items: [ContextItem]) -> String {
-        var out = ["#FMT task first. #FILE <path> = file text follows, until the next # line. #REF <path> = read it yourself."]
+    private static func renderCompact(_ body: String, items: [ContextItem], structure: ModelPromptProfile.Structure) -> String {
         let task = compactProse(body)
-        if !task.isEmpty { out.append("#TASK\n" + task) }
-        for item in items {
-            if item.mode == .reference { out.append("#REF " + oneLine(item.ref)); continue }
-            let text = item.kind == .gitDiff ? item.text.trimmingCharacters(in: .newlines)
-                                             : dropBlankLines(item.text)
-            out.append("#FILE " + oneLine(item.ref) + "\n" + text)
+        var out: [String] = []
+        switch structure {
+        case .xmlTags:
+            if !task.isEmpty {
+                // A body that already carries its own <task> block is passed through, not nested.
+                if task.range(of: "<task>", options: .caseInsensitive) != nil { out.append(task) }
+                else { out.append("<task>\n" + task.replacingOccurrences(of: "</task", with: "<\\/task", options: .caseInsensitive) + "\n</task>") }
+            }
+            for item in items {
+                if item.mode == .reference { out.append("<ref p=\"\(attribute(item.ref))\"/>"); continue }
+                out.append("<file p=\"\(attribute(item.ref))\">\n" + neutralize(compactItemText(item)) + "\n</file>")
+            }
+        case .markdown:
+            if !task.isEmpty { out.append("# task\n" + task) }
+            for item in items {
+                if item.mode == .reference { out.append("# ref " + oneLine(item.ref)); continue }
+                let text = compactItemText(item)
+                var fence = "```"
+                while text.contains(fence) { fence += "`" }
+                out.append("# file " + oneLine(item.ref) + "\n" + fence + "\n" + text + "\n" + fence)
+            }
+        case .plainNumbered:
+            out.append("#FMT task first. #FILE <path> = file text follows, until the next # line. #REF <path> = read it yourself.")
+            if !task.isEmpty { out.append("#TASK\n" + task) }
+            for item in items {
+                if item.mode == .reference { out.append("#REF " + oneLine(item.ref)); continue }
+                out.append("#FILE " + oneLine(item.ref) + "\n" + compactItemText(item))
+            }
         }
         return out.joined(separator: "\n")
+    }
+
+    private static func compactItemText(_ item: ContextItem) -> String {
+        item.kind == .gitDiff ? item.text.trimmingCharacters(in: .newlines) : dropBlankLines(item.text)
     }
 
     private static func dropBlankLines(_ text: String) -> String {
