@@ -6,9 +6,9 @@
 
 **Architecture:** `ModelPromptProfile` becomes the typed source of per-family style facts (distilled once from vendor docs, no runtime dependencies). `PromptLint` gains deterministic per-family checks. The optimizer's rewriter guidance and `BriefCompiler` item rendering consume the typed fields. System prompts stay fixed.
 
-**Tech Stack:** Swift, XCTest (`swift test`). Tests live in `Tests/KororoTests/`.
+**Tech Stack:** Swift, XCTest (`swift test`). Tests live in `Tests/KokoroTests/`.
 
-**Spec:** the chat discussion of 2026-10-01 (dropdown audit). Current state: 4 families (`claude`, `gpt`, `local`, `generic`) in `Sources/StackCore/Prompts/ModelPromptProfile.swift`, mapped in `TargetProfile.swift`, picker at `Sources/Kororo/UI/Briefs/BriefPane.swift:147`.
+**Spec:** the chat discussion of 2026-10-01 (dropdown audit). Current state: 4 families (`claude`, `gpt`, `local`, `generic`) in `Sources/StackCore/Prompts/ModelPromptProfile.swift`, mapped in `TargetProfile.swift`, picker at `Sources/Kokoro/UI/Briefs/BriefPane.swift:147`.
 
 ## Global Constraints
 - Test first; smallest edit per pass; don't reword prompts you aren't fixing (CLAUDE.md).
@@ -37,7 +37,7 @@
 - [ ] **Step 3:** Mark anything not confirmed in a source `[unverified]`. Do not encode `[unverified]` claims in tasks 2–4.
 
 ### Task 2: Typed fields on `ModelPromptProfile`
-**Files:** Modify `Sources/StackCore/Prompts/ModelPromptProfile.swift`; Create `Tests/KororoTests/ModelPromptProfileTests.swift`
+**Files:** Modify `Sources/StackCore/Prompts/ModelPromptProfile.swift`; Create `Tests/KokoroTests/ModelPromptProfileTests.swift`
 **Interfaces:** Produces `ReasoningCuePolicy`, `Verbosity`, new init params (all defaulted), `rewriterGuidance: String`. Reuses existing `Structure` (no second delimiter enum).
 
 - [ ] **Step 1: Failing test**
@@ -98,7 +98,7 @@ public var rewriterGuidance: String {
 - [ ] **Step 5:** Commit (when asked): `feat: typed style fields on ModelPromptProfile`.
 
 ### Task 3: New families, Claude Code surface variant, picker
-**Files:** Modify `ModelPromptProfile.swift`, `TargetProfile.swift`, `BriefPane.swift` (picker ~147–152); Test `Tests/KororoTests/ModelPromptProfileTests.swift`, `TargetProfileTests.swift`
+**Files:** Modify `ModelPromptProfile.swift`, `TargetProfile.swift`, `BriefPane.swift` (picker ~147–152); Test `Tests/KokoroTests/ModelPromptProfileTests.swift`, `TargetProfileTests.swift`
 **Interfaces:** Consumes Task 2 init. Produces `.gemini`, `.reasoning`, `.claudeCode`; `TargetProfile.make` unchanged signature. Values come from Task 1 facts file — the strings below are placeholders to replace with verified wording, not final copy.
 
 - [ ] **Step 1: Failing tests**
@@ -147,11 +147,11 @@ public var model: ModelPromptProfile {
 }
 ```
 and have `make` use `.model`-equivalent logic for `tokenBudget` (build the `TargetProfile` first, then read `.model.maxUsefulTokens`). Picker: add `Text("Gemini").tag("gemini")` and `Text("Reasoning").tag("reasoning")` beside the existing options (confirm the exact ForEach/Text structure in `BriefPane.swift:147`).
-- [ ] **Step 4:** `swift test` → pass. Open the app (`run-kororo` skill) and confirm the dropdown lists the new options.
+- [ ] **Step 4:** `swift test` → pass. Open the app (`run-kokoro` skill) and confirm the dropdown lists the new options.
 - [ ] **Step 5:** Commit (when asked).
 
 ### Task 4: Per-family lint rules
-**Files:** Modify `Sources/StackCore/Prompts/PromptLint.swift` (Rule enum line 8, Context lines 16–23, `check` line 25); Test `Tests/KororoTests/PromptLintTests.swift`; wire `modelFamily` at the existing call sites of `PromptLint.check` (grep for them).
+**Files:** Modify `Sources/StackCore/Prompts/PromptLint.swift` (Rule enum line 8, Context lines 16–23, `check` line 25); Test `Tests/KokoroTests/PromptLintTests.swift`; wire `modelFamily` at the existing call sites of `PromptLint.check` (grep for them).
 **Interfaces:** Produces `Rule.unbalancedXML`, `.chainOfThought`, `.goalNotFirst`; `Context.modelFamily: String?` (defaulted, so existing calls compile).
 
 - [ ] **Step 1: Failing tests** (append to the existing file, match its style)
@@ -210,11 +210,11 @@ private static func startsWithGoal(_ text: String) -> Bool {
 }
 ```
 - [ ] **Step 4:** `swift test` → pass.
-- [ ] **Step 5:** Pass `modelFamily: brief.target.modelFamily` at the call sites (confirm they exist in `Sources/Kororo/App/`).
+- [ ] **Step 5:** Pass `modelFamily: brief.target.modelFamily` at the call sites (confirm they exist in `Sources/Kokoro/App/`).
 - [ ] **Step 6:** Commit (when asked).
 
 ### Task 5: Use the new fields in the rewriter and item rendering
-**Files:** Modify `Sources/StackCore/Prompts/PromptOptimizer.swift:320` (`lines.append(context.profile.guidance)` → `.rewriterGuidance`); optionally `BriefCompiler.swift:177–191` only if Task 1 shows a delimiter difference worth encoding. Test `Tests/KororoTests/BriefCompilerTests.swift` and the optimizer tests that assert the guidance line.
+**Files:** Modify `Sources/StackCore/Prompts/PromptOptimizer.swift:320` (`lines.append(context.profile.guidance)` → `.rewriterGuidance`); optionally `BriefCompiler.swift:177–191` only if Task 1 shows a delimiter difference worth encoding. Test `Tests/KokoroTests/BriefCompilerTests.swift` and the optimizer tests that assert the guidance line.
 **Interfaces:** Consumes `rewriterGuidance`.
 
 - [ ] **Step 1:** Read the optimizer tests that assert the guidance text; add a failing test that a `.reasoning` profile's request contains "Do not ask the model to think step by step." and a `.claude` profile's request is byte-identical to before.
@@ -227,7 +227,7 @@ private static func startsWithGoal(_ text: String) -> Bool {
 - [ ] `swift test` (all pass).
 - [ ] Task 5 changes rewriter input, so run the optimizer eval before and after on the same drafts:
 ```bash
-swift run -c release KororoBench --optimizer-eval --modes improve,expand,adapt --repeats 3 --eval-json before.json
+swift run -c release KokoroBench --optimizer-eval --modes improve,expand,adapt --repeats 3 --eval-json before.json
 ```
 Run once on `main`, once on the branch (`after.json`); report fidelity, acceptance and token numbers. Skip configs already measured worse. If Task 5 is dropped, report the eval as not run.
 - [ ] Open the app and confirm the dropdown shows the new families and lint messages appear for a claude/reasoning/gpt target.

@@ -50,6 +50,6 @@ public struct CloudPreset: Sendable, Identifiable, Equatable {
         RemoteAPIProvider.Config(
             id: id, baseURL: baseURL, modelIdentifier: model,
             capabilities: [.textGeneration, .streaming], apiStyle: apiStyle,
-            envVarKey: "KORORO_\(id.uppercased())_TOKEN")
+            envVarKey: "KOKORO_\(id.uppercased())_TOKEN")
     }
 }

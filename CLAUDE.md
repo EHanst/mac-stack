@@ -1,4 +1,4 @@
-# Kororo (repo: mac-stack)
+# Kokoro (repo: mac-stack)
 
 ## Reference
 
@@ -11,7 +11,7 @@
 
 **Prompt text lives in:** `PromptPrinciples` (shared rules), `PromptOptimizer` (rewrite meta-prompt and acceptance checks), `BriefSidecar` (interview/critique/revise/edit/brainstorm), `BuiltInPrompts` (starter prompts), `PromptLint` (instant model-free checks), `PromptLiterals` (what a rewrite must keep), `UntrustedContent` (fencing, in `Security/`). All under `Sources/StackCore/Prompts/` except `UntrustedContent`, plus the shared system prompt in `AppServices.instructions`.
 
-**Eval harness.** `swift test` (unit, seconds). `swift run -c release KororoBench --optimizer-eval [--modes improve,expand,adapt] [--repeats N] [--eval-json out.json]` runs ten literal-heavy drafts through the production request and acceptance checks on a loaded local model. It is slow: run it only when a change touches the meta-prompt, sampling or validator, never for wording-only edits that unit tests cover, and skip configs already measured worse.
+**Eval harness.** `swift test` (unit, seconds). `swift run -c release KokoroBench --optimizer-eval [--modes improve,expand,adapt] [--repeats N] [--eval-json out.json]` runs ten literal-heavy drafts through the production request and acceptance checks on a loaded local model. It is slow: run it only when a change touches the meta-prompt, sampling or validator, never for wording-only edits that unit tests cover, and skip configs already measured worse.
 
 ## Goal
 
@@ -48,4 +48,4 @@ A change is good when it measurably improves at least one of these and regresses
 - Verify before saying done: run the build and tests, and open the UI for UI changes.
 - Fix review findings, including Minor ones, in the same pass.
 - Ask only when blocked by a decision that is the user's; otherwise choose a sensible default and say so.
-- Commit, push and open PRs only when asked.
+- Commit on your own judgment (on a feature branch, not main). Push and open PRs only when asked.

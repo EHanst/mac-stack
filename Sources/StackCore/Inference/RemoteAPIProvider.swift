@@ -101,7 +101,7 @@ public actor RemoteAPIProvider: ModelProvider {
         options: GenerationOptions
     ) -> AsyncThrowingStream<GenerationEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     try requireModel()
                     let token = try await credentials.token(for: config.id)
@@ -121,6 +121,7 @@ public actor RemoteAPIProvider: ModelProvider {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 

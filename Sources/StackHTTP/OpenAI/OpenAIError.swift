@@ -20,7 +20,7 @@ public struct OpenAIError: Error, Sendable, Equatable {
         OpenAIError(status: 400, message: message, type: "invalid_request_error", param: param, code: code)
     }
     public static let unauthorized = OpenAIError(
-        status: 401, message: "Missing or invalid API key. Send the token you created in Kororo as 'Authorization: Bearer vc_…'.",
+        status: 401, message: "Missing or invalid API key. Send the token you created in Kokoro as 'Authorization: Bearer vc_…'.",
         type: "invalid_request_error", code: "invalid_api_key")
     public static func forbidden(_ message: String) -> OpenAIError {
         OpenAIError(status: 403, message: message, type: "permission_error", code: "insufficient_scope")

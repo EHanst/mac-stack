@@ -1,4 +1,4 @@
-# Releasing Kororo
+# Releasing Kokoro
 
 ## One-time setup (needs you)
 
