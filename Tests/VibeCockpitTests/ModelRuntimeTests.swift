@@ -52,7 +52,11 @@ struct ModelRuntimeTests {
         )
         try await runtime.acquire()
         await runtime.release()
-        try await Task.sleep(for: .milliseconds(200))
+        // Wait for the eviction rather than guessing a delay: a loaded CI runner can be slow.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while await runtime.state != .unloaded, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         let s = await runtime.state
         #expect(s == .unloaded)
         let didUnload = await flag.value
