@@ -368,7 +368,7 @@ public struct PromptOptimizer: Sendable {
     }
 
     static func partialImproved(_ raw: String) -> String? {
-        section("improved", in: raw)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        section("improved", in: raw).map { BriefText.stripStrayTags($0).trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
     private static func bullets(_ text: String?) -> [String] {
@@ -388,7 +388,7 @@ public struct PromptOptimizer: Sendable {
             ? (section("improved", in: raw) ?? "")
             : raw
         return Parsed(
-            improved: improved.trimmingCharacters(in: .whitespacesAndNewlines),
+            improved: MarkdownNumbering.renumber(BriefText.stripStrayTags(improved).trimmingCharacters(in: .whitespacesAndNewlines)),
             changes: bullets(section("changes", in: raw)),
             questions: Array(bullets(section("questions", in: raw)).prefix(2)))
     }

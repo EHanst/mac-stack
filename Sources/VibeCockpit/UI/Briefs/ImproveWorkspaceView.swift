@@ -31,7 +31,7 @@ struct ImproveWorkspaceView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             MTDivider()
-            questionsTipsStrip
+            CappedScroll(maxHeight: 150) { questionsTipsStrip }
             mainArea
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             actionRow
@@ -153,27 +153,30 @@ struct ImproveWorkspaceView: View {
     }
 
     private func runningView(_ partial: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // Until the first words arrive, keep showing the text being improved so nothing blanks out.
+        let waiting = partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
                 Text("Improving…").font(.mtBodySmall)
-            }
-            ScrollView {
-                Text(partial.isEmpty ? " " : partial)
-                    .font(.mtBodyMedium)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-            .frame(maxHeight: .infinity)
-            Text("A model on this Mac can take a little while. Your working revision stays as a draft.")
-                .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-            HStack {
+                Text("A model on this Mac can take a little while. Your working revision stays as a draft.")
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                    .lineLimit(1)
                 Spacer()
                 Button("Cancel") { improve.cancelOptimize(studio: studio) }
                     .buttonStyle(MTTextButtonStyle())
             }
+            ScrollView {
+                MarkdownText(text: waiting ? improve.revision : partial)
+                    .opacity(waiting ? 0.5 : 1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color.mtSurfaceContainerHighest)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var revisionTabs: some View {

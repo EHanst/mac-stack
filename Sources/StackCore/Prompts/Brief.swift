@@ -70,7 +70,7 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
     /// Auto-saved working revision from an open Improve workspace. Never shown as the brief body.
     public var draft: String?
 
-    public var effectiveBody: String { body ?? input }
+    public var effectiveBody: String { BriefText.stripStrayTags(body ?? input) }
     public var isEdited: Bool { body != nil }
     public var isDraft: Bool { draft != nil }
 
