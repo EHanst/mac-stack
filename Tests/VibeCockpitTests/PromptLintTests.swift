@@ -22,12 +22,16 @@ struct PromptLintTests {
         #expect(!rules("please make `load()` faster and cleaner").contains(.noTarget))
     }
 
-    @Test("debug and generate ask for a success criterion")
+    @Test("debug, generate, refactor and test ask for a success criterion")
     func criterion() {
         let ctx = PromptLint.Context(intent: "debug")
         #expect(rules("the settings screen crashes on launch every time", ctx).contains(.noSuccessCriterion))
         #expect(!rules("the settings screen crashes on launch, it should open normally", ctx).contains(.noSuccessCriterion))
         #expect(!rules("the settings screen crashes on launch every time", .init(intent: "explain")).contains(.noSuccessCriterion))
+        for intent in ["refactor", "test"] {
+            #expect(rules("tidy up the settings screen loader code", .init(intent: intent)).contains(.noSuccessCriterion))
+            #expect(!rules("tidy up the settings screen loader, done when the tests pass", .init(intent: intent)).contains(.noSuccessCriterion))
+        }
     }
 
     @Test("a bare error message gets a suggested question")

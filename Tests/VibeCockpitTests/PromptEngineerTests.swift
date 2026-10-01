@@ -133,77 +133,58 @@ struct PromptEngineerRecipeTests {
     }
 }
 
-@Suite("Kokoro identity prompt")
+@Suite("Kokoro system prompt")
 struct IdentityPromptTests {
+    private let prompt = AppServices.systemPrompt(workspaceRoot: "/w/app", snapshotsAvailable: true)
 
     @Test("stays short: it is sent with every conversation and eats local context")
     func short() {
-        // ~4 characters per token for English prose: 1000 characters is about 250 tokens.
-        #expect(AppServices.identityPrompt(persona: true, addressName: "Senpai").count <= 1000)
+        // ~4 characters per token for English prose: 1600 characters is about 400 tokens.
+        #expect(prompt.count <= 1600)
     }
 
-    @Test("is a pure function of its settings, so the prompt is identical every turn (cache-safe)")
+    @Test("is a pure function of its inputs, so the prompt is identical every turn (cache-safe)")
     func deterministic() {
-        #expect(AppServices.identityPrompt(persona: true, addressName: "Sam") == AppServices.identityPrompt(persona: true, addressName: "Sam"))
+        #expect(prompt == AppServices.systemPrompt(workspaceRoot: "/w/app", snapshotsAvailable: true))
     }
 
-    @Test("names Kokoro, keeps code persona-free, and the address name is opt-in")
+    @Test("follows its own principles: reference first, facts next, instructions last")
+    func order() {
+        let rules = prompt.range(of: PromptPrinciples.rules)!, facts = prompt.range(of: "Workspace root: /w/app")!
+        let goal = prompt.range(of: "Goal:")!, untrusted = prompt.range(of: "<untrusted>")!
+        #expect(rules.upperBound <= facts.lowerBound && facts.upperBound <= goal.lowerBound && goal.upperBound <= untrusted.lowerBound)
+        #expect(prompt.contains("A good reply"))
+    }
+
+    @Test("omits facts it does not have")
+    func optionalFacts() {
+        let bare = AppServices.systemPrompt(workspaceRoot: nil, snapshotsAvailable: false)
+        #expect(!bare.contains("Workspace root") && !bare.contains("snapshots"))
+    }
+
+    @Test("says what the app is, keeps the correctness rules and has no persona")
     func content() {
-        let plain = AppServices.identityPrompt(persona: true, addressName: nil)
-        #expect(plain.contains("Kokoro"))
-        #expect(plain.contains("never use it in code, diffs, commit messages"))
-        #expect(!plain.contains("Address the user as"))
-        #expect(!AppServices.identityPrompt(persona: true, addressName: "   ").contains("Address the user as"))
-        #expect(AppServices.identityPrompt(persona: true, addressName: "Sam").hasSuffix("Address the user as Sam."))
+        #expect(prompt.contains("Kokoro") && prompt.contains("prompts for frontier AI models"))
+        #expect(prompt.contains("unspecified") && prompt.contains("small and focused"))
+        for word in ["personality", "persona", "Address the user", "senpai", "sugoi", "playful", "VibeCockpit"] {
+            #expect(!prompt.localizedCaseInsensitiveContains(word))
+        }
+    }
+}
+
+@Suite("Prompt principles")
+struct PromptPrinciplesTests {
+    @Test("the shared block stays within its word budget")
+    func budget() {
+        let words = PromptPrinciples.rules.split(whereSeparator: \.isWhitespace).count
+        #expect(words <= PromptPrinciples.wordLimit)
     }
 
-    @Test("with the personality off it is the plain sidecar line")
-    func off() {
-        let text = AppServices.identityPrompt(persona: false, addressName: "Sam")
-        #expect(!text.contains("Kokoro") && !text.contains("Sam"))
-        #expect(text.hasPrefix("You are an assistant that helps a developer write precise prompts"))
-    }
-
-    @Test("the default voice is calm and brief, and the rules say what the app is")
-    func toneAndFraming() {
-        let text = AppServices.identityPrompt(persona: true, addressName: nil)
-        #expect(!text.contains("playful") && !text.contains("Celebrate") && !text.contains("VibeCockpit"))
-        #expect(text.contains("prompts for frontier AI models"))
-        #expect(text.contains("never use it in code, diffs, commit messages"))
-        #expect(text.contains("the prompts you draft"))
-    }
-
-    @Test("the user can rewrite Kokoro's personality; the safety rules stay")
-    func customPersonality() {
-        let text = AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: "You are Mochi, a calm, terse pair programmer.")
-        #expect(text.hasPrefix("You are Mochi, a calm, terse pair programmer."))
-        #expect(!text.contains("You are Kokoro") && !text.contains("calm, concise assistant"))
-        #expect(text.contains("never use it in code, diffs, commit messages"))
-        #expect(text.contains("Substance comes first"))
-    }
-
-    @Test("blank or missing custom text falls back to the default; over-long text is capped")
-    func personalityFallbackAndCap() {
-        let base = AppServices.identityPrompt(persona: true, addressName: nil)
-        #expect(AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: "  \n ") == base)
-        #expect(AppServices.identityPrompt(persona: true, addressName: nil, customPersonality: nil) == base)
-        let long = String(repeating: "x", count: 5_000)
-        let capped = AppServices.effectivePersonality(long)
-        #expect(capped.count == AppServices.personalityLimit)
-        #expect(AppServices.identityPrompt(persona: true, addressName: "Sam", customPersonality: long).count
-                <= AppServices.personalityLimit + AppServices.coreRules.count + 60)
-    }
-
-    @Test("a custom personality does not switch the personality off, and off ignores it")
-    func customIgnoredWhenOff() {
-        let text = AppServices.identityPrompt(persona: false, addressName: nil, customPersonality: "You are Mochi.")
-        #expect(!text.contains("Mochi"))
-    }
-
-    @Test("the assistant is always told to be correct and safe")
-    func safetyRules() {
-        let text = AppServices.identityPrompt(persona: true, addressName: nil)
-        #expect(text.contains("Substance comes first"))
-        #expect(text.contains("never invent"))
+    @Test("it covers goal, constraints, naming, data-first, output format and no invention")
+    func coverage() {
+        let r = PromptPrinciples.rules.lowercased()
+        for key in ["one task", "done looks like", "never invent", "non-goals", "data", "output format", "number the steps"] {
+            #expect(r.contains(key), "missing \(key)")
+        }
     }
 }

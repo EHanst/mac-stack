@@ -853,70 +853,29 @@ public final class AppServices {
     }
 
     private func buildSystemPrompt() -> String {
-        var lines = [Self.identityPrompt(persona: defaults.object(forKey: Self.personaKey) as? Bool ?? true,
-                                         addressName: defaults.string(forKey: Self.addressNameKey),
-                                         customPersonality: defaults.string(forKey: Self.personalityKey))]
-        if let workspace = detectWorkspaceURL() {
-            lines.append("Workspace root: \(workspace.path)")
-        }
-        if let swiftVersion = cachedSwiftVersion() {
-            lines.append("Swift version: \(swiftVersion)")
-        }
-        if snapshotManager != nil {
-            lines.append("Git snapshots are available. Prefer small, focused edits.")
-        }
-        lines.append(UntrustedContent.systemPromptRule)
-        return lines.joined(separator: "\n")
+        Self.systemPrompt(workspaceRoot: detectWorkspaceURL()?.path, snapshotsAvailable: snapshotManager != nil)
     }
 
-    static let personaKey = "kokoroPersonaEnabled"
-    static let addressNameKey = "kokoroAddressName"
-    static let personalityKey = "kokoroPersonality"
-    /// Longest custom personality that is used (about 150 tokens). It rides along with every
-    /// conversation and eats local context, so it is capped rather than trusted to be short.
-    public nonisolated static let personalityLimit = 600
+    /// Reference and facts first, the instructions last (principle 5). Pure and fixed per session, so the
+    /// system message is identical every turn and the local prefix cache stays valid.
+    nonisolated static func systemPrompt(workspaceRoot: String?, snapshotsAvailable: Bool) -> String {
+        var parts = ["Principles for the prompts you write and review:\n" + PromptPrinciples.rules]
+        var facts: [String] = []
+        if let workspaceRoot { facts.append("Workspace root: \(workspaceRoot)") }
+        if snapshotsAvailable { facts.append("Git snapshots are available.") }
+        if !facts.isEmpty { parts.append(facts.joined(separator: "\n")) }
+        parts.append(instructions)
+        return parts.joined(separator: "\n\n")
+    }
 
-    /// Kokoro's default voice. This is the part the user can rewrite in Settings; the rules below
-    /// it (substance, stack, no persona in code) always apply.
-    public nonisolated static let defaultPersonality = """
-        You are Kokoro, a calm, concise assistant that helps a developer write precise prompts.
-
-        Voice: friendly and brief. No exclamation marks or flourishes; a short encouraging word is fine.
+    /// The task, its done-criteria, and the constraints. Each rule is stated once.
+    public nonisolated static let instructions = """
+        Goal: inside Kokoro, a macOS sidecar running on a local model, help a developer write precise prompts for frontier AI models. A good reply is one the developer can use as written.
+        1. Reply in plain, concise wording and lead with the answer.
+        2. Name exact files, symbols and commands you have read. When unsure one exists, check by reading the code or building; if you cannot, write "unspecified".
+        3. Keep edits small and focused, and change only what was asked.
+        4. \(UntrustedContent.systemPromptRule)
         """
-
-    /// What never changes, whatever personality the user writes.
-    nonisolated static let coreRules = """
-        You work inside Kokoro, a macOS sidecar that helps developers write prompts for frontier AI models (Claude Code, Cursor, ChatGPT) and runs on a local model.
-
-        Substance comes first: be correct, concise and safe. If unsure an API or flag exists, say so and check by reading the code or building; never invent one. Prefer small, focused edits.
-
-        Whatever your voice, never use it in code, diffs, commit messages, tool arguments, file contents or the prompts you draft.
-        """
-
-    /// The user's personality text if they wrote one (trimmed, capped), else the default.
-    public nonisolated static func effectivePersonality(_ custom: String?) -> String {
-        let trimmed = custom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return defaultPersonality }
-        return String(trimmed.prefix(personalityLimit))
-    }
-
-    /// Who the model is. Kept short and fixed for the session: the system message is built once
-    /// so the local prefix cache stays valid.
-    nonisolated static func identityPrompt(persona: Bool, addressName: String?, customPersonality: String? = nil) -> String {
-        guard persona else {
-            return "You are an assistant that helps a developer write precise prompts for frontier AI models. Be accurate and concise."
-        }
-        var text = effectivePersonality(customPersonality) + "\n\n" + coreRules
-        if let name = addressName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-            text += "\nAddress the user as \(name)."
-        }
-        return text
-    }
-
-    private func cachedSwiftVersion() -> String? {
-        // Best-effort: runs only in background; nil is a safe no-op for the system prompt
-        return nil
-    }
 
     private func detectWorkspaceURL() -> URL? {
         let fm = FileManager.default

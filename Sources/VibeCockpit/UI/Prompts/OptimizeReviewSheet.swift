@@ -14,7 +14,6 @@ struct OptimizeReviewSheet: View {
     let onAskQuestions: ([String]) -> Void
     let onClose: () -> Void
 
-    @AppStorage("kokoroPersonaEnabled") private var persona = true
     @State private var edited = ""
     @State private var tab = Tab.changes
     private enum Tab: String, CaseIterable { case changes = "Changes", edit = "Edit" }
@@ -55,7 +54,7 @@ struct OptimizeReviewSheet: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
-                    Text(persona ? "Kokoro is thinking it over…" : "Rewriting…").font(.mtBodySmall)
+                    Text("Rewriting…").font(.mtBodySmall)
                 }
                 ScrollView { Text(partial.isEmpty ? " " : partial).font(.mtBodyMedium).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
                     .frame(maxHeight: 180)
@@ -103,7 +102,7 @@ struct OptimizeReviewSheet: View {
                 .frame(maxHeight: 220)
                 notes("Conflicts resolved", result.conflicts, icon: "arrow.triangle.merge")
                 notes("Assumed — please confirm", result.assumptions, icon: "questionmark.circle")
-                notes(persona ? "Kokoro's notes" : "What changed", result.otherChanges, icon: nil)
+                notes("What changed", result.otherChanges, icon: nil)
                 HStack {
                     Button("Keep mine") { studio.dismissReview(); onClose() }.buttonStyle(MTTextButtonStyle())
                     Button("Expand") { onExpand() }.buttonStyle(MTOutlinedButtonStyle())
