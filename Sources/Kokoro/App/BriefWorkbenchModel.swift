@@ -198,14 +198,14 @@ public final class BriefWorkbenchModel {
     }
 
     /// The text to paste. `surface` restyles for a different tool without changing the brief.
-    public func copyText(for surface: Surface?, compact: Bool = false) -> String {
+    public func copyText(for surface: Surface?, compact: Bool = false, json: Bool = false) -> String {
         guard var brief = selected else { return "" }
         if let surface, surface != brief.target.surface {
             brief.target = TargetProfile(modelFamily: brief.target.modelFamily, surface: surface,
                                          tokenBudget: brief.target.tokenBudget)
             for i in brief.contextItems.indices { brief.contextItems[i].mode = surface.defaultContextMode }
         }
-        let out = BriefCompiler.compile(brief, compact: compact)
+        let out = BriefCompiler.compile(brief, form: json ? .json : compact ? .compact : .readable)
         return out.warnings.contains { $0.code == .emptyInput } ? "" : out.text
     }
 
@@ -246,8 +246,8 @@ public final class BriefWorkbenchModel {
     }
 
     /// `copyText`, plus a version, because what was sent is worth being able to get back.
-    public func copyForClipboard(for surface: Surface?, compact: Bool = false) -> String {
-        let text = copyText(for: surface, compact: compact)
+    public func copyForClipboard(for surface: Surface?, compact: Bool = false, json: Bool = false) -> String {
+        let text = copyText(for: surface, compact: compact, json: json)
         if !text.isEmpty { saveVersion() }
         return text
     }

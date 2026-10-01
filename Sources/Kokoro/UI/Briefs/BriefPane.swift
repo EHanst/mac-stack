@@ -10,7 +10,7 @@ import AppKit
 /// The model receives the compiled text (brief plus attachments), not this editor's raw contents.
 struct BriefPane: View {
     @Environment(AppServices.self) private var services
-    private enum CopyKind: String { case machine, standard }
+    private enum CopyKind: String { case machine, standard, json }
     @State private var copied: CopyKind?
     @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
     @State private var showVersions = false
@@ -90,6 +90,10 @@ struct BriefPane: View {
                     let savings = TokenSavings.percent(plain: compiled.tokens, compact: compact.tokens)
                     Text("\(BriefViewMode.machineCaption(for: brief.target)) · ~\(compact.tokens) tokens (saves \(savings)%)")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                } else if viewMode == .json {
+                    let json = BriefCompiler.compile(brief, form: .json)
+                    Text("For programs that parse the brief · ~\(json.tokens) tokens")
+                        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 } else {
                     Toggle("Edit", isOn: $editingHuman).toggleStyle(.button).controlSize(.small)
                 }
@@ -99,7 +103,14 @@ struct BriefPane: View {
                     .keyboardShortcut("i", modifiers: [.command, .shift])
             }
             Group {
-                if viewMode == .machine {
+                if viewMode == .json {
+                    ScrollView {
+                        Text(empty ? "Nothing to show yet." : BriefCompiler.compile(brief, form: .json).text)
+                            .font(AppTypography.monoFont(size: 13))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else if viewMode == .machine {
                     let compact = BriefCompiler.compile(brief, compact: true)
                     ScrollView {
                         Text(empty ? "Nothing to show yet." : compact.text)
@@ -191,6 +202,12 @@ struct BriefPane: View {
             .help("Compact, data-dense text that uses fewer tokens")
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .disabled(empty)
+            if viewMode == .json {
+                Button { copy(json: true) } label: {
+                    Label(copied == .json ? "Copied" : "Copy JSON", systemImage: "curlybraces")
+                }
+                .disabled(empty)
+            }
             Button { copy() } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
                 .keyboardShortcut("c", modifiers: [.command, .option])
                 .disabled(empty)
@@ -227,15 +244,15 @@ struct BriefPane: View {
         }
     }
 
-    private func copy(compact: Bool = false) {
+    private func copy(compact: Bool = false, json: Bool = false) {
         guard let brief = model.selected else { return }
-        let compiledForCopy = BriefCompiler.compile(brief, compact: compact)
-        let text = model.copyForClipboard(for: nil, compact: compact)
+        let compiledForCopy = BriefCompiler.compile(brief, form: json ? .json : compact ? .compact : .readable)
+        let text = model.copyForClipboard(for: nil, compact: compact, json: json)
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        copied = compact ? .machine : .standard
+        copied = json ? .json : compact ? .machine : .standard
         let secretWord = compiledForCopy.redactedCount == 1 ? "secret" : "secrets"
-        copyNote = "\(compact ? "Copied for machine" : "Copied"), ~\(compiledForCopy.tokens) tokens, \(compiledForCopy.redactedCount) \(secretWord) redacted"
+        copyNote = "\(json ? "Copied JSON" : compact ? "Copied for machine" : "Copied"), ~\(compiledForCopy.tokens) tokens, \(compiledForCopy.redactedCount) \(secretWord) redacted"
         Task { try? await Task.sleep(for: .seconds(2)); copyNote = nil }
     }
 }
