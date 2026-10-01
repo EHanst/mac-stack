@@ -77,7 +77,7 @@ jobs:
           set -o pipefail
           xcodebuild build -scheme Kokoro -project Kokoro.xcodeproj -configuration Debug \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            -destination 'platform=macOS,arch=arm64' 2>&1 | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
+            -destination 'platform=macOS' 2>&1 | tee /tmp/xcodebuild.log | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
 
       # Release build only matters for what ships from main; PRs skip it.
       - name: Build (release)
