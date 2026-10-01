@@ -186,9 +186,9 @@ public enum BriefCompiler {
             .filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
-    /// Strips what a model reads no differently: heading, list, numbering and quote markers, rules,
-    /// table rules, emphasis, link syntax. Nesting is kept as halved indentation and order as line
-    /// order; fenced code passes through.
+    /// Strips what a model reads no differently: heading, bullet and quote markers, rules, table
+    /// rules, emphasis, link syntax. Step numbers stay (they carry order and are cited as "step 3");
+    /// nesting is kept as halved indentation; fenced code passes through.
     private static func compactProse(_ text: String) -> String {
         var inFence = false
         var lines: [String] = []
@@ -202,7 +202,7 @@ public enum BriefCompiler {
             let pad = line.prefix { $0 == " " }.count
             var body = String(line.dropFirst(pad))
             while let r = body.range(of: #"^>\s?"#, options: .regularExpression) { body.removeSubrange(r) }
-            if let r = body.range(of: #"^([-*+•]|\d{1,4}[.)])\s+"#, options: .regularExpression) { body.removeSubrange(r) }
+            if let r = body.range(of: #"^[-*+•]\s+"#, options: .regularExpression) { body.removeSubrange(r) }
             if body.hasPrefix("|"), body.hasSuffix("|"), body.count > 1 {
                 body = String(body.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
             }
