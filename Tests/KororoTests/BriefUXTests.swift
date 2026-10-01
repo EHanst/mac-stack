@@ -36,4 +36,19 @@ struct BriefUXTests {
             #expect(template.markdown.contains("Acceptance criteria"))
         }
     }
+
+    @Test("stored view mode migrates legacy and unknown values to human")
+    func viewModeMigration() {
+        #expect(BriefViewMode.from(stored: "machine") == .machine)
+        #expect(BriefViewMode.from(stored: "human") == .human)
+        for legacy in ["Preview", "Edit", "", "junk"] { #expect(BriefViewMode.from(stored: legacy) == .human) }
+        #expect(BriefViewMode.human.label == "Human" && BriefViewMode.machine.label == "Machine")
+    }
+
+    @Test("machine caption names the model and its structure")
+    func machineCaption() {
+        #expect(BriefViewMode.machineCaption(for: .make(modelFamily: "claude", surface: .other)) == "Claude · XML tags")
+        #expect(BriefViewMode.machineCaption(for: .make(modelFamily: "gpt", surface: .other)) == "GPT · Markdown")
+        #expect(BriefViewMode.machineCaption(for: .make(modelFamily: "local", surface: .other)) == "Model on this Mac · plain markers")
+    }
 }
