@@ -6,7 +6,7 @@ import Foundation
 /// Peak GPU memory during a request is modelled as
 ///     weights + fixedOverhead + bytesPerToken × promptTokens
 /// where `fixedOverhead` covers prefill activations for one chunk, and `bytesPerToken` covers
-/// the KV cache plus copy-on-write snapshot copies. Both are measured with `KororoBench --sweep`
+/// the KV cache plus copy-on-write snapshot copies. Both are measured with `KokoroBench --sweep`
 /// (see docs/plans/m0-status.md) rather than derived, and re-measured when the model changes.
 public struct ContextBudget: Sendable, Equatable {
 
@@ -75,7 +75,7 @@ public struct ContextBudget: Sendable, Equatable {
 
 extension ContextBudget {
     /// Ternary-Bonsai-2-27B (2-bit MLX) with 128-token prefill chunks, M3 Pro 18 GB.
-    /// Fit to `KororoBench --sweep` on the *corrected* model (Gated DeltaNet fix): measured peak over
+    /// Fit to `KokoroBench --sweep` on the *corrected* model (Gated DeltaNet fix): measured peak over
     /// weights was 1.45 / 1.57 / 1.92 / 2.46 GiB at 1,042 / 2,087 / 4,175 / 8,419 prompt tokens.
     /// This model predicts each slightly high (conservative). The slope matches the config:
     /// KV is 64 KiB/token, and a live cache plus a prefix snapshot copy is 2–3× that.
@@ -85,7 +85,7 @@ extension ContextBudget {
 
 extension ContextBudget {
     /// Qwen3.5-4B (OptiQ mixed 4/8-bit) with 128-token prefill chunks, M3 Pro 18 GB. Fit to
-    /// `KororoBench --sweep`: peak GPU was 3.50 / 3.64 / 3.82 / 4.11 GiB at 1,041 / 4,175 / 8,421 / 16,861
+    /// `KokoroBench --sweep`: peak GPU was 3.50 / 3.64 / 3.82 / 4.11 GiB at 1,041 / 4,175 / 8,421 / 16,861
     /// prompt tokens, a slope of about 41 KB/token. Only 8 of its 32 layers keep a KV cache (32 KiB/token).
     /// Rounded up to 0.5 GiB fixed and 64 KB/token, about 1.5× the measured slope.
     public static let qwen35_4b = ContextBudget(

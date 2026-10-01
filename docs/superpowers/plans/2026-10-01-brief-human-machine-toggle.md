@@ -34,7 +34,7 @@
 
 **Files:**
 - Modify: `Sources/StackCore/Prompts/BriefCompiler.swift` (`compile` render closure, `renderCompact`)
-- Test: `Tests/KororoTests/BriefCompilerTests.swift` (replace `compact()` at line 249, add new tests)
+- Test: `Tests/KokoroTests/BriefCompilerTests.swift` (replace `compact()` at line 249, add new tests)
 
 **Interfaces:**
 - Consumes: `ModelPromptProfile.Structure` (`.xmlTags | .markdown | .plainNumbered`), existing private helpers `compactProse`, `dropBlankLines`, `oneLine`, `attribute`, `neutralize`.
@@ -185,7 +185,7 @@
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add Sources/StackCore/Prompts/BriefCompiler.swift Tests/KororoTests/BriefCompilerTests.swift
+git add Sources/StackCore/Prompts/BriefCompiler.swift Tests/KokoroTests/BriefCompilerTests.swift
 git commit -m "feat: shape the machine brief by the target's prompt structure
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -195,7 +195,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `Sources/StackCore/Prompts/BriefViewMode.swift`
-- Test: `Tests/KororoTests/BriefUXTests.swift` (append)
+- Test: `Tests/KokoroTests/BriefUXTests.swift` (append)
 
 **Interfaces:**
 - Produces: `public enum BriefViewMode: String, Sendable, CaseIterable { case human, machine; public static func from(stored: String) -> BriefViewMode; public var label: String; public static func machineCaption(for target: TargetProfile) -> String }`
@@ -252,7 +252,7 @@ public enum BriefViewMode: String, Sendable, CaseIterable {
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add Sources/StackCore/Prompts/BriefViewMode.swift Tests/KororoTests/BriefUXTests.swift
+git add Sources/StackCore/Prompts/BriefViewMode.swift Tests/KokoroTests/BriefUXTests.swift
 git commit -m "feat: BriefViewMode with legacy migration
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -261,8 +261,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 3: BriefPane toggle UI
 
 **Files:**
-- Modify: `Sources/Kororo/UI/Briefs/BriefPane.swift` (`ViewMode`, `viewMode`, `editor(_:compiled:)`)
-- Test: `Tests/KororoTests/BriefWorkbenchModelTests.swift` (append; mirror that file's existing setup for a model with a selected brief)
+- Modify: `Sources/Kokoro/UI/Briefs/BriefPane.swift` (`ViewMode`, `viewMode`, `editor(_:compiled:)`)
+- Test: `Tests/KokoroTests/BriefWorkbenchModelTests.swift` (append; mirror that file's existing setup for a model with a selected brief)
 
 **Interfaces:**
 - Consumes: `BriefViewMode` (Task 2), `BriefCompiler.compile(_:compact:)` (Task 1), `EchoGuardedEditor`.
@@ -323,12 +323,12 @@ Compute `let compact = BriefCompiler.compile(brief, compact: true)` once at the 
 
 - [ ] **Step 3: Build and test.** `swift build` and `swift test`. Expected: PASS, no warnings from this file.
 
-- [ ] **Step 4: Verify in the app** via the `run-kororo` skill: open a brief, confirm Human edits live, Machine shows read-only compiled text, and switching the Model picker (Claude, GPT, Local) changes the machine shape and token count.
+- [ ] **Step 4: Verify in the app** via the `run-kokoro` skill: open a brief, confirm Human edits live, Machine shows read-only compiled text, and switching the Model picker (Claude, GPT, Local) changes the machine shape and token count.
 
 - [ ] **Step 5: Commit.**
 
 ```bash
-git add Sources/Kororo/UI/Briefs/BriefPane.swift
+git add Sources/Kokoro/UI/Briefs/BriefPane.swift
 git commit -m "feat: Human/Machine toggle replaces Preview/Edit in the brief panel
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"

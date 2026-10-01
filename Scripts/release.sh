@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Kororo release: archive -> sign (hardened runtime) -> DMG -> sign -> notarize -> staple -> verify.
+# Kokoro release: archive -> sign (hardened runtime) -> DMG -> sign -> notarize -> staple -> verify.
 #
 #   DEVELOPER_ID_APPLICATION="Developer ID Application: Name (TEAMID)" \
 #   NOTARYTOOL_KEYCHAIN_PROFILE=notarytool VERSION=1.0.0 ./Scripts/release.sh
@@ -15,10 +15,10 @@ VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 DRY_RUN="${DRY_RUN:-}"
 KEYCHAIN_PROFILE="${NOTARYTOOL_KEYCHAIN_PROFILE:-notarytool}"
-ENTITLEMENTS="Config/Kororo.entitlements"
-ARCHIVE="build/Kororo.xcarchive"
-APP="build/export/Kororo.app"
-DMG="build/Kororo-$VERSION.dmg"
+ENTITLEMENTS="Config/Kokoro.entitlements"
+ARCHIVE="build/Kokoro.xcarchive"
+APP="build/export/Kokoro.app"
+DMG="build/Kokoro-$VERSION.dmg"
 
 if [ -n "$DRY_RUN" ]; then
   IDENTITY="-"; TIMESTAMP="--timestamp=none"
@@ -30,10 +30,10 @@ echo "==> Xcode project"; xcodegen generate >/dev/null
 
 echo "==> Archiving $VERSION ($BUILD_NUMBER)"
 # Xcode signs nothing here; the app is signed once, explicitly, below.
-xcodebuild archive -scheme Kororo -project Kororo.xcodeproj -configuration Release \
+xcodebuild archive -scheme Kokoro -project Kokoro.xcodeproj -configuration Release \
   -archivePath "$ARCHIVE" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | { command -v xcbeautify >/dev/null && xcbeautify || cat; } | tail -n 40
-cp -R "$ARCHIVE/Products/Applications/Kororo.app" "$APP"
+cp -R "$ARCHIVE/Products/Applications/Kokoro.app" "$APP"
 
 echo "==> Signing app (hardened runtime)"
 # Sign any nested code first, deepest first (none today: everything is statically linked), then the app.
@@ -47,13 +47,13 @@ echo "==> Verifying app"
 codesign --verify --deep --strict --verbose=2 "$APP"
 FLAGS=$(codesign -d --verbose=4 "$APP" 2>&1)
 echo "$FLAGS" | grep -q "flags=.*runtime" || { echo "ERROR: hardened runtime flag missing" >&2; exit 1; }
-if otool -L "$APP/Contents/MacOS/Kororo" | grep -E "/opt/homebrew|/usr/local/(opt|lib)|libgit2"; then
+if otool -L "$APP/Contents/MacOS/Kokoro" | grep -E "/opt/homebrew|/usr/local/(opt|lib)|libgit2"; then
   echo "ERROR: binary links a library outside macOS" >&2; exit 1; fi
 echo "entitlements:"; codesign -d --entitlements - "$APP" 2>/dev/null | grep -E "^\s*\[Key\]|<key>" || true
 
 echo "==> Smoke test (launch the packaged app)"
 SMOKE_HOME=$(mktemp -d)
-CFFIXED_USER_HOME="$SMOKE_HOME" "$APP/Contents/MacOS/Kororo" >"$SMOKE_HOME/app.log" 2>&1 & SMOKE_PID=$!
+CFFIXED_USER_HOME="$SMOKE_HOME" "$APP/Contents/MacOS/Kokoro" >"$SMOKE_HOME/app.log" 2>&1 & SMOKE_PID=$!
 for _ in $(seq 1 30); do [ -S "$SMOKE_HOME/.vibecockpit/mcp.sock" ] && break; sleep 1; done
 if [ -S "$SMOKE_HOME/.vibecockpit/mcp.sock" ] && kill -0 $SMOKE_PID 2>/dev/null; then echo "app started and opened its MCP socket"; else
   echo "ERROR: packaged app did not start" >&2; tail -20 "$SMOKE_HOME/app.log" >&2; kill $SMOKE_PID 2>/dev/null || true; exit 1; fi
@@ -61,7 +61,7 @@ kill $SMOKE_PID 2>/dev/null || true; wait $SMOKE_PID 2>/dev/null || true; rm -rf
 
 echo "==> Creating DMG"
 STAGE=$(mktemp -d); cp -R "$APP" "$STAGE/"; ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "Kororo" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null; rm -rf "$STAGE"
+hdiutil create -volname "Kokoro" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null; rm -rf "$STAGE"
 codesign --force $TIMESTAMP --sign "$IDENTITY" "$DMG"
 codesign --verify --strict "$DMG"
 

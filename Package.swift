@@ -6,15 +6,15 @@ import PackageDescription
 let git2Include = "-I" + Context.packageDirectory + "/Vendor/libgit2/include"
 
 let package = Package(
-    name: "Kororo",
+    name: "Kokoro",
     platforms: [.macOS("26.0")],
     products: [
         .library(name: "StackCore", targets: ["StackCore"]),
         .library(name: "StackMCP", targets: ["StackMCP"]),
         .library(name: "StackHTTP", targets: ["StackHTTP"]),
-        .executable(name: "kororo-mcp", targets: ["KororoMCP"]),
-        .library(name: "KororoCore", targets: ["KororoCore"]),
-        .executable(name: "Kororo", targets: ["Kororo"]),
+        .executable(name: "kokoro-mcp", targets: ["KokoroMCP"]),
+        .library(name: "KokoroCore", targets: ["KokoroCore"]),
+        .executable(name: "Kokoro", targets: ["Kokoro"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0"),
@@ -100,14 +100,14 @@ let package = Package(
         ),
 
         // App logic: state reducer, service wiring, prompt engineering. Re-exports the stack
-        // so UI and tests can keep a single `import KororoCore`.
+        // so UI and tests can keep a single `import KokoroCore`.
         .target(
-            name: "KororoCore",
+            name: "KokoroCore",
             dependencies: ["StackCore", "StackMCP", "StackHTTP"],
-            path: "Sources/Kororo",
+            path: "Sources/Kokoro",
             exclude: [
                 "UI/",
-                "App/KororoApp.swift",
+                "App/KokoroApp.swift",
                 "Info.plist",
             ],
             swiftSettings: [
@@ -116,11 +116,11 @@ let package = Package(
         ),
 
         .executableTarget(
-            name: "Kororo",
-            dependencies: ["KororoCore"],
-            path: "Sources/Kororo",
+            name: "Kokoro",
+            dependencies: ["KokoroCore"],
+            path: "Sources/Kokoro",
             sources: [
-                "App/KororoApp.swift",
+                "App/KokoroApp.swift",
                 "UI/",
             ],
             swiftSettings: [
@@ -130,14 +130,14 @@ let package = Package(
 
         // Performance harness for the local model (see docs/plans/2026-09-28-next-phase-plan.md, M0).
         .executableTarget(
-            name: "KororoBench",
+            name: "KokoroBench",
             dependencies: [
                 "StackCore",
                 "StackHTTP",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ],
-            path: "Sources/KororoBench",
+            path: "Sources/KokoroBench",
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
@@ -145,13 +145,13 @@ let package = Package(
 
         // stdio ↔ MCP socket bridge for clients that only speak stdio.
         .executableTarget(
-            name: "KororoMCP",
-            path: "Sources/KororoMCP"
+            name: "KokoroMCP",
+            path: "Sources/KokoroMCP"
         ),
 
         // Embedding-model bake-off (retrieval quality/speed on this repo's own code).
         .executableTarget(
-            name: "KororoEmbedBench",
+            name: "KokoroEmbedBench",
             dependencies: [
                 "StackCore",
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
@@ -159,19 +159,19 @@ let package = Package(
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "Transformers", package: "swift-transformers"),
             ],
-            path: "Sources/KororoEmbedBench",
+            path: "Sources/KokoroEmbedBench",
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
         .testTarget(
-            name: "KororoTests",
+            name: "KokoroTests",
             dependencies: [
-                "KororoCore", "StackCore", "StackMCP", "StackHTTP",
+                "KokoroCore", "StackCore", "StackMCP", "StackHTTP",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
             ],
-            path: "Tests/KororoTests",
+            path: "Tests/KokoroTests",
             swiftSettings: [.unsafeFlags(["-Xcc", git2Include])]
         ),
     ]

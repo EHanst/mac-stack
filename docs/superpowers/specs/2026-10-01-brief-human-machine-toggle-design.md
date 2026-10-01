@@ -3,7 +3,7 @@
 ## Goal
 Replace the Brief panel's Preview/Edit tabs with one always-editable markdown editor and a Human / Machine toggle. Machine is a read-only, token-optimized render shaped by the destination model's profile.
 
-## UI (`Sources/Kororo/UI/Briefs/BriefPane.swift`)
+## UI (`Sources/Kokoro/UI/Briefs/BriefPane.swift`)
 - Remove `ViewMode.preview/.markdown` and the Preview `MarkdownText` branch.
 - Human: `EchoGuardedEditor` bound to `model.setBody`, monospaced, always editable.
 - Machine: read-only monospaced text of `BriefCompiler.compile(brief, compact: true).text`.

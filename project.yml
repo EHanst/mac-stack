@@ -1,4 +1,4 @@
-name: Kororo
+name: Kokoro
 options:
   bundleIdPrefix: com.vibecockpit
   deploymentTarget:
@@ -30,12 +30,12 @@ packages:
     from: 2.27.0
 
 targets:
-  Kororo:
+  Kokoro:
     type: application
     platform: macOS
     deploymentTarget: "26.0"
     sources:
-      - Sources/Kororo
+      - Sources/Kokoro
       - Sources/StackCore
       - Sources/StackMCP
       - Sources/StackHTTP
@@ -64,12 +64,12 @@ targets:
         product: Hummingbird
       - target: CSQLiteVec
     info:
-      path: Sources/Kororo/Info.plist
+      path: Sources/Kokoro/Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CFBundleDisplayName: Kororo
-        CFBundleName: Kororo
+        CFBundleDisplayName: Kokoro
+        CFBundleName: Kokoro
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.vibecockpit.app
@@ -112,10 +112,10 @@ targets:
         OTHER_LDFLAGS: "-L$(PROJECT_DIR)/Vendor/libgit2/lib -lgit2 -lz -liconv"
         HEADER_SEARCH_PATHS: "$(PROJECT_DIR)/Vendor/libgit2/include"
 
-  KororoTests:
+  KokoroTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - Tests/KororoTests
+      - Tests/KokoroTests
     dependencies:
-      - target: Kororo
+      - target: Kokoro

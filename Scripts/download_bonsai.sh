@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build-time helper: download Ternary-Bonsai-2-27B to the Kororo models directory.
+# Build-time helper: download Ternary-Bonsai-2-27B to the Kokoro models directory.
 # This script is NEVER bundled in the app — it is a developer/user setup tool only.
-# Run once before launching Kororo with the local model picker.
+# Run once before launching Kokoro with the local model picker.
 
 set -euo pipefail
 

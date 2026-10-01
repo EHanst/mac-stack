@@ -71,7 +71,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Kororo ${{ github.ref_name }}
+          name: Kokoro ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           files: ${{ steps.dmg.outputs.path }}

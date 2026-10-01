@@ -21,7 +21,7 @@ private func objectSchema(_ properties: [String: Value], required: [String] = []
 public struct ListModelsTool: AgentToolHandler {
     public let toolDefinition = Tool(
         name: "list_models",
-        description: "List the AI models Kororo can use right now, and whether each runs on this Mac or in the cloud.",
+        description: "List the AI models Kokoro can use right now, and whether each runs on this Mac or in the cloud.",
         inputSchema: objectSchema([:]))
     public var requiredScope: ClientScope { .models }
     let gateway: QueryGateway
@@ -29,7 +29,7 @@ public struct ListModelsTool: AgentToolHandler {
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         let models = await gateway.models()
-        guard !models.isEmpty else { return text("No models are set up yet. Open Kororo to add one.") }
+        guard !models.isEmpty else { return text("No models are set up yet. Open Kokoro to add one.") }
         let lines = models.map { m -> String in
             let health: String
             switch m.health {
@@ -48,11 +48,11 @@ public struct ListModelsTool: AgentToolHandler {
 public struct ChatTool: AgentToolHandler {
     public let toolDefinition = Tool(
         name: "chat",
-        description: "Ask the model running in Kororo a question and get its answer. Runs on this Mac unless the user allowed the cloud.",
+        description: "Ask the model running in Kokoro a question and get its answer. Runs on this Mac unless the user allowed the cloud.",
         inputSchema: objectSchema([
             "prompt": .object(["type": "string", "description": "What to ask"]),
             "system": .object(["type": "string", "description": "Optional instructions for how to answer"]),
-            "model": .object(["type": "string", "description": "Optional model id from list_models; default lets Kororo choose"]),
+            "model": .object(["type": "string", "description": "Optional model id from list_models; default lets Kokoro choose"]),
             "maxTokens": .object(["type": "integer", "description": "Longest answer, in tokens (default 1024)"]),
         ], required: ["prompt"]))
     public var requiredScope: ClientScope { .chat }
