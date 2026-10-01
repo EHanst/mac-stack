@@ -39,7 +39,7 @@ struct MarkdownText: View {
                     Text(language).font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 }
                 Text(code)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(AppTypography.monoFont(size: 13))
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.mtSurfaceContainerHighest)
