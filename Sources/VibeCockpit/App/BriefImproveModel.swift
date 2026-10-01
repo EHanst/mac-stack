@@ -170,14 +170,14 @@ public final class BriefImproveModel {
         chatEditPhase = .idle
     }
 
-    public func expand(studio: PromptStudioModel) {
+    public func expand(studio: PromptStudioModel, finer: Bool = false) {
         guard currentBrief() != nil, !studio.isRunning else { return }
         let base = revision.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return }
         persistDraft()
         undoStack.removeAll()
         mustNotShrink = false
-        startOptimize(base, studio: studio, mode: .expand)
+        startOptimize(base, studio: studio, mode: .expand, finer: finer)
     }
 
     public func cancelOptimize(studio: PromptStudioModel) {
@@ -224,10 +224,11 @@ public final class BriefImproveModel {
         }
     }
 
-    private func startOptimize(_ text: String, studio: PromptStudioModel, mode: OptimizeMode) {
+    private func startOptimize(_ text: String, studio: PromptStudioModel, mode: OptimizeMode, finer: Bool = false) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         optimizerPhase = .running(partial: "")
-        studio.startOptimize(draft: text, mode: mode, intent: PromptEngineer.Intent.general.rawValue)
+        studio.startOptimize(draft: text, mode: mode,
+                             intent: PromptEngineer.Intent.general.rawValue, finer: finer)
     }
 
     private func currentBrief() -> Brief? {

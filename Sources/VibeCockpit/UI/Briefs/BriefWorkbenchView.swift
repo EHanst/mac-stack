@@ -1,6 +1,7 @@
 #if canImport(AppKit)
 #if SWIFT_PACKAGE
 import VibeCockpitCore
+import StackCore
 #endif
 import SwiftUI
 import AppKit
@@ -62,6 +63,12 @@ struct BriefWorkbenchView: View {
                 Button("New brief from a pasted session…") { continuing = true }
             } label: { Label("New brief", systemImage: "plus") }
                 .menuStyle(.button)
+            Menu {
+                ForEach(BriefTemplate.allCases, id: \.self) { template in
+                    Button(template.rawValue) { createBrief(from: template) }
+                }
+            } label: { Label("New from template", systemImage: "doc.text") }
+                .menuStyle(.button)
             Button(role: .destructive) { Task { await model.deleteSelected(); if model.selected == nil || model.selectedID != services.sidecar.briefID { services.sidecar.clear() } } } label: { Image(systemName: "trash") }
                 .disabled(model.selected == nil)
                 .help("Delete this brief")
@@ -99,6 +106,13 @@ struct BriefWorkbenchView: View {
         Task {
             if await model.newBrief(fromClipboard: text) { clipboardNote = nil; services.sidecar.clear() }
             else { clipboardNote = "The clipboard has no text." }
+        }
+    }
+
+    private func createBrief(from template: BriefTemplate) {
+        Task {
+            await model.newBrief(title: template.rawValue, input: template.markdown)
+            services.sidecar.clear()
         }
     }
 

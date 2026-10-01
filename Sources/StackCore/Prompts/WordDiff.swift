@@ -9,6 +9,12 @@ public enum WordDiff {
         public let kind: Kind
     }
 
+    public struct Hunk: Equatable, Sendable, Identifiable {
+        public let id: Int
+        public let segments: [Segment]
+        public var text: String { segments.map(\.text).joined() }
+    }
+
     public static func segments(from old: String, to new: String) -> [Segment] {
         let a = tokens(old), b = tokens(new)
         let diff = b.difference(from: a)
@@ -33,6 +39,48 @@ public enum WordDiff {
             else if j < b.count, inserted.contains(j) { add(b[j], .added); j += 1 }
             else if i < a.count { add(a[i], .same); i += 1; j += 1 }
             else { add(b[j], .added); j += 1 }
+        }
+        return out
+    }
+
+    public static func hunks(from old: String, to new: String) -> [Hunk] {
+        let all = segments(from: old, to: new)
+        var result: [Hunk] = []
+        var current: [Segment] = []
+        for segment in all {
+            if segment.kind == .same {
+                if !current.isEmpty {
+                    result.append(Hunk(id: result.count, segments: current))
+                    current = []
+                }
+            } else {
+                current.append(segment)
+            }
+        }
+        if !current.isEmpty { result.append(Hunk(id: result.count, segments: current)) }
+        return result
+    }
+
+    public static func merge(original: String, proposed: String, acceptedHunkIndexes: Set<Int>) -> String {
+        let all = segments(from: original, to: proposed)
+        let hunks = hunks(from: original, to: proposed)
+        var out = ""
+        var hunkIndex = -1
+        var inHunk = false
+        for segment in all {
+            if segment.kind == .same {
+                if inHunk { inHunk = false }
+                out.append(segment.text)
+            } else {
+                if !inHunk {
+                    hunkIndex += 1
+                    inHunk = true
+                }
+                guard hunkIndex < hunks.count else { continue }
+                let accepted = acceptedHunkIndexes.contains(hunks[hunkIndex].id)
+                if accepted && segment.kind == .added { out.append(segment.text) }
+                if !accepted && segment.kind == .removed { out.append(segment.text) }
+            }
         }
         return out
     }
