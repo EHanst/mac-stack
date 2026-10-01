@@ -48,4 +48,4 @@ A change is good when it measurably improves at least one of these and regresses
 - Verify before saying done: run the build and tests, and open the UI for UI changes.
 - Fix review findings, including Minor ones, in the same pass.
 - Ask only when blocked by a decision that is the user's; otherwise choose a sensible default and say so.
-- Commit, push and open PRs only when asked.
+- Commit on your own judgment (on a feature branch, not main). Push and open PRs only when asked.
