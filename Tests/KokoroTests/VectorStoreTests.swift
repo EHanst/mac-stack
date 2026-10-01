@@ -102,4 +102,29 @@ struct VectorStoreTests {
             try await group.waitForAll()
         }
     }
+
+    @Test("an embedding of the wrong dimension is rejected and never cached")
+    func wrongDimensionRejected() async throws {
+        let (store, tmp) = try await makeStore()
+        defer { try? FileManager.default.removeItem(at: tmp.deletingLastPathComponent()) }
+        let chunk = CodeChunk(filePath: "/ws/A.swift", declarationKind: "struct",
+                              startLine: 1, endLine: 2, content: "struct A {}")
+        try await store.upsertChunks([chunk])
+        await #expect(throws: VectorStore.StoreError.self) {
+            try await store.storeEmbedding([Float](repeating: 0.1, count: 7), for: chunk.id, contentHash: chunk.contentHash)
+        }
+        #expect(await store.cachedEmbedding(for: chunk.contentHash) == nil)
+    }
+
+    @Test("a database file that cannot be set up leaves the store closed, not half-open")
+    func failedOpenLeavesStoreClosed() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("vs_bad_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("index.sqlite")
+        try Data(repeating: 0x41, count: 4096).write(to: file)
+        let store = VectorStore(dbURL: file)
+        await #expect(throws: VectorStore.StoreError.self) { try await store.open() }
+        await #expect(throws: VectorStore.StoreError.self) { try await store.upsertChunks([]) }
+    }
 }

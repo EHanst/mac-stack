@@ -70,10 +70,18 @@ public actor VectorStore {
         var db: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(dbURL.path, &db, flags, nil) == SQLITE_OK, let db else {
-            throw StoreError.openFailed(String(cString: sqlite3_errmsg(db)))
+            let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "out of memory"
+            if let db { sqlite3_close(db) }
+            throw StoreError.openFailed(message)
         }
         self.writeDB = db
+        do { try setUp(db: db) } catch {
+            try? close()
+            throw error
+        }
+    }
 
+    private func setUp(db: OpaquePointer) throws {
         sqlite3_busy_timeout(db, 3000)
 
         // Load sqlite-vec extension
@@ -103,18 +111,21 @@ public actor VectorStore {
     public func upsertChunks(_ chunks: [CodeChunk]) async throws {
         guard let db = writeDB else { throw StoreError.openFailed("Not open") }
         try exec(db: db, sql: "BEGIN IMMEDIATE;")
-        defer {
-            sqlite3_exec(db, "COMMIT;", nil, nil, nil)
-            sqlite3_exec(db, "INSERT INTO chunk_fts(chunk_fts) VALUES('optimize');", nil, nil, nil)
+        do { try insertAll(chunks, db: db) } catch {
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+            throw error
         }
+        try exec(db: db, sql: "COMMIT;")
+        sqlite3_exec(db, "INSERT INTO chunk_fts(chunk_fts) VALUES('optimize');", nil, nil, nil)
+    }
 
+    private func insertAll(_ chunks: [CodeChunk], db: OpaquePointer) throws {
         for chunk in chunks {
             let upsertSQL = """
                 INSERT OR REPLACE INTO chunks(id, file_path, decl_kind, content, content_hash)
                 VALUES(?, ?, ?, ?, ?);
             """
-            var stmt: OpaquePointer?
-            sqlite3_prepare_v2(db, upsertSQL, -1, &stmt, nil)
+            let stmt = try prepare(db, upsertSQL)
             defer { sqlite3_finalize(stmt) }
             let idStr = chunk.id.uuidString
             sqlite3_bind_text(stmt, 1, idStr, -1, SQLITE_TRANSIENT)
@@ -124,15 +135,14 @@ public actor VectorStore {
             chunk.contentHash.withUnsafeBytes { ptr in
                 sqlite3_bind_blob(stmt, 5, ptr.baseAddress, Int32(chunk.contentHash.count), SQLITE_TRANSIENT)
             }
-            sqlite3_step(stmt)
+            try stepDone(db, stmt)
 
             // FTS upsert
             let ftsSQL = "INSERT OR REPLACE INTO chunk_fts(rowid, chunk_id, content) SELECT rowid, id, content FROM chunks WHERE id=?;"
-            var ftsStmt: OpaquePointer?
-            sqlite3_prepare_v2(db, ftsSQL, -1, &ftsStmt, nil)
+            let ftsStmt = try prepare(db, ftsSQL)
             defer { sqlite3_finalize(ftsStmt) }
             sqlite3_bind_text(ftsStmt, 1, idStr, -1, SQLITE_TRANSIENT)
-            sqlite3_step(ftsStmt)
+            try stepDone(db, ftsStmt)
         }
     }
 
@@ -148,8 +158,7 @@ public actor VectorStore {
             sqlite3_prepare_v2(db, "SELECT id, rowid, content FROM chunks WHERE file_path = ?;", -1, &sel, nil)
             sqlite3_bind_text(sel, 1, path, -1, SQLITE_TRANSIENT)
             while sqlite3_step(sel) == SQLITE_ROW {
-                existing[String(cString: sqlite3_column_text(sel, 0))] =
-                    (sqlite3_column_int64(sel, 1), String(cString: sqlite3_column_text(sel, 2)))
+                existing[Self.columnText(sel, 0)] = (sqlite3_column_int64(sel, 1), Self.columnText(sel, 2))
             }
             sqlite3_finalize(sel)
             for (id, row) in existing where !keep.contains(id) { deleteRow(db: db, id: id, rowid: row.rowid, content: row.content) }
@@ -179,7 +188,7 @@ public actor VectorStore {
         var stmt: OpaquePointer?
         sqlite3_prepare_v2(db, "SELECT DISTINCT file_path FROM chunks WHERE substr(file_path, 1, length(?1) + 1) = ?1 || '/';", -1, &stmt, nil)
         sqlite3_bind_text(stmt, 1, root, -1, SQLITE_TRANSIENT)
-        while sqlite3_step(stmt) == SQLITE_ROW { stored.append(String(cString: sqlite3_column_text(stmt, 0))) }
+        while sqlite3_step(stmt) == SQLITE_ROW { stored.append(Self.columnText(stmt, 0)) }
         sqlite3_finalize(stmt)
         for path in stored where !keep.contains(path) { try removeFiles(at: path) }
     }
@@ -208,17 +217,20 @@ public actor VectorStore {
 
     private func removeRows(db: OpaquePointer, where clause: String, bind: String) throws {
         try exec(db: db, sql: "BEGIN IMMEDIATE;")
-        var sel: OpaquePointer?
-        sqlite3_prepare_v2(db, "SELECT id, rowid, content FROM chunks WHERE \(clause);", -1, &sel, nil)
-        sqlite3_bind_text(sel, 1, bind, -1, SQLITE_TRANSIENT)
-        var rows: [(String, Int64, String)] = []
-        while sqlite3_step(sel) == SQLITE_ROW {
-            rows.append((String(cString: sqlite3_column_text(sel, 0)), sqlite3_column_int64(sel, 1),
-                         String(cString: sqlite3_column_text(sel, 2))))
+        do {
+            let sel = try prepare(db, "SELECT id, rowid, content FROM chunks WHERE \(clause);")
+            defer { sqlite3_finalize(sel) }
+            sqlite3_bind_text(sel, 1, bind, -1, SQLITE_TRANSIENT)
+            var rows: [(String, Int64, String)] = []
+            while sqlite3_step(sel) == SQLITE_ROW {
+                rows.append((Self.columnText(sel, 0), sqlite3_column_int64(sel, 1), Self.columnText(sel, 2)))
+            }
+            for (id, rowid, content) in rows { deleteRow(db: db, id: id, rowid: rowid, content: content) }
+            try exec(db: db, sql: "COMMIT;")
+        } catch {
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+            throw error
         }
-        sqlite3_finalize(sel)
-        for (id, rowid, content) in rows { deleteRow(db: db, id: id, rowid: rowid, content: content) }
-        try exec(db: db, sql: "COMMIT;")
     }
 
     private func deleteRow(db: OpaquePointer, id: String, rowid: Int64, content: String) {
@@ -260,21 +272,22 @@ public actor VectorStore {
 
     public func storeEmbedding(_ embedding: [Float], for chunkID: UUID, contentHash: Data) throws {
         guard let db = writeDB else { throw StoreError.openFailed("Not open") }
+        guard embedding.count == embeddingDimension else {
+            throw StoreError.queryFailed("Embedding has \(embedding.count) values; the index stores \(embeddingDimension).")
+        }
         let sql = "INSERT OR REPLACE INTO chunk_embeddings(chunk_id, embedding) VALUES(?, ?)"
-        var stmt: OpaquePointer?
-        sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        let stmt = try prepare(db, sql)
         defer { sqlite3_finalize(stmt) }
         let idStr = chunkID.uuidString
         sqlite3_bind_text(stmt, 1, idStr, -1, SQLITE_TRANSIENT)
         embedding.withUnsafeBytes { ptr in
             sqlite3_bind_blob(stmt, 2, ptr.baseAddress, Int32(MemoryLayout<Float>.stride * embedding.count), SQLITE_TRANSIENT)
         }
-        sqlite3_step(stmt)
+        try stepDone(db, stmt)
 
         // Cache
         let cacheSQL = "INSERT OR REPLACE INTO embedding_cache(content_hash, embedding, created_at) VALUES(?, ?, ?)"
-        var cacheStmt: OpaquePointer?
-        sqlite3_prepare_v2(db, cacheSQL, -1, &cacheStmt, nil)
+        let cacheStmt = try prepare(db, cacheSQL)
         defer { sqlite3_finalize(cacheStmt) }
         contentHash.withUnsafeBytes { ptr in
             sqlite3_bind_blob(cacheStmt, 1, ptr.baseAddress, Int32(contentHash.count), SQLITE_TRANSIENT)
@@ -283,7 +296,7 @@ public actor VectorStore {
             sqlite3_bind_blob(cacheStmt, 2, ptr.baseAddress, Int32(MemoryLayout<Float>.stride * embedding.count), SQLITE_TRANSIENT)
         }
         sqlite3_bind_int64(cacheStmt, 3, Int64(Date().timeIntervalSince1970))
-        sqlite3_step(cacheStmt)
+        try stepDone(db, cacheStmt)
     }
 
     public func cachedEmbedding(for contentHash: Data) -> [Float]? {
@@ -300,6 +313,7 @@ public actor VectorStore {
         let blobSize = sqlite3_column_bytes(stmt, 0)
         guard let ptr = blobPtr else { return nil }
         let count = Int(blobSize) / MemoryLayout<Float>.stride
+        guard Int(blobSize) == embeddingDimension * MemoryLayout<Float>.stride else { return nil }
         return Array(UnsafeBufferPointer(start: ptr.assumingMemoryBound(to: Float.self), count: count))
     }
 
@@ -410,10 +424,10 @@ public actor VectorStore {
     private func rows(from stmt: OpaquePointer?) -> [SearchResult] {
         var results: [SearchResult] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let idStr = String(cString: sqlite3_column_text(stmt, 0))
-            let filePath = String(cString: sqlite3_column_text(stmt, 1))
-            let declKind = String(cString: sqlite3_column_text(stmt, 2))
-            let content = String(cString: sqlite3_column_text(stmt, 3))
+            let idStr = Self.columnText(stmt, 0)
+            let filePath = Self.columnText(stmt, 1)
+            let declKind = Self.columnText(stmt, 2)
+            let content = Self.columnText(stmt, 3)
             let score = sqlite3_column_double(stmt, 4)
             if let id = UUID(uuidString: idStr) {
                 results.append(SearchResult(chunkID: id, filePath: filePath,
@@ -447,6 +461,26 @@ public actor VectorStore {
             );
         """
         try exec(db: db, sql: schema)
+    }
+
+    private func prepare(_ db: OpaquePointer, _ sql: String) throws -> OpaquePointer {
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
+            sqlite3_finalize(stmt)
+            throw StoreError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
+        return stmt
+    }
+
+    private func stepDone(_ db: OpaquePointer, _ stmt: OpaquePointer) throws {
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw StoreError.queryFailed(String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
+    /// Column text, or "" for NULL (`String(cString:)` on a NULL pointer crashes).
+    private static func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String {
+        sqlite3_column_text(stmt, index).map { String(cString: $0) } ?? ""
     }
 
     @discardableResult
