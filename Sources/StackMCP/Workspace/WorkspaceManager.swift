@@ -103,7 +103,7 @@ public actor WorkspaceManager {
         guard path != "/", path != home else { throw WorkspaceError.tooBroad(path) }
         if let existing = records.first(where: { $0.path == path }) { return existing }
         let name = URL(fileURLWithPath: path).lastPathComponent
-        var id = ExternalMCPServer.makeID(from: name)
+        var id = Self.makeID(from: name)
         let base = id; var n = 2
         while records.contains(where: { $0.id == id }) { id = "\(base)_\(n)"; n += 1 }
         let record = WorkspaceRecord(id: id, name: name, path: path)
@@ -111,6 +111,12 @@ public actor WorkspaceManager {
         try store.save(records)
         await openOne(record)
         return record
+    }
+
+    public static func makeID(from name: String) -> String {
+        let mapped = name.lowercased().map { $0.isASCII && ($0.isLetter || $0.isNumber) ? String($0) : "_" }.joined()
+        let squeezed = mapped.split(separator: "_", omittingEmptySubsequences: true).joined(separator: "_")
+        return squeezed.isEmpty ? "workspace" : String(squeezed.prefix(24))
     }
 
     public func remove(_ id: String) {

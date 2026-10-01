@@ -53,6 +53,22 @@ public enum SidecarError: Error, Equatable, LocalizedError {
     }
 }
 
+public struct KnowledgeGuidance: Sendable, Equatable {
+    public var text: String
+    public var entryIDs: [String]
+    public var isEmpty: Bool { text.isEmpty && entryIDs.isEmpty }
+    public static let empty = KnowledgeGuidance(text: "", entryIDs: [])
+
+    public init(text: String = "", entryIDs: [String] = []) {
+        self.text = text
+        self.entryIDs = entryIDs
+    }
+}
+
+public enum SignalOutcome: String, Codable, Sendable {
+    case accepted, edited, rejected
+}
+
 /// Model-assisted review of a brief. Every result is a proposal; this type never edits a brief.
 public struct BriefSidecar: Sendable {
     public typealias Generate = @Sendable ([Message]) async throws -> String

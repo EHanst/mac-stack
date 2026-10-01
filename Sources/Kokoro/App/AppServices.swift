@@ -40,8 +40,6 @@ public final class AppServices {
     private let mcpHost: MCPToolHost
     private var mcpService: MCPService?
     private var startupComplete = false
-    /// External MCP servers the user added; their tools join the model's and our own `tools/list`.
-    public let externalServers = MCPClientManager()
     /// Project folders the user added; each has its own index, git and boundary.
     public let workspaces: WorkspaceManager
     /// Saved prompts.
@@ -51,9 +49,6 @@ public final class AppServices {
     public let sidecar: BriefSidecarModel
     public let feedback: BriefFeedbackModel
     public let improve: BriefImproveModel
-    /// The sidecar model's lasting knowledge (accepted-brief history, packs) and its opt-in.
-    public let knowledge: KnowledgeModel
-    private let knowledgeStore: KnowledgeStore
     let workspaceSearch: WorkspaceSearch
     public let briefs = BriefWorkbenchModel(store: BriefStore())
     /// Prompts committed inside project folders (`.vibe/prompts`); usable only after the user approves each.
@@ -61,7 +56,6 @@ public final class AppServices {
     public let requestLog = RequestLog(fileURL: RequestLog.defaultURL())
     public let diagnostics: DiagnosticsModel
     public let workspacesModel: WorkspacesModel
-    public let externalServersModel: ExternalServersModel
     private let logger = Logger(subsystem: "com.vibecockpit", category: "AppServices")
     private var reindexTask: Task<Void, Never>?
 
@@ -102,16 +96,7 @@ public final class AppServices {
             projectPrompts: projectPrompts,
             defaults: defaults)
         let studio = self.promptStudio
-        let knowledgeStore = KnowledgeStore(
-            dbURL: KnowledgeStore.defaultURL(), dimension: LocalEmbedder.Config.bgeSmall.dimension,
-            embedder: KnowledgeEmbedder(
-                documents: { texts in try await AppServices.localEmbedder(in: registry).embed(texts) },
-                query: { text in try await AppServices.localEmbedder(in: registry).embedQuery(text) }))
-        self.knowledgeStore = knowledgeStore
-        let knowledge = KnowledgeModel(store: knowledgeStore)
-        self.knowledge = knowledge
-        let retriever = knowledge.retriever
-        let briefSidecar = BriefSidecar(guidance: { brief, _ in await retriever.guidance(for: brief) }) { messages in
+        let briefSidecar = BriefSidecar { messages in
             // Room for the reply too; a request the local model can't hold fails with a sentence, not a stack.
             if let limit = await inference.localContextLimit(),
                InferenceService.estimateTokens(messages) + BriefSidecar.generationOptions.maxTokens > limit {
@@ -131,23 +116,17 @@ public final class AppServices {
         self.feedback = BriefFeedbackModel(sidecar: briefSidecar, workbench: self.briefs)
         self.improve = BriefImproveModel(sidecar: briefSidecar, workbench: self.briefs)
         let briefModel = self.briefs
-        briefModel.onBriefAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }
-        self.sidecar.onAccepted = { brief in Task { await knowledge.noteAccepted(brief) } }
-        self.sidecar.onSignal = { ids, outcome in Task { await knowledge.noteSignal(ids: ids, outcome: outcome) } }
-        Task { await knowledge.refresh(); await knowledgeStore.reembedMissing() }
-        let externals = externalServers, requestLog = self.requestLog, governor = self.governor
+        let requestLog = self.requestLog, governor = self.governor
         self.diagnostics = DiagnosticsModel(log: requestLog) {
             try await AppServices.makeSupportBundle(
                 registry: registry, egress: gate, governor: governor, inference: inference,
-                externals: externals, workspaces: workspaces, requestLog: requestLog)
+                workspaces: workspaces, requestLog: requestLog)
         }
         self.workspacesModel = WorkspacesModel(manager: workspaces)
         let toolGate = ToolGate(memory: memory, approver: approvals)
         let host = MCPToolHost(inference: inference, gate: toolGate)
         self.mcpHost = host
-        self.externalServersModel = ExternalServersModel(manager: externals)
         Task {
-            await host.setExternalTools { await externals.tools() }
             await host.setProjectTools { await workspaces.tools() }
             await host.setWorkspaceOpener { try await workspaces.add($0) }
             // Other apps see your own prompts plus project prompts you approved; nothing else.
@@ -235,7 +214,6 @@ public final class AppServices {
 
         // Other apps may ask for models as soon as the server is up, so start it once they're registered.
         await sharing.startIfEnabled()
-        await externalServers.startAll()
         await startGovernor()
 
         let providers = await registry.allProviders(with: .textGeneration)
@@ -351,7 +329,7 @@ public final class AppServices {
     /// The support bundle: facts and timings only (see `SupportBundleInput`).
     nonisolated static func makeSupportBundle(
         registry: ModelRegistry, egress: EgressGate, governor: SystemGovernor, inference: InferenceService,
-        externals: MCPClientManager, workspaces: WorkspaceManager, requestLog: RequestLog
+        workspaces: WorkspaceManager, requestLog: RequestLog
     ) async throws -> Data {
         let info = Bundle.main.infoDictionary ?? [:]
         var size = 0
@@ -374,7 +352,6 @@ public final class AppServices {
             egress: await egress.entries,
             tokensThisMonth: await egress.tokensThisMonth,
             monthlyTokenCap: await egress.monthlyTokenCap,
-            externalServers: await externals.list.map { .init(name: $0.server.name, status: ExternalServersModel.statusText($0.status)) },
             projectCount: await workspaces.list.count,
             crashReports: reports)
         return try SupportBundle.make(input)
@@ -429,18 +406,11 @@ public final class AppServices {
         }
     }
 
-    /// The installed offline embedder, or `noEmbedder` when there isn't one yet.
-    private static func localEmbedder(in registry: ModelRegistry) async throws -> LocalEmbedder {
-        guard let e = await registry.allProviders.compactMap({ $0 as? LocalEmbedder }).first else { throw KnowledgeError.noEmbedder }
-        return e
-    }
-
     /// Offline embeddings (bge-small) if installed; shares the GPU scheduler. Safe to call twice.
     private func registerEmbedderIfInstalled() async {
         let embedder = LocalEmbedder(scheduler: gpuScheduler)
         guard await embedder.isInstalled, await registry.provider(id: embedder.id) == nil else { return }
         await registry.register(embedder)
-        await knowledgeStore.reembedMissing()
         for provider in await registry.allProviders(with: .textGeneration) {
             await (provider as? LocalMLXProvider)?.reserveMemory(bytes: LocalEmbedder.residentBytesEstimate)
         }
