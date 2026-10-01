@@ -55,12 +55,15 @@ private final class DeclarationVisitor: SyntaxVisitor {
     var chunks: [CodeChunk] = []
     let source: String
     let filePath: String
-    let lines: [Substring]
+    /// UTF-8 offset where each line starts; SwiftSyntax positions are UTF-8 offsets.
+    let lineStarts: [Int]
 
     init(source: String, filePath: String) {
         self.source = source
         self.filePath = filePath
-        self.lines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        var starts = [0]
+        for (offset, byte) in source.utf8.enumerated() where byte == 0x0A { starts.append(offset + 1) }
+        self.lineStarts = starts
         super.init(viewMode: .sourceAccurate)
     }
 
@@ -118,9 +121,9 @@ private final class DeclarationVisitor: SyntaxVisitor {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        // Estimate line numbers from source position
-        let startOffset = node.position.utf8Offset
-        let endOffset = node.endPosition.utf8Offset
+        // 1-based lines of the declaration itself (without leading comments or blank lines)
+        let startOffset = node.positionAfterSkippingLeadingTrivia.utf8Offset
+        let endOffset = node.endPositionBeforeTrailingTrivia.utf8Offset
         let startLine = lineNumber(at: startOffset)
         let endLine = lineNumber(at: endOffset)
 
@@ -133,15 +136,13 @@ private final class DeclarationVisitor: SyntaxVisitor {
         ))
     }
 
+    /// 1-based line holding `utf8Offset`: the last line that starts at or before it.
     private func lineNumber(at utf8Offset: Int) -> Int {
-        var count = 0
-        var current = 0
-        for line in lines {
-            let lineLen = line.utf8.count + 1 // +1 for newline
-            if current + lineLen > utf8Offset { return count + 1 }
-            current += lineLen
-            count += 1
+        var low = 0, high = lineStarts.count
+        while low < high {
+            let mid = (low + high) / 2
+            if lineStarts[mid] <= utf8Offset { low = mid + 1 } else { high = mid }
         }
-        return count + 1
+        return max(low, 1)
     }
 }
