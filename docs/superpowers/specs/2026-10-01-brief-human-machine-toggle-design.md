@@ -15,7 +15,7 @@ Replace the Brief panel's Preview/Edit tabs with one always-editable markdown ed
 `renderCompact` takes the target's `ModelPromptProfile.structure`:
 - `.xmlTags`: `<task>…</task>`, `<file p="path">…</file>`, `<ref p="path"/>`. No legend line.
 - `.markdown`: `# task`, `# file <path>` with fenced blocks, terse list for requirements. No legend line.
-- `.plainNumbered`: current `#FMT/#TASK/#FILE/#REF` markers, constraints numbered.
+- `.plainNumbered`: current `#FMT/#TASK/#FILE/#REF` markers, unchanged.
 Shared and unchanged: redaction, budget downgrade/drop, warnings, `compactProse`, fence passthrough, `</file` neutralization (applied in the XML form), one-line paths.
 Machine is derived only; there is no reverse parsing.
 
