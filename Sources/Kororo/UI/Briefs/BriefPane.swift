@@ -12,8 +12,7 @@ struct BriefPane: View {
     @Environment(AppServices.self) private var services
     private enum CopyKind: String { case machine, standard }
     @State private var copied: CopyKind?
-    private enum ViewMode: String { case preview = "Preview", markdown = "Edit" }
-    @AppStorage("brief.viewMode") private var viewModeStorage: String = ViewMode.preview.rawValue
+    @AppStorage("brief.viewMode") private var viewModeStorage: String = BriefViewMode.human.rawValue
     @State private var showVersions = false
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?
@@ -22,8 +21,8 @@ struct BriefPane: View {
     private var model: BriefWorkbenchModel { services.briefs }
     private var improve: BriefImproveModel { services.improve }
 
-    private var viewMode: ViewMode {
-        get { ViewMode(rawValue: viewModeStorage) ?? .preview }
+    private var viewMode: BriefViewMode {
+        get { BriefViewMode.from(stored: viewModeStorage) }
         nonmutating set { viewModeStorage = newValue.rawValue }
     }
 
@@ -72,7 +71,8 @@ struct BriefPane: View {
 
     private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
         let empty = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let compactTokens = BriefCompiler.compile(brief, compact: true).tokens
+        let compact = BriefCompiler.compile(brief, compact: true)
+        let compactTokens = compact.tokens
         let savings = TokenSavings.percent(plain: compiled.tokens, compact: compactTokens)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -81,7 +81,7 @@ struct BriefPane: View {
                     get: { viewMode },
                     set: { viewMode = $0 }
                 )) {
-                    ForEach([ViewMode.preview, .markdown], id: \.self) { Text($0.rawValue).tag($0) }
+                    ForEach(BriefViewMode.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 Text("Machine copy ~\(compactTokens) tokens (saves \(savings)%)")
@@ -91,16 +91,16 @@ struct BriefPane: View {
                     .disabled(empty)
                     .keyboardShortcut("i", modifiers: [.command, .shift])
             }
-            if viewMode == .preview {
+            if viewMode == .machine {
+                Text(BriefViewMode.machineCaption(for: brief.target))
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 ScrollView {
-                    if empty {
-                        Text("Nothing to show yet.").font(.mtBodyMedium).foregroundStyle(Color.mtOnSurfaceVariant)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        MarkdownText(text: brief.effectiveBody)
-                    }
+                    Text(empty ? "Nothing to show yet." : compact.text)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(16)
+                .padding(10)
                 .frame(minHeight: 200, maxHeight: .infinity)
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: 8))

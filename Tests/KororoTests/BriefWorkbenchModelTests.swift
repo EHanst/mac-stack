@@ -42,6 +42,15 @@ struct BriefWorkbenchModelTests {
         #expect(await store.all().first?.input == "edit 19")
     }
 
+    @Test("copy for machine is exactly the compiled machine text the panel shows")
+    func machineCopyMatchesView() async throws {
+        let (m, _) = make()
+        await m.newBrief(title: "t")
+        m.setInput("## Goal\n\nFix the **login** timeout.")
+        let brief = try #require(m.selected)
+        #expect(m.copyText(for: nil, compact: true) == BriefCompiler.compile(brief, compact: true).text)
+    }
+
     @Test("empty goal warns and copy text is empty")
     func emptyInput() async {
         let (m, _) = make()
