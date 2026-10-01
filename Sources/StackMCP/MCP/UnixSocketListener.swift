@@ -3,6 +3,38 @@ import Foundation
 import Logging
 import MCP
 
+/// Repeats a system call that was interrupted by a signal (`EINTR`); any other result is returned.
+func retryingOnEINTR(_ call: () -> Int) -> Int {
+    while true {
+        let n = call()
+        if n < 0, errno == EINTR { continue }
+        return n
+    }
+}
+
+/// Splits a byte stream into newline-terminated messages. A message still waiting for its newline
+/// may not grow past `maxLineBytes`, so a client that never sends one cannot exhaust memory.
+struct NewlineSplitter {
+    struct Result { var lines: [Data]; var overflow: Bool }
+
+    let maxLineBytes: Int
+    private var pending: [UInt8] = []
+
+    init(maxLineBytes: Int = 8 * 1024 * 1024) { self.maxLineBytes = maxLineBytes }
+
+    mutating func feed(_ bytes: [UInt8]) -> Result {
+        pending.append(contentsOf: bytes)
+        var lines: [Data] = []
+        var start = 0
+        while let end = pending[start...].firstIndex(of: 0x0A) {
+            if end > start { lines.append(Data(pending[start..<end])) }
+            start = end + 1
+        }
+        if start > 0 { pending.removeFirst(start) }
+        return Result(lines: lines, overflow: pending.count > maxLineBytes)
+    }
+}
+
 /// One accepted connection on the MCP socket, as an MCP `Transport` (newline-delimited JSON).
 public actor SocketConnectionTransport: Transport {
 
@@ -56,17 +88,14 @@ public actor SocketConnectionTransport: Transport {
         started = true
         let descriptor = self.descriptor, continuation = self.continuation
         Thread.detachNewThread {
-            var pending = Data()
+            var splitter = NewlineSplitter()
             var chunk = [UInt8](repeating: 0, count: 16 * 1024)
             while true {
-                let n = chunk.withUnsafeMutableBufferPointer { Darwin.read(descriptor.fd, $0.baseAddress!, $0.count) }
+                let n = retryingOnEINTR { chunk.withUnsafeMutableBufferPointer { Darwin.read(descriptor.fd, $0.baseAddress!, $0.count) } }
                 if n <= 0 { break }
-                pending.append(contentsOf: chunk[..<n])
-                while let idx = pending.firstIndex(of: 0x0A) {
-                    let line = pending[..<idx]
-                    if !line.isEmpty { continuation.yield(Data(line)) }
-                    pending = Data(pending[pending.index(after: idx)...])
-                }
+                let result = splitter.feed(Array(chunk[..<n]))
+                for line in result.lines { continuation.yield(line) }
+                if result.overflow { break }
             }
             continuation.finish()
             descriptor.close()
@@ -88,7 +117,7 @@ public actor SocketConnectionTransport: Transport {
                 defer { descriptor.endWrite() }
                 var offset = 0
                 while offset < payload.count {
-                    let n = payload.withUnsafeBytes { Darwin.write(descriptor.fd, $0.baseAddress! + offset, payload.count - offset) }
+                    let n = retryingOnEINTR { payload.withUnsafeBytes { Darwin.write(descriptor.fd, $0.baseAddress! + offset, payload.count - offset) } }
                     if n <= 0 { cont.resume(throwing: UnixSocketListener.ListenerError.notConnected); return }
                     offset += n
                 }
