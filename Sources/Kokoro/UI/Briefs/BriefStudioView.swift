@@ -13,6 +13,7 @@ struct BriefStudioView: View {
     @State private var draft = ""
     @State private var continuing = false
     @State private var showFix = false
+    @State private var showBrainstorm = false
     @FocusState private var inputFocused: Bool
 
     private var model: BriefWorkbenchModel { services.briefs }
@@ -29,14 +30,6 @@ struct BriefStudioView: View {
             topBar
             continuationStatus
             MTDivider()
-            if !fresh {
-                // Same place as the Improve workspace's strip, so suggestions never change position.
-                CappedScroll(maxHeight: 150) { BrainstormBanner { question in
-                    draft = "On “\(question)”: "
-                    inputFocused = true
-                } }
-                    .padding(.horizontal, 16).padding(.top, 8)
-            }
             if fresh { welcome } else { BriefPane() }
             MTDivider()
             BriefInputBar(text: $draft, fresh: fresh, focused: $inputFocused)
@@ -113,11 +106,32 @@ struct BriefStudioView: View {
                 .popover(isPresented: $showFix, arrowEdge: .bottom) {
                     ScrollView { SidecarRailView().padding(14) }.frame(width: 460, height: 340)
                 }
+            if !fresh {
+                Button { showBrainstorm = true } label: {
+                    Label(brainstormLabel, systemImage: "lightbulb")
+                }
+                .popover(isPresented: $showBrainstorm, arrowEdge: .bottom) {
+                    ScrollView {
+                        BrainstormBanner { question in
+                            showBrainstorm = false
+                            draft = "On “\(question)”: "
+                            inputFocused = true
+                        }
+                    }
+                    .frame(width: 460, height: 300)
+                }
+                BrainstormAutoRefresh()
+            }
             Spacer()
             Button { startOver() } label: { Label("Start over", systemImage: "arrow.counterclockwise") }
                 .help("Clear everything so what you type next starts a new brief")
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
+    }
+
+    private var brainstormLabel: String {
+        let count = services.feedback.questions.count + services.feedback.tips.count
+        return count > 0 ? "Brainstorm (\(count))" : "Brainstorm"
     }
 
     private var welcome: some View {
@@ -171,11 +185,17 @@ struct BriefInputBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if editing && !optimizerRunning {
-                HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Editing…").font(.mtBodySmall) }
-            } else if let failure {
-                Text(failure).font(.mtBodySmall).foregroundStyle(Color.mtError)
+            // Always present, so the field never moves when an edit starts or fails.
+            Group {
+                if editing && !optimizerRunning {
+                    HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Editing…").font(.mtBodySmall) }
+                } else if let failure {
+                    Text(failure).font(.mtBodySmall).foregroundStyle(Color.mtError).lineLimit(2)
+                } else {
+                    Text(" ").font(.mtBodySmall)
+                }
             }
+            .frame(minHeight: 16, alignment: .leading)
             HStack(alignment: .bottom, spacing: 8) {
                 Button { attach() } label: { Image(systemName: "paperclip").font(.system(size: 18)) }
                     .buttonStyle(.plain)

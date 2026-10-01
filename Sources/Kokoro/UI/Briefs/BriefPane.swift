@@ -32,29 +32,18 @@ struct BriefPane: View {
             VStack(alignment: .leading, spacing: 12) {
                 targetPicker(brief)
                 meter(brief, compiled)
-                if improve.presentedBriefID == brief.id {
+                let improving = improve.presentedBriefID == brief.id
+                if improving {
                     ImproveInlineView(brief: brief)
                 } else {
                     editor(brief, compiled: compiled)
                 }
-                CappedScroll(maxHeight: 160) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        attachmentsFooter(brief)
-                        ForEach(Array(compiled.warnings.enumerated()), id: \.offset) { _, w in
-                            Label(w.message, systemImage: "exclamationmark.triangle")
-                                .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                        }
-                    }
+                statusLine(brief, compiled)
+                // Same slot either way: Copy and Save while editing, Save and Discard while improving.
+                Group {
+                    if improving { ImproveActionBar() } else { copyBar }
                 }
-                copyBar
-                if let copyNote {
-                    Text(copyNote)
-                        .font(.mtBodySmall)
-                        .foregroundStyle(Color.mtOnSurfaceVariant)
-                }
-                if let exportMessage {
-                    Text(exportMessage).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                }
+                .frame(minHeight: 30)
             }
             .padding(16)
             .sheet(isPresented: $showVersions) {
@@ -102,6 +91,7 @@ struct BriefPane: View {
                     .disabled(empty)
                     .keyboardShortcut("i", modifiers: [.command, .shift])
             }
+            .frame(height: 28)
             Group {
                 if viewMode == .json {
                     ScrollView {
@@ -141,29 +131,24 @@ struct BriefPane: View {
         }
     }
 
-    @ViewBuilder
-    private func attachmentsFooter(_ brief: Brief) -> some View {
+    /// One reserved line for attachments, warnings and the last copy or save result, so none of
+    /// them ever moves the brief. Attachments are managed from the paperclip.
+    private func statusLine(_ brief: Brief, _ compiled: CompiledPrompt) -> some View {
         let included = brief.contextItems.filter(\.included)
-        if !included.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Attachments").font(.mtLabelSmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                ForEach(included) { item in
-                    HStack {
-                        Text("\(item.ref) (~\(item.tokens) tokens)")
-                            .font(.mtBodySmall)
-                            .foregroundStyle(Color.mtOnSurfaceVariant)
-                        Spacer()
-                        Toggle(item.mode == .inline ? "inline" : "by path", isOn: Binding(
-                            get: { item.mode == .inline },
-                            set: { model.setContextMode($0 ? .inline : .reference, id: item.id) }
-                        ))
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .disabled(item.ref.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                }
+        let attachments = included.isEmpty ? nil
+            : "\(included.count) attachment\(included.count == 1 ? "" : "s"), about \(included.reduce(0) { $0 + $1.tokens }.formatted()) tokens"
+        let warning = compiled.warnings.first?.message
+        let text = copyNote ?? exportMessage ?? warning ?? attachments ?? " "
+        return Label {
+            Text(text).lineLimit(1).truncationMode(.tail)
+        } icon: {
+            if copyNote == nil && exportMessage == nil && warning != nil {
+                Image(systemName: "exclamationmark.triangle")
             }
         }
+        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+        .frame(maxWidth: .infinity, minHeight: 16, alignment: .leading)
+        .help(compiled.warnings.map(\.message).joined(separator: "\n"))
     }
 
     private func targetPicker(_ brief: Brief) -> some View {

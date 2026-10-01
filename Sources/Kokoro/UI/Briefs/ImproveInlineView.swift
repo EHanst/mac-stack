@@ -27,9 +27,9 @@ struct ImproveInlineView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            topRow
-            notice
-            Group {
+            topRow.frame(height: 28)
+            VStack(alignment: .leading, spacing: 8) {
+                notice
                 switch improve.optimizerPhase {
                 case .running(let partial): runningBox(partial)
                 default: revisionBox
@@ -39,7 +39,6 @@ struct ImproveInlineView: View {
             .frame(minHeight: 200, maxHeight: .infinity)
             .background(Color.mtSurfaceContainerHighest)
             .clipShape(RoundedRectangle(cornerRadius: 8))
-            actionRow
         }
         .onChange(of: studio.phase) { _, phase in improve.receiveOptimizerPhase(phase) }
         .onAppear {
@@ -231,12 +230,30 @@ struct ImproveInlineView: View {
         acceptedChanges = Set(diffs.map(\.id))
     }
 
-    // MARK: Actions
+    private var isRunning: Bool {
+        if case .running = improve.optimizerPhase { return true }
+        return false
+    }
 
-    @ViewBuilder
-    private var actionRow: some View {
-        if !isRunning {
-            HStack {
+    private static func modelLabel(_ id: String) -> String {
+        id.hasPrefix("local:") ? String(id.dropFirst(6)) + " (on this Mac)" : id + " (cloud)"
+    }
+}
+
+/// The Improve buttons, shown in the slot where Copy and Save normally sit.
+struct ImproveActionBar: View {
+    @Environment(AppServices.self) private var services
+    private var improve: BriefImproveModel { services.improve }
+    private var studio: PromptStudioModel { services.promptStudio }
+
+    private var isRunning: Bool {
+        if case .running = improve.optimizerPhase { return true }
+        return false
+    }
+
+    var body: some View {
+        HStack {
+            if !isRunning {
                 Button("Discard") { improve.keepMine() }.buttonStyle(MTTextButtonStyle())
                     .help("Close without saving. The brief stays exactly as it was.")
                 Button("Expand") { improve.expand(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
@@ -250,17 +267,10 @@ struct ImproveInlineView: View {
                     .help("Save this version as the brief and close")
                     .keyboardShortcut(.defaultAction)
                     .disabled(improve.revision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } else {
+                Spacer()
             }
         }
-    }
-
-    private var isRunning: Bool {
-        if case .running = improve.optimizerPhase { return true }
-        return false
-    }
-
-    private static func modelLabel(_ id: String) -> String {
-        id.hasPrefix("local:") ? String(id.dropFirst(6)) + " (on this Mac)" : id + " (cloud)"
     }
 }
 #endif
