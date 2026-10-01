@@ -66,7 +66,7 @@ extension OpenAIError {
             return OpenAIError(status: status, message: status == 413 ? "The request body is too large." : e.status.reasonPhrase,
                                type: "invalid_request_error", code: status == 413 ? "request_too_large" : nil)
         default:
-            return .server("Something went wrong inside Kokoro while handling this request.")
+            return .server("Something went wrong inside Kororo while handling this request.")
         }
     }
 

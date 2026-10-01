@@ -561,7 +561,7 @@ public actor LocalMLXProvider: ModelProvider {
 
         cfg["tokenizer_class"] = "Qwen2Tokenizer"
         let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("kokoro-tokenizer-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("kororo-tokenizer-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         for name in ["tokenizer.json", "config.json"] {

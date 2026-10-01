@@ -338,9 +338,9 @@ public struct PromptOptimizer: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// The closing tag is neutralised inside the text so it can't end the fence early.
+    /// Tags of ours inside the text are neutralised so it can't end the fence early or forge another.
     static func wrapDraft(_ text: String) -> String {
-        let safe = text.replacingOccurrences(of: "</draft", with: "<\u{200B}/draft", options: .caseInsensitive)
+        let safe = UntrustedContent.neutralise(text)
         return "<draft>\n\(safe)\n</draft>"
     }
 

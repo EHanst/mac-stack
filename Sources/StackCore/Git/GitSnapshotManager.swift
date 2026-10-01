@@ -159,7 +159,7 @@ public actor GitSnapshotManager {
 
         // Signature
         var sig: UnsafeMutablePointer<git_signature>?
-        git_signature_now(&sig, "VibeCockpit", "snapshot@vibecockpit.local")
+        git_signature_now(&sig, "Kororo", "snapshot@kororo.local")
         defer { git_signature_free(sig) }
 
         // Parent commit (HEAD)

@@ -36,3 +36,7 @@ credentials.json
 # Built by scripts/build-libgit2.sh
 Vendor/
 .mcp.json
+
+# Coverage
+*.profraw
+*.profdata

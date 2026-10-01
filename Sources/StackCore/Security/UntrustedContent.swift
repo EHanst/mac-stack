@@ -22,11 +22,19 @@ public final class UntrustedContext: @unchecked Sendable {
 }
 
 public enum UntrustedContent {
+    /// Every tag the app uses to mark data. Text from outside must not be able to open or close any of them.
+    public static let ownTags = ["untrusted", "brief", "attached", "draft", "questions", "findings", "tips", "reply", "revision", "guidance", "instruction"]
+
+    /// Breaks any tag of ours inside outside text, so it can neither close its fence nor forge another.
+    public static func neutralise(_ text: String) -> String {
+        text.replacingOccurrences(of: "<(\\s*/?\\s*)(\(ownTags.joined(separator: "|")))\\b", with: "<\u{200B}$1$2",
+                                  options: [.regularExpression, .caseInsensitive])
+    }
+
     /// Fences untrusted text so the model (and a reader of the transcript) can tell it from the
-    /// user's own words. The closing tag is neutralised inside the text so it can't end the fence early.
+    /// user's own words.
     public static func wrap(_ text: String, source: String) -> String {
-        let safe = text.replacingOccurrences(of: "</untrusted", with: "<\u{200B}/untrusted", options: .caseInsensitive)
-        return "<untrusted source=\"\(source)\">\n\(safe)\n</untrusted>"
+        "<untrusted source=\"\(source)\">\n\(neutralise(text))\n</untrusted>"
     }
 
     /// Added to the system prompt wherever tools can bring in outside text.

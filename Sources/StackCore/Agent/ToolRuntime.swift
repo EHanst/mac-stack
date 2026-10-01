@@ -3,7 +3,7 @@ import Foundation
 public actor ToolRuntime {
 
     private let boundary: WorkspaceBoundary
-    private let buildRunner: XPCBuildRunner
+    private let buildRunner: BuildRunner
     private let gitManager: GitSnapshotManager
     private let pipeline: IndexingPipeline
     private var activeTasks: [OperationID: Task<Void, Error>] = [:]
@@ -12,7 +12,7 @@ public actor ToolRuntime {
 
     public init(
         boundary: WorkspaceBoundary,
-        buildRunner: XPCBuildRunner,
+        buildRunner: BuildRunner,
         gitManager: GitSnapshotManager,
         pipeline: IndexingPipeline
     ) {

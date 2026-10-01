@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Soak test: three clients hammer a running VibeCockpit while RSS and open files are sampled.
+"""Soak test: three clients hammer a running Kororo while RSS and open files are sampled.
 
   python3 scripts/soak.py --minutes 5            # short run
   python3 scripts/soak.py --hours 24 --out ~/soak # the release run
@@ -21,8 +21,8 @@ import statistics, subprocess, sys, tempfile, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APP = "/tmp/vibe-build/Build/Products/Debug/VibeCockpit.app/Contents/MacOS/VibeCockpit"
-VIBE_MCP = os.path.join(ROOT, ".build/debug/vibe-mcp")
+APP = "/tmp/kororo-build/Build/Products/Debug/Kororo.app/Contents/MacOS/Kororo"
+KORORO_MCP = os.path.join(ROOT, ".build/debug/kororo-mcp")
 STUB_PORT, API_PORT = 18779, 18081
 
 
@@ -62,7 +62,7 @@ class Counter:
 
 class MCPSocket:
     def __init__(self, sock, name):
-        self.p = subprocess.Popen([VIBE_MCP, "--socket", sock], stdin=subprocess.PIPE,
+        self.p = subprocess.Popen([KORORO_MCP, "--socket", sock], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         self.n = 0
         self.call("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -168,16 +168,16 @@ def main():
     a = ap.parse_args()
     seconds = a.hours * 3600 + a.minutes * 60
     if seconds <= 0: ap.error("give --minutes or --hours")
-    for path in (APP, VIBE_MCP):
-        if not os.path.exists(path): sys.exit(f"missing {path} - build it first (see the run-vibecockpit skill / swift build)")
+    for path in (APP, KORORO_MCP):
+        if not os.path.exists(path): sys.exit(f"missing {path} - build it first (see the run-kororo skill / swift build)")
     os.makedirs(a.out, exist_ok=True)
 
-    home = tempfile.mkdtemp(prefix="vibesoak-")
+    home = tempfile.mkdtemp(prefix="kororosoak-")
     token = "vc_" + secrets.token_urlsafe(32)
     support = f"{home}/Library/Application Support/VibeCockpit"
     os.makedirs(support); os.makedirs(f"{home}/Library/Preferences"); os.makedirs(f"{home}/.config/vibecockpit")
     json.dump([{"id": "stubcloud", "baseURL": f"http://127.0.0.1:{STUB_PORT}/v1", "modelIdentifier": "stub-model",
-                "capabilities": 9, "apiStyle": "openAIChat", "envVarKey": "VIBECOCKPIT_STUBCLOUD_TOKEN"}],
+                "capabilities": 9, "apiStyle": "openAIChat", "envVarKey": "KORORO_STUBCLOUD_TOKEN"}],
               open(f"{home}/.config/vibecockpit/providers.json", "w"))
     plistlib.dump({"routingPolicy": "localFirst", "apiSharingEnabled": True, "apiSharingPort": API_PORT},
                   open(f"{home}/Library/Preferences/com.vibecockpit.app.plist", "wb"))
@@ -190,7 +190,7 @@ def main():
     stub = ThreadingHTTPServer(("127.0.0.1", STUB_PORT), Stub)
     threading.Thread(target=stub.serve_forever, daemon=True).start()
 
-    env = dict(os.environ, CFFIXED_USER_HOME=home, VIBECOCKPIT_STUBCLOUD_TOKEN="throwaway")
+    env = dict(os.environ, CFFIXED_USER_HOME=home, KORORO_STUBCLOUD_TOKEN="throwaway")
     app = subprocess.Popen([APP, "-routingPolicy", "localFirst", "-apiSharingEnabled", "YES",
                             "-apiSharingPort", str(API_PORT)], env=env,
                            stdout=open(f"{a.out}/app.log", "w"), stderr=subprocess.STDOUT)

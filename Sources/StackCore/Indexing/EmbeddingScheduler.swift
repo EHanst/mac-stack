@@ -24,11 +24,13 @@ public actor EmbeddingScheduler {
     }
 
     public func drain() async throws {
-        try await activeBatchTask?.value
-        // drain any remaining pending batches
+        // A finished batch starts the next one before its task completes, so wait until none is active.
+        while let task = activeBatchTask {
+            try await task.value
+        }
         while !pending.isEmpty {
             kickoff()
-            try await activeBatchTask?.value
+            while let task = activeBatchTask { try await task.value }
         }
     }
 

@@ -135,14 +135,8 @@ public struct BriefSidecar: Sendable {
     }
     private static let redactMargin = 4_096
 
-    private static let ownTags = ["brief", "attached", "questions", "findings", "tips", "reply", "revision", "guidance", "instruction"]
-        .joined(separator: "|")
-
     /// Breaks any tag of ours inside user text, so it can neither close the fence nor forge a reply.
-    static func fence(_ text: String) -> String {
-        text.replacingOccurrences(of: "<(\\s*/?\\s*)(\(ownTags))\\b", with: "<\u{200B}$1$2",
-                                  options: [.regularExpression, .caseInsensitive])
-    }
+    static func fence(_ text: String) -> String { UntrustedContent.neutralise(text) }
 
     private static func bulletBody(_ line: Substring) -> String? {
         var s = line.trimmingCharacters(in: .whitespaces)

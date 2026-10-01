@@ -28,7 +28,7 @@ public enum EgressError: LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .blockedByPrivacy(let host):
-            "Blocked: Kokoro is set to \"Only on this Mac\", so nothing was sent to \(host)."
+            "Blocked: Kororo is set to \"Only on this Mac\", so nothing was sent to \(host)."
         case .budgetExhausted(let used, let cap):
             "The monthly cloud limit is reached (\(used.formatted()) of \(cap.formatted()) tokens). Raise it in Settings or wait until next month."
         }

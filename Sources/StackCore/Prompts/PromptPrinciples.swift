@@ -1,8 +1,8 @@
 import Foundation
 
 /// The prompt-engineering rules every prompt in the app follows. One constant block, so it can sit in a
-/// system prompt without changing between turns (the local prefix cache needs that), and so the chat
-/// assistant, the optimizer and the lint all teach the same thing. Change it in one pass: any edit
+/// system prompt without changing between turns (the local prefix cache needs that), and so the sidecar,
+/// the optimizer and the lint all teach the same thing. Change it in one pass: any edit
 /// invalidates every cached prefix that includes it.
 public enum PromptPrinciples {
 

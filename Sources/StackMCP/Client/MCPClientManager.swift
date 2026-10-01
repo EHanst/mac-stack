@@ -169,7 +169,7 @@ public actor MCPClientManager {
         let transport = StdioTransport(
             input: FileDescriptor(rawValue: outPipe.fileHandleForReading.fileDescriptor),
             output: FileDescriptor(rawValue: inPipe.fileHandleForWriting.fileDescriptor))
-        let client = Client(name: "VibeCockpit", version: "1.0.0")
+        let client = Client(name: "Kororo", version: "1.0.0")
         // Whichever comes first wins: the tool list, the 20 s timeout, or the program exiting.
         // (A task group would wait for a dead server's request that never completes.)
         let tools: [ExternalMCPTool]
