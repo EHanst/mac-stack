@@ -12,7 +12,7 @@ struct MarkdownText: View {
 
     var body: some View {
         let blocks = MarkdownBlocks.parse(text)
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
@@ -28,32 +28,10 @@ struct MarkdownText: View {
             Text(attributed(text))
                 .font(headingFont(for: level))
                 .foregroundStyle(level >= 3 ? Color.mtOnSurfaceVariant : Color.mtOnSurface)
+                .padding(.top, level <= 2 ? 8 : 4)
 
-        case .bullet(let items):
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(items.indices, id: \.self) { i in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("•").font(.mtBodyMedium)
-                        Text(attributed(items[i]))
-                            .font(.mtBodyMedium)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-
-        case .numbered(let items):
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(items.indices, id: \.self) { i in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text("\(i + 1).")
-                            .font(.mtBodyMedium)
-                            .foregroundStyle(Color.mtOnSurfaceVariant)
-                        Text(attributed(items[i]))
-                            .font(.mtBodyMedium)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
+        case .list(let items):
+            listView(items, depth: 0)
 
         case .code(let language, let code):
             VStack(alignment: .leading, spacing: 4) {
@@ -86,15 +64,43 @@ struct MarkdownText: View {
         case .paragraph(let text):
             Text(attributed(text))
                 .font(.mtBodyMedium)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
+    private func listView(_ items: [MarkdownListItem], depth: Int) -> AnyView {
+        let bullets = ["•", "◦", "▪"]
+        return AnyView(
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(items.indices, id: \.self) { i in
+                    let item = items[i]
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(item.ordered ? "\(item.number)." : bullets[min(depth, 2)])
+                                .font(.mtBodyMedium.monospacedDigit())
+                                .foregroundStyle(item.ordered ? Color.mtOnSurfaceVariant : Color.mtOnSurfaceVariant.opacity(0.8))
+                                .frame(minWidth: item.ordered ? 22 : 12, alignment: .trailing)
+                            Text(attributed(item.text))
+                                .font(.mtBodyMedium)
+                                .lineSpacing(3)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if !item.children.isEmpty {
+                            listView(item.children, depth: depth + 1)
+                                .padding(.leading, 26)
+                        }
+                    }
+                }
+            }
+        )
+    }
+
     private func headingFont(for level: Int) -> Font {
         switch level {
-        case 1: return .mtTitleMedium
-        case 2: return .mtLabelLarge
-        default: return .mtLabelLarge
+        case 1: return AppTypography.font(size: 20, weight: .semibold)
+        case 2: return AppTypography.font(size: 17, weight: .semibold)
+        default: return AppTypography.font(size: 14, weight: .semibold)
         }
     }
 

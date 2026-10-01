@@ -36,25 +36,38 @@ struct MainLayout: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
     @State private var selectedDestination: NavDestination = .briefs
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
     /// Re-identifies the panels when the font changes so every `Font.mt*` is re-read.
     @AppStorage(AppFont.storageKey) private var fontChoice = AppFont.default.rawValue
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar.id(fontChoice)
-        } content: {
-            contentPanel
-                .id(fontChoice)
-                .navigationSplitViewColumnWidth(min: 360, ideal: 440, max: 640)
         } detail: {
-            detailPanel.id(fontChoice)
+            mainArea.id(fontChoice)
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
         // The Improve workspace is a long working session: it takes over the window until closed.
         .onChange(of: services.improve.presentedBriefID) { _, id in
-            columnVisibility = id == nil ? .all : .detailOnly
+            columnVisibility = id == nil && selectedDestination != .briefs ? .all : .detailOnly
+        }
+        // Briefs get the whole window; every other screen keeps the sidebar.
+        .onChange(of: selectedDestination) { _, destination in
+            columnVisibility = destination == .briefs ? .detailOnly : .all
+        }
+    }
+
+    /// Briefs fill the whole area. Other screens keep their list on the left and detail on the right.
+    @ViewBuilder
+    private var mainArea: some View {
+        if selectedDestination == .briefs || services.improve.presentedBriefID != nil {
+            detailPanel
+        } else {
+            HSplitView {
+                contentPanel.frame(minWidth: 360, idealWidth: 440, maxWidth: 640)
+                detailPanel.frame(minWidth: 300, maxWidth: .infinity)
+            }
         }
     }
 
@@ -188,7 +201,7 @@ struct MainLayout: View {
     @ViewBuilder
     private var contentPanel: some View {
         switch selectedDestination {
-        case .briefs:    BriefWorkbenchView()
+        case .briefs:    EmptyView()
         case .chat:      IntentPane(onManagePrompts: { selectedDestination = .prompts })
         case .diff:      DiffCanvas()
         case .models:    ModelManagerView()
@@ -207,7 +220,7 @@ struct MainLayout: View {
                let brief = services.briefs.briefs.first(where: { $0.id == id }) {
                 ImproveWorkspaceView(brief: brief)
             } else if selectedDestination == .briefs {
-                BriefPane()
+                BriefStudioView()
             } else if selectedDestination == .diff {
                 // Diff is already the content panel; show preview or placeholder
                 previewOrEmpty

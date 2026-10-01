@@ -1,9 +1,21 @@
 import Foundation
 
+/// One list entry. `number` is its position among the ordered siblings around it (1, 2, 3 …),
+/// whatever the source text said, so a list never shows 1. 1. 1. or restarts after a sub-list.
+public struct MarkdownListItem: Equatable, Sendable {
+    public var ordered: Bool
+    public var number: Int
+    public var text: String
+    public var children: [MarkdownListItem]
+
+    public init(ordered: Bool, number: Int = 0, text: String, children: [MarkdownListItem] = []) {
+        self.ordered = ordered; self.number = number; self.text = text; self.children = children
+    }
+}
+
 public enum MarkdownBlock: Equatable, Sendable {
     case heading(level: Int, text: String)
-    case bullet(items: [String])
-    case numbered(items: [String])
+    case list(items: [MarkdownListItem])
     case code(language: String, text: String)
     case quote(text: String)
     case rule
@@ -61,23 +73,8 @@ public enum MarkdownBlocks {
                 continue
             }
 
-            if let item = Self.bulletItem(trimmed) {
-                var items: [String] = []
-                while i < lines.count, let itemLine = Self.bulletItem(lines[i].trimmingCharacters(in: .whitespaces)) {
-                    items.append(itemLine)
-                    i += 1
-                }
-                blocks.append(.bullet(items: items))
-                continue
-            }
-
-            if let item = Self.numberedItem(trimmed) {
-                var items: [String] = []
-                while i < lines.count, let itemLine = Self.numberedItem(lines[i].trimmingCharacters(in: .whitespaces)) {
-                    items.append(itemLine)
-                    i += 1
-                }
-                blocks.append(.numbered(items: items))
+            if Self.listItem(line) != nil {
+                blocks.append(.list(items: Self.parseList(lines, &i)))
                 continue
             }
 
@@ -122,32 +119,86 @@ public enum MarkdownBlocks {
         return String(after)
     }
 
-    private static func bulletItem(_ trimmed: String) -> String? {
-        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
-            return String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-        }
-        return nil
+    private struct RawItem { var indent: Int; var ordered: Bool; var number: Int; var text: String }
+
+    private static func indentWidth(_ line: String) -> Int {
+        line.prefix(while: { $0 == " " || $0 == "\t" }).reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
     }
 
-    private static func numberedItem(_ trimmed: String) -> String? {
-        let parts = trimmed.split(separator: ".", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2,
-              let number = parts.first,
-              !number.isEmpty,
-              number.allSatisfy({ $0.isNumber }),
-              let rest = parts.last,
-              rest.first == " " else {
-            return nil
+    private static func listItem(_ line: String) -> RawItem? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !isRule(trimmed) else { return nil }
+        let indent = indentWidth(line)
+        for marker in ["- ", "* ", "• ", "+ "] where trimmed.hasPrefix(marker) {
+            return RawItem(indent: indent, ordered: false, number: 0,
+                           text: String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces))
         }
-        return String(rest.dropFirst()).trimmingCharacters(in: .whitespaces)
+        let digits = trimmed.prefix(while: \.isNumber)
+        guard !digits.isEmpty, digits.count <= 4, let number = Int(digits) else { return nil }
+        let after = trimmed.dropFirst(digits.count)
+        guard let d = after.first, d == "." || d == ")", after.dropFirst().first == " " else { return nil }
+        return RawItem(indent: indent, ordered: true, number: number,
+                       text: String(after.dropFirst(2)).trimmingCharacters(in: .whitespaces))
+    }
+
+    /// Reads one list starting at `i`, keeping sub-lists nested, indented continuation lines with
+    /// their item, and blank lines between items inside the same list.
+    private static func parseList(_ lines: [String], _ i: inout Int) -> [MarkdownListItem] {
+        var raws: [RawItem] = []
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                var j = i + 1
+                while j < lines.count, lines[j].trimmingCharacters(in: .whitespaces).isEmpty { j += 1 }
+                guard j < lines.count, !raws.isEmpty else { break }
+                let next = lines[j]
+                let continues = listItem(next).map { $0.indent > raws[0].indent || $0.ordered == raws[0].ordered } ??
+                    (indentWidth(next) > raws[0].indent && !isBlockStart(next.trimmingCharacters(in: .whitespaces)))
+                guard continues else { break }
+                i = j
+                continue
+            }
+            if let item = listItem(line) {
+                if let first = raws.first, item.indent <= first.indent, item.ordered != first.ordered { break }
+                var clamped = item
+                if let first = raws.first { clamped.indent = max(item.indent, first.indent) }
+                raws.append(clamped)
+                i += 1
+            } else if !raws.isEmpty, !isBlockStart(trimmed) {
+                raws[raws.count - 1].text += "\n" + trimmed
+                i += 1
+            } else {
+                break
+            }
+        }
+        return nest(raws[...])
+    }
+
+    private static func nest(_ raws: ArraySlice<RawItem>) -> [MarkdownListItem] {
+        guard let base = raws.first?.indent else { return [] }
+        var items: [MarkdownListItem] = []
+        var idx = raws.startIndex
+        while idx < raws.endIndex {
+            let raw = raws[idx]
+            var end = idx + 1
+            while end < raws.endIndex, raws[end].indent > base { end += 1 }
+            var item = MarkdownListItem(ordered: raw.ordered, text: raw.text,
+                                        children: nest(raws[(idx + 1)..<end]))
+            if raw.ordered {
+                if let prev = items.last, prev.ordered { item.number = prev.number + 1 } else { item.number = max(raw.number, 1) }
+            }
+            items.append(item)
+            idx = end
+        }
+        return items
     }
 
     private static func isBlockStart(_ trimmed: String) -> Bool {
         if trimmed.hasPrefix("```") || trimmed.hasPrefix(">") { return true }
         if heading(trimmed) != nil { return true }
         if isRule(trimmed) { return true }
-        if bulletItem(trimmed) != nil { return true }
-        if numberedItem(trimmed) != nil { return true }
+        if listItem(trimmed) != nil { return true }
         return false
     }
 }

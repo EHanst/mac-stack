@@ -23,15 +23,17 @@ struct SidecarRailView: View {
     private func content(_ brief: Brief) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Button { showReply = true } label: { Label("Paste reply", systemImage: "arrowshape.turn.up.left") }
+                Button { showReply = true } label: { Label("Fix brief from AI's answer", systemImage: "arrowshape.turn.up.left") }
                     .disabled(running(brief))
-                    .help("Paste the answer you got back and get suggested changes to this brief")
+                    .help("Paste what the AI answered and get suggested edits to this brief")
                 if running(brief) {
                     ProgressView().controlSize(.small)
                     Button("Cancel") { sidecar.cancel() }
                 }
                 Spacer()
             }
+            Text("Got a wrong or off-target answer? Paste it and get suggested edits to the brief.")
+                .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
             if sidecar.briefID == brief.id, case .failed(let message) = sidecar.phase {
                 Text(message).font(.mtBodySmall).foregroundStyle(Color.mtError)
             }
@@ -44,7 +46,7 @@ struct SidecarRailView: View {
         .background(Color.mtSurfaceContainerHighest.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: Radius.card))
         .sheet(isPresented: $showReply) {
-            ReplySheet(title: "Paste the reply",
+            ReplySheet(title: "Fix brief from AI's answer",
                        prompt: "Paste the answer from Claude Code or ChatGPT. The sidecar suggests changes to this brief; nothing changes until you apply one.",
                        action: "Suggest changes",
                        onSubmit: { sidecar.run(.revise, brief: brief, reply: $0) },
