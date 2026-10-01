@@ -176,7 +176,11 @@ public final class AppServices {
         guard !startupComplete else { return }
         startupComplete = true
         DiagnosticsCollector.shared.start()
-        promptStudio.conversationPrefix = { [weak self] in self?.optimizerPrefix() ?? [] }
+        // What a rewrite on the local model continues from: the system message, so its cached prefix stays warm.
+        promptStudio.conversationPrefix = { [weak self] in
+            guard let self else { return [] }
+            return [Message(role: .system, content: self.buildSystemPrompt())]
+        }
         await promptStudio.reload()
         briefs.contextSource = BriefContextSource(
             roots: { [workspaces] in await workspaces.list.map(\.record.url) },
@@ -410,11 +414,6 @@ public final class AppServices {
             messages: [system], tools: [], options: GenerationOptions(maxTokens: 1),
             priority: .background, pin: localID) else { return }
         do { for try await _ in stream {} } catch {}
-    }
-
-    /// What a rewrite on the local model continues from: the system message, so its cached prefix stays warm.
-    private func optimizerPrefix() -> [StackCore.Message] {
-        [StackCore.Message(role: .system, content: buildSystemPrompt())]
     }
 
     // MARK: - Onboarding helpers
