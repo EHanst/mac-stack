@@ -26,16 +26,14 @@ private let cloud = URL(string: "https://api.openai.com/v1/chat/completions")!
 @Suite("EgressGate")
 struct EgressGateTests {
 
-    @Test("Only on this Mac blocks cloud and web requests, and records the refusals")
+    @Test("Only on this Mac blocks cloud requests, and records the refusal")
     func localOnly() async {
         let gate = EgressGate(policy: .localOnly, store: MemEgressStore())
-        for purpose in [EgressPurpose.cloudInference, .webFetch, .webSearch] {
-            await #expect(throws: EgressError.blockedByPrivacy(host: "api.openai.com")) {
-                try await gate.authorize(purpose, url: cloud)
-            }
+        await #expect(throws: EgressError.blockedByPrivacy(host: "api.openai.com")) {
+            try await gate.authorize(.cloudInference, url: cloud)
         }
         let entries = await gate.entries
-        #expect(entries.count == 3 && entries.allSatisfy { $0.blocked })
+        #expect(entries.count == 1 && entries.allSatisfy { $0.blocked })
         #expect(await gate.cloudAllowed() != nil)
     }
 
@@ -59,7 +57,7 @@ struct EgressGateTests {
     func merging() async throws {
         let gate = EgressGate(store: MemEgressStore())
         for _ in 0..<5 { try await gate.authorize(.cloudInference, url: cloud, provider: "openai") }
-        try await gate.authorize(.webFetch, url: URL(string: "https://example.com/a?secret=1")!)
+        try await gate.authorize(.modelDownload, url: URL(string: "https://example.com/a?secret=1")!)
         let e = await gate.entries
         #expect(e.count == 2 && e[0].count == 5)
         #expect(e[1].host == "example.com")
@@ -73,7 +71,7 @@ struct EgressGateTests {
         let gate = EgressGate(store: MemEgressStore(), now: { clock.now })
         for i in 0..<(EgressGate.maxEntries + 20) {
             clock.advance(days: 1)
-            try await gate.authorize(.webFetch, url: URL(string: "https://h\(i).example")!)
+            try await gate.authorize(.modelDownload, url: URL(string: "https://h\(i).example")!)
         }
         #expect(await gate.entries.count == EgressGate.maxEntries)
     }
@@ -90,7 +88,7 @@ struct EgressGateTests {
         await #expect(throws: EgressError.budgetExhausted(usedTokens: 1_100, capTokens: 1_000)) {
             try await gate.authorize(.cloudInference, url: cloud)
         }
-        try await gate.authorize(.webFetch, url: cloud)            // the limit is for cloud models only
+        try await gate.authorize(.modelDownload, url: cloud)       // the limit is for cloud models only
         clock.advance(days: 31)
         try await gate.authorize(.cloudInference, url: cloud)
         #expect(await gate.tokensThisMonth == 0)
@@ -205,5 +203,19 @@ struct EgressEnforcementTests {
             await #expect(throws: (any Error).self) { _ = try await run(svc) }
             #expect(await hits.chats == 1)
         }
+    }
+
+    @Test("a ledger written with the retired web purposes still loads, minus those lines")
+    func retiredPurposes() throws {
+        let json = """
+        {"entries":[
+          {"id":"\(UUID().uuidString)","date":"2026-01-01T00:00:00Z","purpose":"webFetch","host":"a.example","blocked":false,"count":1},
+          {"id":"\(UUID().uuidString)","date":"2026-01-02T00:00:00Z","purpose":"cloudInference","host":"api.openai.com","provider":"openai","blocked":false,"count":2}
+        ],"monthlyTokens":{"2026-01":42},"monthlyTokenCap":1000}
+        """
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        let state = try decoder.decode(EgressState.self, from: Data(json.utf8))
+        #expect(state.entries.map(\.host) == ["api.openai.com"])
+        #expect(state.monthlyTokens == ["2026-01": 42] && state.monthlyTokenCap == 1000)
     }
 }

@@ -26,7 +26,7 @@ public struct OptimizeContext: Sendable {
     /// Overrides the depth chosen from the target's profile.
     public var depth: OptimizeDepth?
     public var workspaceName: String?
-    /// Task key from `PromptEngineer` (`debug`, `generate`, …), if known.
+    /// Task key (`debug`, `generate`, …), if known.
     public var intent: String?
     public var profile: ModelPromptProfile
     /// Run on this model instead of whichever the router would pick for chat.
@@ -108,7 +108,7 @@ public enum OptimizerEvent: Sendable {
 
 /// Rewrites a draft prompt so the model gets a clearer request.
 ///
-/// Runs as its own one-shot request: nothing here touches the conversation's `PromptLedger`, so the
+/// Runs as its own one-shot request: nothing here touches a conversation, so the
 /// chat's prompt (and its cached prefix) is unchanged. The rewrite is plain text in, plain text out,
 /// with no tools. It goes through `InferenceService`, so the privacy setting, the monthly limit and
 /// the "what left this Mac" log all apply when the chosen model is in the cloud.

@@ -40,7 +40,6 @@ struct BriefToolsTests {
     func listEditedMarker() async throws {
         var edited = brief("Edited", goal: "input text", id: "ed")
         edited.body = "hand written body"
-        edited.inputAtEdit = "input text"
         let e = edited
         let linked = brief("Linked", goal: "input text", id: "li")
         let text = try await run(ListBriefsTool(provider: { [e, linked] }))
@@ -53,7 +52,6 @@ struct BriefToolsTests {
     func getEdited() async throws {
         var b = brief("T", goal: "original input words", id: "x")
         b.body = "hand written body"
-        b.inputAtEdit = b.input
         let edited = b
         let text = try await run(GetBriefTool(provider: { [edited] }), ["id": "x"])
         #expect(text.contains("hand written body"))

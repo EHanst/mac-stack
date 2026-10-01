@@ -24,7 +24,6 @@ public final class PromptStudioModel {
 
     public private(set) var phase: Phase = .idle
     public private(set) var prompts: [SavedPrompt] = []
-    public private(set) var recipes: [SavedPrompt] = []
     /// Prompts found in project folders; each needs the user's approval before use.
     public private(set) var projectPrompts: [WorkspacePromptStore.Entry] = []
     /// Model a chat message would go to right now, and how it likes to be prompted.
@@ -82,7 +81,6 @@ public final class PromptStudioModel {
 
     public func reload() async {
         prompts = await library.userPrompts()
-        recipes = await library.recipes()
         projectPrompts = await projectStore?.all() ?? []
     }
 

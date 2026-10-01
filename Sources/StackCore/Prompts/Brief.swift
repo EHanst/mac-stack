@@ -41,13 +41,11 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
         public var date: Date
         public var input: String
         public var body: String?
-        public var inputAtEdit: String?
 
-        public init(date: Date, input: String, body: String?, inputAtEdit: String? = nil) {
+        public init(date: Date, input: String, body: String?) {
             self.date = date
             self.input = input
             self.body = body
-            self.inputAtEdit = inputAtEdit
         }
     }
 
@@ -61,8 +59,6 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
     public var target: TargetProfile
     public var input: String
     public var body: String?
-    /// The input when `body` was last set; nil when linked.
-    public var inputAtEdit: String?
     public var contextItems: [ContextItem]
     public var versions: [Version]
     public var createdAt: Date
@@ -75,7 +71,7 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
     public var isDraft: Bool { draft != nil }
 
     public init(id: String, schemaVersion: Int, title: String, workspace: String?, target: TargetProfile,
-                input: String, body: String?, inputAtEdit: String?, contextItems: [ContextItem],
+                input: String, body: String?, contextItems: [ContextItem],
                 versions: [Version], createdAt: Date, updatedAt: Date, draft: String? = nil) {
         self.id = id
         self.schemaVersion = schemaVersion
@@ -84,7 +80,6 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
         self.target = target
         self.input = input
         self.body = body
-        self.inputAtEdit = inputAtEdit
         self.contextItems = contextItems
         self.versions = versions
         self.createdAt = createdAt
@@ -95,18 +90,18 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
     public static func new(title: String, input: String = "", target: TargetProfile,
                            workspace: String? = nil, now: Date = Date()) -> Brief {
         Brief(id: UUID().uuidString, schemaVersion: currentVersion, title: title, workspace: workspace,
-              target: target, input: input, body: nil, inputAtEdit: nil,
+              target: target, input: input, body: nil,
               contextItems: [], versions: [], createdAt: now, updatedAt: now)
     }
 
     public mutating func snapshot(now: Date = Date()) {
-        versions.append(Version(date: now, input: input, body: body, inputAtEdit: inputAtEdit))
+        versions.append(Version(date: now, input: input, body: body))
         if versions.count > Self.maxVersions { versions.removeFirst(versions.count - Self.maxVersions) }
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, schemaVersion, title, workspace, target
-        case input, body, inputAtEdit, draft, contextItems, versions, createdAt, updatedAt
+        case input, body, draft, contextItems, versions, createdAt, updatedAt
         case sections
     }
 
@@ -127,19 +122,17 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
             let legacyVersions = try c.decodeIfPresent([LegacyVersion].self, forKey: .versions) ?? []
             input = Self.joinLegacy(legacySections)
             body = nil
-            inputAtEdit = nil
             // The old context section's switch also gated the attached items; keep them off.
             if legacySections.first(where: { $0.kind == "context" })?.enabled == false {
                 for i in contextItems.indices { contextItems[i].included = false }
             }
             versions = legacyVersions.map {
-                Version(date: $0.date, input: Self.joinLegacy($0.sections), body: nil, inputAtEdit: nil)
+                Version(date: $0.date, input: Self.joinLegacy($0.sections), body: nil)
             }
             self.schemaVersion = Self.currentVersion
         } else {
             input = try c.decodeIfPresent(String.self, forKey: .input) ?? ""
             body = try c.decodeIfPresent(String.self, forKey: .body)
-            inputAtEdit = try c.decodeIfPresent(String.self, forKey: .inputAtEdit)
             versions = try c.decodeIfPresent([Version].self, forKey: .versions) ?? []
         }
     }
@@ -153,7 +146,6 @@ public struct Brief: Codable, Sendable, Equatable, Identifiable {
         try c.encode(target, forKey: .target)
         try c.encode(input, forKey: .input)
         try c.encodeIfPresent(body, forKey: .body)
-        try c.encodeIfPresent(inputAtEdit, forKey: .inputAtEdit)
         try c.encodeIfPresent(draft, forKey: .draft)
         try c.encode(contextItems, forKey: .contextItems)
         try c.encode(versions, forKey: .versions)

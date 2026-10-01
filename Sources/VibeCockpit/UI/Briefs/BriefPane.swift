@@ -12,9 +12,8 @@ struct BriefPane: View {
     @Environment(AppServices.self) private var services
     private enum CopyKind: String { case machine, standard }
     @State private var copied: CopyKind?
-    private enum ViewMode: String { case preview = "Preview", markdown = "Edit", machine = "Machine" }
+    private enum ViewMode: String { case preview = "Preview", markdown = "Edit" }
     @AppStorage("brief.viewMode") private var viewModeStorage: String = ViewMode.preview.rawValue
-    @AppStorage("brief.primaryCopy") private var primaryCopyStorage: String = CopyKind.machine.rawValue
     @State private var showVersions = false
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?
@@ -28,17 +27,11 @@ struct BriefPane: View {
         nonmutating set { viewModeStorage = newValue.rawValue }
     }
 
-    private var primaryCopy: CopyKind {
-        get { CopyKind(rawValue: primaryCopyStorage) ?? .machine }
-        nonmutating set { primaryCopyStorage = newValue.rawValue }
-    }
-
     var body: some View {
         if let brief = model.selected, let compiled = model.compiled {
             VStack(alignment: .leading, spacing: 12) {
                 targetPicker(brief)
                 meter(brief, compiled)
-                statusLine(brief)
                 editor(brief, compiled: compiled)
                 CappedScroll(maxHeight: 160) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -77,35 +70,10 @@ struct BriefPane: View {
         }
     }
 
-    @ViewBuilder
-    private func statusLine(_ brief: Brief) -> some View {
-        if brief.body == nil {
-            Text("Linked to input")
-                .font(.mtBodySmall)
-                .foregroundStyle(Color.mtOnSurfaceVariant)
-        } else {
-            HStack(spacing: 8) {
-                Text("Edited")
-                    .font(.mtBodySmall)
-                    .foregroundStyle(Color.mtOnSurfaceVariant)
-                Button("Rebuild from input") { model.rebuildFromInput() }
-                    .controlSize(.small)
-                if model.inputChangedSinceEdit {
-                    Text("Input changed since you edited the brief")
-                        .font(.mtBodySmall)
-                        .foregroundStyle(Color.mtError)
-                }
-            }
-        }
-    }
-
     private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
-        let machine = viewMode == .machine
-        let machineText = machine ? model.copyText(for: nil, compact: true) : ""
         let empty = brief.effectiveBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let plainTokens = compiled.tokens
         let compactTokens = BriefCompiler.compile(brief, compact: true).tokens
-        let savings = TokenSavings.percent(plain: plainTokens, compact: compactTokens)
+        let savings = TokenSavings.percent(plain: compiled.tokens, compact: compactTokens)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text("Brief").font(.mtLabelLarge)
@@ -113,36 +81,17 @@ struct BriefPane: View {
                     get: { viewMode },
                     set: { viewMode = $0 }
                 )) {
-                    ForEach([ViewMode.preview, .markdown, .machine], id: \.self) { Text($0.rawValue).tag($0) }
+                    ForEach([ViewMode.preview, .markdown], id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
-                Text("~\(machine ? PromptTokens.estimate(machineText) : plainTokens) tokens")
-                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                Text("Machine ~\(compactTokens) tokens (saves \(savings)%)")
+                Text("Machine copy ~\(compactTokens) tokens (saves \(savings)%)")
                     .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 Spacer()
                 Button("Improve") { improve.open(brief, studio: services.promptStudio) }
-                    .disabled(empty || machine)
+                    .disabled(empty)
                     .keyboardShortcut("i", modifiers: [.command, .shift])
-                Button("") { viewMode = viewMode == .machine ? .preview : .machine }
-                    .keyboardShortcut("m", modifiers: [.command, .shift])
-                    .frame(width: 0, height: 0)
-                    .hidden()
             }
-            if machine {
-                ScrollView {
-                    Text(machineText.isEmpty ? "Nothing to show yet." : machineText)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .font(.system(.caption, design: .monospaced))
-                .padding(10)
-                .frame(minHeight: 200, maxHeight: .infinity)
-                .background(Color.mtSurfaceContainerHighest)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                Text("Read-only: what Copy for machine puts on the clipboard, attachments included. Switch to Edit to change it.")
-                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-            } else if viewMode == .preview {
+            if viewMode == .preview {
                 ScrollView {
                     if empty {
                         Text("Nothing to show yet.").font(.mtBodyMedium).foregroundStyle(Color.mtOnSurfaceVariant)
@@ -189,9 +138,6 @@ struct BriefPane: View {
                         .disabled(item.ref.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
-                Text("Attachments ~\(included.reduce(0) { $0 + $1.tokens }) of \(brief.target.tokenBudget) tokens")
-                    .font(.mtBodySmall)
-                    .foregroundStyle(Color.mtOnSurfaceVariant)
             }
         }
     }
@@ -222,37 +168,16 @@ struct BriefPane: View {
     private var copyBar: some View {
         let empty = !model.canCopy
         return HStack {
-            if primaryCopy == .machine {
-                Button { copy(compact: true) } label: {
-                    Label(copied == .machine ? "Copied" : "Copy for machine", systemImage: "cpu")
-                }
-                .buttonStyle(MTFilledButtonStyle())
-                .help("Compact, data-dense text that uses fewer tokens")
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(empty)
-                Button { copy() } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
-                    .keyboardShortcut("c", modifiers: [.command, .option])
-                    .disabled(empty)
-            } else {
-                Button { copy() } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
-                    .buttonStyle(MTFilledButtonStyle())
-                    .keyboardShortcut("c", modifiers: [.command, .option])
-                    .disabled(empty)
-                Button { copy(compact: true) } label: {
-                    Label(copied == .machine ? "Copied" : "Copy for machine", systemImage: "cpu")
-                }
-                .help("Compact, data-dense text that uses fewer tokens")
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(empty)
+            Button { copy(compact: true) } label: {
+                Label(copied == .machine ? "Copied" : "Copy for machine", systemImage: "cpu")
             }
-            Menu("Primary button") {
-                Button(primaryCopy == .machine ? "✓ Copy for machine" : "Copy for machine") {
-                    primaryCopyStorage = CopyKind.machine.rawValue
-                }
-                Button(primaryCopy == .standard ? "✓ Copy" : "Copy") {
-                    primaryCopyStorage = CopyKind.standard.rawValue
-                }
-            }
+            .buttonStyle(MTFilledButtonStyle())
+            .help("Compact, data-dense text that uses fewer tokens")
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .disabled(empty)
+            Button { copy() } label: { Label(copied == .standard ? "Copied" : "Copy", systemImage: "doc.on.doc") }
+                .keyboardShortcut("c", modifiers: [.command, .option])
+                .disabled(empty)
             Menu("Save to project") {
                 ForEach(exportRoots, id: \.self) { root in
                     Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }

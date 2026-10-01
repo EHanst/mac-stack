@@ -1,10 +1,8 @@
 import Foundation
 
-/// One prompt in the library: something the user saved, a starter that shipped with the app, or a
-/// *recipe* (the per-task guidance that used to be hard-coded, now visible and editable).
+/// One prompt in the library: something the user saved or a starter that shipped with the app.
 public struct SavedPrompt: Codable, Sendable, Identifiable, Equatable {
 
-    public enum Kind: String, Codable, Sendable { case prompt, recipe }
     public enum Scope: String, Codable, Sendable { case global, workspace }
 
     /// An earlier title/body, kept so an edit can be undone.
@@ -15,19 +13,14 @@ public struct SavedPrompt: Codable, Sendable, Identifiable, Equatable {
     }
 
     public var id: String
-    public var kind: Kind
     public var scope: Scope
     public var title: String
     public var body: String
     public var tags: [String]
-    /// Typed after `/` in the composer, e.g. `review`. Lower-case letters, digits, `-`, `_`.
+    /// Short name to look it up by, e.g. `review`. Lower-case letters, digits, `-`, `_`.
     public var slash: String?
     public var pinned: Bool
-    /// For a recipe: the task it applies to (`generate`, `debug`, …). Nil for ordinary prompts.
-    public var recipeIntent: String?
-    /// A recipe can be switched off; ordinary prompts ignore this.
-    public var enabled: Bool
-    /// Shipped with the app (can be edited and reset, but a recipe can't be deleted).
+    /// Shipped with the app (can be edited and reset).
     public var builtIn: Bool
     /// Alternative bodies for particular models, keyed by profile family (see `ModelPromptProfile`).
     public var modelVariants: [String: String]
@@ -40,21 +33,18 @@ public struct SavedPrompt: Codable, Sendable, Identifiable, Equatable {
     public static let maxVersions = 20
 
     public init(
-        id: String = UUID().uuidString, kind: Kind = .prompt, scope: Scope = .global,
+        id: String = UUID().uuidString, scope: Scope = .global,
         title: String, body: String, tags: [String] = [], slash: String? = nil,
-        pinned: Bool = false, recipeIntent: String? = nil, enabled: Bool = true, builtIn: Bool = false,
+        pinned: Bool = false, builtIn: Bool = false,
         modelVariants: [String: String] = [:], now: Date = Date()
     ) {
         self.id = id
-        self.kind = kind
         self.scope = scope
         self.title = title
         self.body = body
         self.tags = tags
         self.slash = slash.flatMap(Self.cleanSlash)
         self.pinned = pinned
-        self.recipeIntent = recipeIntent
-        self.enabled = enabled
         self.builtIn = builtIn
         self.modelVariants = modelVariants
         self.versions = []

@@ -58,16 +58,13 @@ struct MainLayout: View {
         }
     }
 
-    /// Briefs fill the whole area. Other screens keep their list on the left and detail on the right.
+    /// Briefs fill the whole area; every other screen fills it with its own content.
     @ViewBuilder
     private var mainArea: some View {
         if selectedDestination == .briefs || services.improve.presentedBriefID != nil {
             detailPanel
         } else {
-            HSplitView {
-                contentPanel.frame(minWidth: 360, idealWidth: 440, maxWidth: 640)
-                detailPanel.frame(minWidth: 300, maxWidth: .infinity)
-            }
+            contentPanel
         }
     }
 
@@ -119,11 +116,6 @@ struct MainLayout: View {
 
     private func badge(for dest: NavDestination) -> Int {
         switch dest {
-        case .diff:
-            let hunks = coordinator.state.currentDiff?.hunks.count ?? 0
-            return hunks > 0 ? hunks : 0
-        case .snapshots:
-            return coordinator.state.snapshotTimeline.count
         case .models:
             let unhealthy = coordinator.state.modelInfos.filter {
                 if case .healthy = $0.health { return false } else { return true }
@@ -163,7 +155,6 @@ struct MainLayout: View {
     private var sidebarFooter: some View {
         HStack(spacing: 8) {
             providerDot
-            generatingIndicator
             Spacer()
             if coordinator.state.indexingStatus.isRunning {
                 MTProgressChip(
@@ -187,76 +178,28 @@ struct MainLayout: View {
             .foregroundStyle(Color.mtOnSurfaceVariant)
     }
 
-    @ViewBuilder
-    private var generatingIndicator: some View {
-        if coordinator.state.isGenerating {
-            ProgressView()
-                .scaleEffect(0.6)
-                .frame(width: 14, height: 14)
-        }
-    }
-
     // MARK: Content panel (center)
 
     @ViewBuilder
     private var contentPanel: some View {
         switch selectedDestination {
         case .briefs:    EmptyView()
-        case .chat:      IntentPane(onManagePrompts: { selectedDestination = .prompts })
-        case .diff:      DiffCanvas()
         case .models:    ModelManagerView()
         case .prompts:   PromptLibraryView()
-        case .tools:     MCPToolsView()
-        case .snapshots: SnapshotScrubber()
         case .settings:  SettingsView()
         }
     }
 
-    // MARK: Detail panel (right — always shows diff)
-
-    private var detailPanel: some View {
-        VStack(spacing: 0) {
-            if let id = services.improve.presentedBriefID,
-               let brief = services.briefs.briefs.first(where: { $0.id == id }) {
-                ImproveWorkspaceView(brief: brief)
-            } else if selectedDestination == .briefs {
-                BriefStudioView()
-            } else if selectedDestination == .diff {
-                // Diff is already the content panel; show preview or placeholder
-                previewOrEmpty
-            } else if coordinator.state.currentDiff != nil {
-                DiffCanvas()
-            } else {
-                previewOrEmpty
-            }
-        }
-    }
+    // MARK: Detail panel
 
     @ViewBuilder
-    private var previewOrEmpty: some View {
-        if let html = coordinator.state.previewHTML, !html.isEmpty {
-            PreviewWebView(html: html)
+    private var detailPanel: some View {
+        if let id = services.improve.presentedBriefID,
+           let brief = services.briefs.briefs.first(where: { $0.id == id }) {
+            ImproveWorkspaceView(brief: brief)
         } else {
-            detailPlaceholder
+            BriefStudioView()
         }
-    }
-
-    private var detailPlaceholder: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "macwindow.on.rectangle")
-                .font(.system(size: 44))
-                .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.35))
-            Text("Nothing to show")
-                .font(.mtTitleMedium)
-                .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.5))
-            Text("Changes made by connected tools appear here. Your prompts are copied out of the chat.")
-                .font(.mtBodySmall)
-                .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.4))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.mtSurfaceContainerLowest)
     }
 }
 

@@ -515,46 +515,18 @@ struct BriefWorkbenchModelTests {
         #expect(count == 0)
     }
 
-    @Test("setBody while linked sets body and inputAtEdit; editing body to equal input stays edited")
+    @Test("setBody while linked sets body; editing body to equal input stays edited")
     func setBodyOwnership() async {
         let (m, _) = make()
         await m.newBrief(title: "t", input: "Original")
         m.setBody("Edited")
         #expect(m.selected?.body == "Edited")
         #expect(m.selected?.input == "Original")
-        #expect(m.selected?.inputAtEdit == "Original")
         #expect(m.selected?.effectiveBody == "Edited")
-        #expect(m.inputChangedSinceEdit == false)
 
         m.setBody("Original")
         #expect(m.selected?.body == "Original")
-        #expect(m.selected?.inputAtEdit == "Original")
         #expect(m.selected?.isEdited == true)
-    }
-
-    @Test("editing input after body set exposes inputChangedSinceEdit and leaves compiled unchanged")
-    func inputChangedHint() async {
-        let (m, _) = make()
-        await m.newBrief(title: "t", input: "Original")
-        m.setBody("Edited")
-        let compiledBefore = m.compiled?.text
-        m.setInput("Original changed")
-        #expect(m.inputChangedSinceEdit == true)
-        #expect(m.selected?.body == "Edited")
-        #expect(m.compiled?.text == compiledBefore)
-    }
-
-    @Test("rebuildFromInput clears body and inputAtEdit and snapshots first")
-    func rebuild() async {
-        let (m, _) = make()
-        await m.newBrief(title: "t", input: "Original")
-        m.setBody("Edited")
-        m.rebuildFromInput()
-        #expect(m.selected?.body == nil)
-        #expect(m.selected?.inputAtEdit == nil)
-        #expect(m.selected?.effectiveBody == "Original")
-        #expect(m.selected?.versions.count == 1)
-        #expect(m.selected?.versions.last?.body == "Edited")
     }
 
     @Test("appendToBody switches a linked brief to edited and keeps an edited brief edited")
@@ -563,10 +535,8 @@ struct BriefWorkbenchModelTests {
         await m.newBrief(title: "t", input: "Start")
         m.appendToBody("Extra")
         #expect(m.selected?.body == "Start\n\nExtra")
-        #expect(m.selected?.inputAtEdit == "Start")
         m.appendToBody("Final")
         #expect(m.selected?.body == "Start\n\nExtra\n\nFinal")
-        #expect(m.selected?.inputAtEdit == "Start")
     }
 
     @Test("appendToBody onto an empty body adds no leading blank lines")
@@ -578,7 +548,7 @@ struct BriefWorkbenchModelTests {
         #expect(m.selected?.body == "Extra")
     }
 
-    @Test("restoreVersion restores input, body, and inputAtEdit")
+    @Test("restoreVersion restores input and body")
     func restoreOwnership() async {
         let (m, _) = make()
         await m.newBrief(title: "t", input: "Input v1")
@@ -589,7 +559,6 @@ struct BriefWorkbenchModelTests {
         m.restoreVersion(0)
         #expect(m.selected?.input == "Input v1")
         #expect(m.selected?.body == "Body v1")
-        #expect(m.selected?.inputAtEdit == "Input v1")
     }
 
     @Test("setBody with briefID writes to the specified brief, not the selected one")
@@ -608,7 +577,6 @@ struct BriefWorkbenchModelTests {
         let first = m.briefs.first { $0.id == firstID }
         let second = m.briefs.first { $0.id == secondID }
         #expect(first?.body == "Body for first")
-        #expect(first?.inputAtEdit == "Input 1")
         #expect(second?.body == nil)
         #expect(second?.input == "Input 2")
     }

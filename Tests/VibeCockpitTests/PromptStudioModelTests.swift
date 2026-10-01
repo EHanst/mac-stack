@@ -56,11 +56,10 @@ struct PromptStudioModelTests {
         }
     }
 
-    @Test("starts with the shipped prompts and recipes")
+    @Test("starts with the shipped prompts")
     func loads() async {
         let (m, _) = await make([Replier(id: "local:a", reply: "")])
         #expect(m.prompts.count == BuiltInPrompts.starters.count)
-        #expect(m.recipes.count == BuiltInPrompts.intents.count)
     }
 
     @Test("slash shortcuts match by prefix")

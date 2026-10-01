@@ -2,9 +2,7 @@ import Foundation
 
 /// Why the app is about to contact the internet.
 public enum EgressPurpose: String, Codable, Sendable {
-    case cloudInference   // prompt text goes to a cloud model
-    case webFetch         // the agent reads a web page
-    case webSearch        // the agent runs a web search
+    case cloudInference   // a brief or draft goes to a cloud model to be improved
     case modelDownload    // the user installed a model (weights come down, nothing goes up)
     case updateCheck      // the user asked whether a newer version exists (nothing goes up)
 }
@@ -43,6 +41,23 @@ public struct EgressState: Codable, Sendable, Equatable {
     public var monthlyTokens: [String: Int] = [:]
     public var monthlyTokenCap: Int?
     public init() {}
+
+    private enum CodingKeys: String, CodingKey { case entries, monthlyTokens, monthlyTokenCap }
+
+    /// Lines written for purposes the app no longer has (web reads and searches) are dropped on load;
+    /// the rest of the record is kept.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        var list = try c.nestedUnkeyedContainer(forKey: .entries)
+        while !list.isAtEnd {
+            if let entry = try? list.decode(EgressEntry.self) { entries.append(entry) }
+            else { _ = try? list.decode(Discarded.self) }
+        }
+        monthlyTokens = try c.decodeIfPresent([String: Int].self, forKey: .monthlyTokens) ?? [:]
+        monthlyTokenCap = try c.decodeIfPresent(Int.self, forKey: .monthlyTokenCap)
+    }
+
+    private struct Discarded: Decodable {}
 }
 
 public protocol EgressStore: Sendable {

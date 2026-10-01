@@ -14,56 +14,50 @@ struct MenuBarStatusTests {
 
     @Test("first run: asks the user to open the app")
     func onboarding() {
-        let s = MenuBarStatus.make(models: [], isGenerating: false, onboardingNeeded: true)
+        let s = MenuBarStatus.make(models: [], onboardingNeeded: true)
         #expect(s.level == .attention && s.title == "Set up Kokoro")
     }
 
     @Test("a healthy local chat model is 'Ready' and says it runs on this Mac")
     func readyLocal() {
-        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .healthy)], isGenerating: false, onboardingNeeded: false)
+        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .healthy)], onboardingNeeded: false)
         #expect(s.level == .ready && s.title == "Ready — Bonsai-27B" && s.detail == "Running on this Mac")
     }
 
     @Test("a healthy cloud model says so")
     func readyCloud() {
-        let s = MenuBarStatus.make(models: [model("openai", kind: .remote, health: .healthy)], isGenerating: false, onboardingNeeded: false)
+        let s = MenuBarStatus.make(models: [model("openai", kind: .remote, health: .healthy)], onboardingNeeded: false)
         #expect(s.detail == "Running in the cloud")
-    }
-
-    @Test("generating is 'Working…' and keeps the model name")
-    func busy() {
-        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .healthy)], isGenerating: true, onboardingNeeded: false)
-        #expect(s.level == .busy && s.title == "Working…" && s.detail == "Bonsai-27B")
     }
 
     @Test("a local model that hasn't loaded yet is 'Loading', not an error")
     func warming() {
-        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .degraded("Model not yet loaded"))], isGenerating: false, onboardingNeeded: false)
+        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .degraded("Model not yet loaded"))], onboardingNeeded: false)
         #expect(s.level == .warming && s.title.hasPrefix("Loading Bonsai-27B"))
     }
 
     @Test("an unavailable model shows the reason (e.g. not enough memory)")
     func unavailable() {
-        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .unavailable("Not enough free GPU memory"))], isGenerating: false, onboardingNeeded: false)
+        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .unavailable("Not enough free GPU memory"))], onboardingNeeded: false)
         #expect(s.level == .attention && s.detail == "Not enough free GPU memory")
     }
 
     @Test("the embedder alone doesn't count as a chat model")
     func embedderOnly() {
-        let s = MenuBarStatus.make(models: [model("embed-bge", caps: [.embedding], health: .healthy)], isGenerating: false, onboardingNeeded: false)
+        let s = MenuBarStatus.make(models: [model("embed-bge", caps: [.embedding], health: .healthy)], onboardingNeeded: false)
         #expect(s.level == .attention && s.title == "No model")
     }
 
     @Test("a healthy embedder doesn't hide an unavailable chat model")
     func embedderDoesNotMask() {
         let s = MenuBarStatus.make(models: [model("embed-bge", caps: [.embedding], health: .healthy),
-                                            model("Bonsai-27B", health: .unavailable("x"))], isGenerating: false, onboardingNeeded: false)
+                                            model("Bonsai-27B", health: .unavailable("x"))], onboardingNeeded: false)
         #expect(s.level == .attention)
     }
 
     @Test("indexing is mentioned while ready")
     func indexing() {
-        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .healthy)], isGenerating: false, onboardingNeeded: false, indexing: true)
+        let s = MenuBarStatus.make(models: [model("Bonsai-27B", health: .healthy)], onboardingNeeded: false, indexing: true)
         #expect(s.detail == "Indexing your workspace…")
     }
 }

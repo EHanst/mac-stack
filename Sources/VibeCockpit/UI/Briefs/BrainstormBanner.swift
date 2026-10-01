@@ -5,10 +5,11 @@ import StackCore
 #endif
 import SwiftUI
 
-/// Shows brainstorming questions and tips for the selected brief. Tapping a question appends
-/// "Q: …\nA: " to the active input (via `appendToActive`). Refreshes after a 2s debounce when the
+/// Shows brainstorming questions and tips for the selected brief. Tapping a question hands it to
+/// `onPick`, which starts an instruction in the input bar. Refreshes after a 2s debounce when the
 /// brief has been edited or improved, or on manual refresh.
 struct BrainstormBanner: View {
+    var onPick: (String) -> Void
     @Environment(AppServices.self) private var services
     private var feedback: BriefFeedbackModel { services.feedback }
     private var workbench: BriefWorkbenchModel { services.briefs }
@@ -44,7 +45,7 @@ struct BrainstormBanner: View {
                 }
                 ForEach(feedback.questions) { q in
                     Button {
-                        _ = workbench.appendToActive("Q: \(q.text)\nA: ", briefID: brief.id)
+                        onPick(q.text)
                     } label: {
                         HStack(alignment: .firstTextBaseline) {
                             Image(systemName: "questionmark.circle")

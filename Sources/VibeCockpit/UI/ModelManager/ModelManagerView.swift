@@ -288,6 +288,7 @@ struct AddModelSheet: View {
     @State private var remoteBaseURL = ""
     @State private var remoteModelID = ""
     @State private var remoteToken = ""
+    @State private var saveError: String?
 
     enum Tab: String, CaseIterable { case local = "Local Model"; case remote = "Remote API" }
 
@@ -422,6 +423,9 @@ struct AddModelSheet: View {
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.mtOutline, lineWidth: 1))
             }
             Spacer()
+            if let saveError {
+                Text(saveError).font(.mtBodySmall).foregroundStyle(Color.mtError)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -441,12 +445,11 @@ struct AddModelSheet: View {
                                 coordinator: coordinator
                             )
                             await services.refreshModels(coordinator: coordinator)
+                            dismiss()
                         } catch {
-                            // surface as error event
-                            coordinator.send(.generationFailed("Failed to save credentials: \(error.localizedDescription)"))
+                            saveError = "Failed to save credentials: \(error.localizedDescription)"
                         }
                         isBusy = false
-                        dismiss()
                     }
                 }
                 .buttonStyle(MTFilledButtonStyle())

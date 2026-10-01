@@ -35,7 +35,6 @@ struct BriefTests {
         #expect(brief.schemaVersion == Brief.currentVersion)
         #expect(brief.input == "## Goal\nFix login\n\n## Context\nSome context\n\n## Output format\nJSON")
         #expect(brief.body == nil)
-        #expect(brief.inputAtEdit == nil)
         #expect(brief.effectiveBody == brief.input)
         #expect(brief.isEdited == false)
     }
@@ -74,7 +73,7 @@ struct BriefTests {
         #expect(brief.contextItems[0].included == true)
     }
 
-    @Test("v2 round-trips input, body, and inputAtEdit both nil and non-nil")
+    @Test("v2 round-trips input and body, both nil and non-nil")
     func v2Codable() throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -87,15 +86,12 @@ struct BriefTests {
         let linkedBack = try decoder.decode(Brief.self, from: encoder.encode(linked))
         #expect(linkedBack == linked)
         #expect(linkedBack.body == nil)
-        #expect(linkedBack.inputAtEdit == nil)
 
         var edited = linked
         edited.body = "Edited body"
-        edited.inputAtEdit = "Do X"
         let editedBack = try decoder.decode(Brief.self, from: encoder.encode(edited))
         #expect(editedBack == edited)
         #expect(editedBack.body == "Edited body")
-        #expect(editedBack.inputAtEdit == "Do X")
     }
 
     @Test("snapshot keeps the earlier text and caps history at maxVersions")

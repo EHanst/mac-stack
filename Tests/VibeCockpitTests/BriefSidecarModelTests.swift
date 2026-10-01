@@ -196,14 +196,14 @@ struct BriefSidecarModelTests {
         #expect(m.result?.note == "The brief changed since the suggestion. Run it again.")
     }
 
-    @Test("a revision made while edited is refused once the brief is rebuilt from input")
+    @Test("a revision made while edited is refused once the brief is relinked to its input")
     func staleEditedThenRebuilt() async {
         let wb = await workbench()
         wb.setBody("Hand edited")
         let m = model { "<revision>Something new</revision>" }
         m.run(.revise, brief: wb.selected!, reply: "r")
         await settle(m)
-        wb.rebuildFromInput()
+        wb.restoreBody(nil, briefID: wb.selected!.id)
         m.acceptRevision(m.result!.revisions[0], in: wb)
         #expect(wb.selected?.body == nil)
         #expect(wb.selected?.input == "Add retry to uploads")

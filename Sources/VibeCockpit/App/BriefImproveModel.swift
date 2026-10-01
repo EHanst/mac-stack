@@ -130,7 +130,6 @@ public final class BriefImproveModel {
             do {
                 var editBrief = brief
                 editBrief.body = base
-                editBrief.inputAtEdit = brief.inputAtEdit
                 let revised = try await sidecar.edit(brief: editBrief, instruction: trimmed)
                 try Task.checkCancellation()
                 guard generation == self.chatGeneration else { return }
@@ -228,7 +227,7 @@ public final class BriefImproveModel {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         optimizerPhase = .running(partial: "")
         studio.startOptimize(draft: text, mode: mode,
-                             intent: PromptEngineer.Intent.general.rawValue, finer: finer)
+                             intent: "general", finer: finer)
     }
 
     private func currentBrief() -> Brief? {

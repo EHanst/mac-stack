@@ -12,7 +12,6 @@ struct MenuBarIcon: View {
     var body: some View {
         Image(systemName: MenuBarStatus.make(
             models: coordinator.state.modelInfos,
-            isGenerating: coordinator.state.isGenerating,
             onboardingNeeded: coordinator.state.onboardingNeeded,
             indexing: coordinator.state.indexingStatus.isRunning).symbolName)
     }
@@ -29,7 +28,6 @@ struct MenuBarContent: View {
     private var status: MenuBarStatus {
         MenuBarStatus.make(
             models: coordinator.state.modelInfos,
-            isGenerating: coordinator.state.isGenerating,
             onboardingNeeded: coordinator.state.onboardingNeeded,
             indexing: coordinator.state.indexingStatus.isRunning)
     }
