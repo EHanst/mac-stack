@@ -1,20 +1,20 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// Header search path for the vendored libgit2 (see scripts/build-libgit2.sh). Every target that
+// Header search path for the vendored libgit2 (see Scripts/build-libgit2.sh). Every target that
 // can see StackCore's CLibGit2 import needs it, because clang builds the module per importer.
 let git2Include = "-I" + Context.packageDirectory + "/Vendor/libgit2/include"
 
 let package = Package(
-    name: "VibeCockpit",
+    name: "Kororo",
     platforms: [.macOS("26.0")],
     products: [
         .library(name: "StackCore", targets: ["StackCore"]),
         .library(name: "StackMCP", targets: ["StackMCP"]),
         .library(name: "StackHTTP", targets: ["StackHTTP"]),
-        .executable(name: "vibe-mcp", targets: ["VibeMCP"]),
-        .library(name: "VibeCockpitCore", targets: ["VibeCockpitCore"]),
-        .executable(name: "VibeCockpit", targets: ["VibeCockpit"]),
+        .executable(name: "kororo-mcp", targets: ["KororoMCP"]),
+        .library(name: "KororoCore", targets: ["KororoCore"]),
+        .executable(name: "Kororo", targets: ["Kororo"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0"),
@@ -40,7 +40,7 @@ let package = Package(
             ]
         ),
 
-        // libgit2, built statically into Vendor/libgit2 by scripts/build-libgit2.sh (no Homebrew needed).
+        // libgit2, built statically into Vendor/libgit2 by Scripts/build-libgit2.sh (no Homebrew needed).
         .systemLibrary(
             name: "CLibGit2",
             path: "Modules/CLibGit2"
@@ -100,14 +100,14 @@ let package = Package(
         ),
 
         // App logic: state reducer, service wiring, prompt engineering. Re-exports the stack
-        // so UI and tests can keep a single `import VibeCockpitCore`.
+        // so UI and tests can keep a single `import KororoCore`.
         .target(
-            name: "VibeCockpitCore",
+            name: "KororoCore",
             dependencies: ["StackCore", "StackMCP", "StackHTTP"],
-            path: "Sources/VibeCockpit",
+            path: "Sources/Kororo",
             exclude: [
                 "UI/",
-                "App/VibeCockpitApp.swift",
+                "App/KororoApp.swift",
                 "Info.plist",
             ],
             swiftSettings: [
@@ -116,11 +116,11 @@ let package = Package(
         ),
 
         .executableTarget(
-            name: "VibeCockpit",
-            dependencies: ["VibeCockpitCore"],
-            path: "Sources/VibeCockpit",
+            name: "Kororo",
+            dependencies: ["KororoCore"],
+            path: "Sources/Kororo",
             sources: [
-                "App/VibeCockpitApp.swift",
+                "App/KororoApp.swift",
                 "UI/",
             ],
             swiftSettings: [
@@ -130,14 +130,14 @@ let package = Package(
 
         // Performance harness for the local model (see docs/plans/2026-09-28-next-phase-plan.md, M0).
         .executableTarget(
-            name: "VibeBench",
+            name: "KororoBench",
             dependencies: [
                 "StackCore",
                 "StackHTTP",
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
             ],
-            path: "Sources/VibeBench",
+            path: "Sources/KororoBench",
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
@@ -145,13 +145,13 @@ let package = Package(
 
         // stdio ↔ MCP socket bridge for clients that only speak stdio.
         .executableTarget(
-            name: "VibeMCP",
-            path: "Sources/VibeMCP"
+            name: "KororoMCP",
+            path: "Sources/KororoMCP"
         ),
 
         // Embedding-model bake-off (retrieval quality/speed on this repo's own code).
         .executableTarget(
-            name: "VibeEmbedBench",
+            name: "KororoEmbedBench",
             dependencies: [
                 "StackCore",
                 .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
@@ -159,19 +159,19 @@ let package = Package(
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "Transformers", package: "swift-transformers"),
             ],
-            path: "Sources/VibeEmbedBench",
+            path: "Sources/KororoEmbedBench",
             swiftSettings: [
                 .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
             ]
         ),
 
         .testTarget(
-            name: "VibeCockpitTests",
+            name: "KororoTests",
             dependencies: [
-                "VibeCockpitCore", "StackCore", "StackMCP", "StackHTTP",
+                "KororoCore", "StackCore", "StackMCP", "StackHTTP",
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
             ],
-            path: "Tests/VibeCockpitTests",
+            path: "Tests/KororoTests",
             swiftSettings: [.unsafeFlags(["-Xcc", git2Include])]
         ),
     ]

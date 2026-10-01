@@ -91,7 +91,7 @@ extension APIRequestContext {
     func require(_ scope: ClientScope) throws -> APIClient {
         guard let client else { throw OpenAIError.unauthorized }
         guard client.allows(scope) else {
-            throw OpenAIError.forbidden("This key isn't allowed to \(scope.title.lowercased()). Change its permissions in Kokoro.")
+            throw OpenAIError.forbidden("This key isn't allowed to \(scope.title.lowercased()). Change its permissions in Kororo.")
         }
         return client
     }

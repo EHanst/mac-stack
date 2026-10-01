@@ -1,4 +1,4 @@
-# Releasing VibeCockpit
+# Releasing Kororo
 
 ## One-time setup (needs you)
 
@@ -9,8 +9,8 @@
 ## Cutting a release
 
 ```
-DRY_RUN=1 ./scripts/release.sh                      # rehearsal: no certificate or Apple service needed
-DEVELOPER_ID_APPLICATION="Developer ID Application: Name (TEAMID)" VERSION=1.0.1 ./scripts/release.sh
+DRY_RUN=1 ./Scripts/release.sh                      # rehearsal: no certificate or Apple service needed
+DEVELOPER_ID_APPLICATION="Developer ID Application: Name (TEAMID)" VERSION=1.0.1 ./Scripts/release.sh
 ```
 Or push a tag `v1.0.1` and let CI do it. The script builds, signs (hardened runtime), smoke-tests the packaged app, builds and signs the DMG, notarizes and staples it. Publish the DMG as a GitHub release (non-draft, non-prerelease) whose tag is `v<version>`.
 

@@ -40,7 +40,7 @@ private final class OneShot<T: Sendable>: @unchecked Sendable {
     }
 }
 
-/// The tools Kokoro offers over MCP, and a factory for one `Server` per connected client.
+/// The tools Kororo offers over MCP, and a factory for one `Server` per connected client.
 /// Model tools (`list_models`, `chat`, `embed`) are always there; workspace tools appear once a
 /// project is attached. Each server only shows and runs the tools its client's permissions allow.
 public actor MCPToolHost {
@@ -189,8 +189,8 @@ public actor MCPToolHost {
         let server = Server(
             name: "vibecockpit",
             version: "1.0.0",
-            title: "Kokoro",
-            instructions: "The AI model running in Kokoro on this Mac (chat, embeddings, model list), plus code search, files, builds and snapshots when a project is open.",
+            title: "Kororo",
+            instructions: "The AI model running in Kororo on this Mac (chat, embeddings, model list), plus code search, files, builds and snapshots when a project is open.",
             capabilities: Server.Capabilities(prompts: .init(), tools: .init())
         )
 
@@ -207,7 +207,7 @@ public actor MCPToolHost {
 
         await server.withMethodHandler(GetPrompt.self) { params in
             guard scopes.scopes.contains(.prompts) else {
-                throw MCPError.invalidParams("This app isn't allowed to read your saved prompts. Change its permissions in Kokoro.")
+                throw MCPError.invalidParams("This app isn't allowed to read your saved prompts. Change its permissions in Kororo.")
             }
             guard let prompt = await host.prompts().first(where: { Self.promptName($0) == params.name }) else {
                 throw MCPError.invalidParams("Unknown prompt: \(params.name)")
@@ -223,7 +223,7 @@ public actor MCPToolHost {
             }
             guard scopes.scopes.contains(handler.requiredScope) else {
                 return CallTool.Result(
-                    content: [.text(text: "This app isn't allowed to \(handler.requiredScope.title.lowercased()). Change its permissions in Kokoro.", annotations: nil, _meta: nil)],
+                    content: [.text(text: "This app isn't allowed to \(handler.requiredScope.title.lowercased()). Change its permissions in Kororo.", annotations: nil, _meta: nil)],
                     isError: true)
             }
             // Project tools default to the folder the calling app is working in (its MCP "roots").
@@ -233,7 +233,7 @@ public actor MCPToolHost {
                 case .matched(let id)?:
                     arguments["workspace"] = .string(id)
                 case .unmatched(let paths)?:
-                    // The client is working in a folder Kokoro doesn't have open yet: open it, then use it.
+                    // The client is working in a folder Kororo doesn't have open yet: open it, then use it.
                     var opened = false
                     for path in paths where await host.openWorkspace(URL(fileURLWithPath: path)) { opened = true }
                     if opened, let fresh = await host.allTools().first(where: { $0.toolDefinition.name == params.name }),
@@ -243,7 +243,7 @@ public actor MCPToolHost {
                         break
                     }
                     return CallTool.Result(
-                        content: [.text(text: "'\(paths.joined(separator: ", "))' isn't an open project in Kokoro. Add it in the app, or name an open project with the 'workspace' argument.", annotations: nil, _meta: nil)],
+                        content: [.text(text: "'\(paths.joined(separator: ", "))' isn't an open project in Kororo. Add it in the app, or name an open project with the 'workspace' argument.", annotations: nil, _meta: nil)],
                         isError: true)
                 case nil:
                     break

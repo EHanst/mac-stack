@@ -66,11 +66,11 @@ public enum QueryError: LocalizedError, Sendable, Equatable {
         case .unknownModel(let id): "There is no model called '\(id)'."
         case .blockedByPrivacy: "That would send data off this Mac, which the current privacy setting doesn't allow."
         case .budgetExhausted: "The monthly cloud limit has been reached."
-        case .noModelAvailable: "No model is available under the current privacy setting. Set one up in Kokoro."
+        case .noModelAvailable: "No model is available under the current privacy setting. Set one up in Kororo."
         case .contextTooLarge(let p, let l): "The prompt is too long for the local model (\(p) tokens, limit \(l))."
         case .upstream(let m): m
         case .cancelled: "The request was cancelled."
-        case .internal: "Something went wrong inside Kokoro while handling this request."
+        case .internal: "Something went wrong inside Kororo while handling this request."
         }
     }
 

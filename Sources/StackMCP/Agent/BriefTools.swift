@@ -12,7 +12,7 @@ private func text(_ s: String) -> [Tool.Content] { [.text(text: s, annotations: 
 public struct ListBriefsTool: AgentToolHandler {
     public let toolDefinition = Tool(
         name: "list_briefs",
-        description: "List the user's briefs (prompts they prepared in Kokoro): id, title, target and last edit. Use get_brief with an id to read one.",
+        description: "List the user's briefs (prompts they prepared in Kororo): id, title, target and last edit. Use get_brief with an id to read one.",
         inputSchema: .object(["type": "object", "properties": .object([:])]))
     public var requiredScope: ClientScope { .briefs }
     let provider: @Sendable () async -> [Brief]
@@ -20,7 +20,7 @@ public struct ListBriefsTool: AgentToolHandler {
 
     public func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         let briefs = await provider().sorted { $0.updatedAt > $1.updatedAt }
-        guard !briefs.isEmpty else { return text("There are no briefs yet. Create one in Kokoro.") }
+        guard !briefs.isEmpty else { return text("There are no briefs yet. Create one in Kororo.") }
         let stamp = ISO8601DateFormatter()
         return text(briefs.map {
             let edited = $0.body != nil ? " · brief edited" : ""

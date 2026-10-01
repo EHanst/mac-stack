@@ -33,7 +33,7 @@ public struct StackAPIServer: Sendable {
     let clients: ClientRegistry
     let mcpSessions: MCPHTTPSessions?
     let configuration: APIServerConfiguration
-    let logger = Logger(label: "vibecockpit.api")
+    let logger = Logger(label: "kororo.api")
 
     public init(inference: InferenceService, clients: ClientRegistry, mcp: MCPHTTPSessions? = nil,
                 configuration: APIServerConfiguration = .init()) {
@@ -68,7 +68,7 @@ public struct StackAPIServer: Sendable {
     public func makeApplication(onListening: @escaping @Sendable (Int) async -> Void = { _ in }) -> some ApplicationProtocol {
         Application(
             router: router(),
-            configuration: .init(address: .hostname(configuration.host, port: configuration.port), serverName: "VibeCockpit"),
+            configuration: .init(address: .hostname(configuration.host, port: configuration.port), serverName: "Kororo"),
             onServerRunning: { channel in await onListening(channel.localAddress?.port ?? 0) },
             logger: logger)
     }
@@ -154,8 +154,8 @@ public struct StackAPIServer: Sendable {
         }
         let u = usage ?? GenerationUsage(promptTokens: promptEstimate, completionTokens: max(1, text.count / 3))
         var headers = HTTPFields()
-        if let served = route.servedBy { headers[HTTPField.Name("X-VibeCockpit-Served-By")!] = served }
-        if let from = route.fellBackFrom { headers[HTTPField.Name("X-VibeCockpit-Fallback-From")!] = from }
+        if let served = route.servedBy { headers[HTTPField.Name("X-Kororo-Served-By")!] = served }
+        if let from = route.fellBackFrom { headers[HTTPField.Name("X-Kororo-Fallback-From")!] = from }
         return Self.json(builder.answered(by: route.servedBy ?? builder.model).response(text: text, finish: finish, usage: u), headers: headers)
     }
 

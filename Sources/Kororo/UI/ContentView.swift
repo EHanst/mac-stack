@@ -1,0 +1,444 @@
+#if canImport(AppKit)
+#if SWIFT_PACKAGE
+import KororoCore
+#endif
+import SwiftUI
+
+// MARK: - Root content view
+
+struct ContentView: View {
+    @Environment(AppCoordinator.self) private var coordinator
+    @Environment(AppServices.self) private var services
+
+    var body: some View {
+        Group {
+            if coordinator.state.onboardingNeeded {
+                OnboardingView()
+            } else {
+                MainLayout()
+            }
+        }
+        // Other apps asking to change files or run commands; answered before anything else.
+        .sheet(item: Binding(
+            get: { services.approvals.pending.first },
+            set: { _ in })
+        ) { request in
+            ApprovalSheet(request: request, waitingAfterThis: services.approvals.pending.count - 1) {
+                services.approvals.resolve(request.id, $0)
+            }
+        }
+    }
+}
+
+// MARK: - Main layout
+
+struct MainLayout: View {
+    @Environment(AppCoordinator.self) private var coordinator
+    @Environment(AppServices.self) private var services
+    @State private var selectedDestination: NavDestination = .briefs
+    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
+    /// Re-identifies the panels when the font changes so every `Font.mt*` is re-read.
+    @AppStorage(AppFont.storageKey) private var fontChoice = AppFont.default.rawValue
+
+    var body: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebar.id(fontChoice)
+        } detail: {
+            mainArea.id(fontChoice)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 980, minHeight: 640)
+        // The Improve workspace is a long working session: it takes over the window until closed.
+        .onChange(of: services.improve.presentedBriefID) { _, id in
+            columnVisibility = id == nil && selectedDestination != .briefs ? .all : .detailOnly
+        }
+        // Briefs get the whole window; every other screen keeps the sidebar.
+        .onChange(of: selectedDestination) { _, destination in
+            columnVisibility = destination == .briefs ? .detailOnly : .all
+        }
+    }
+
+    /// Briefs fill the whole area; every other screen fills it with its own content.
+    @ViewBuilder
+    private var mainArea: some View {
+        if selectedDestination == .briefs || services.improve.presentedBriefID != nil {
+            detailPanel
+        } else {
+            contentPanel
+        }
+    }
+
+    // MARK: Sidebar
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            sidebarBrand
+            MTDivider()
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(primaryItems, id: \.self) { dest in
+                        MTNavItem(
+                            icon: dest.icon,
+                            label: dest.label,
+                            badge: badge(for: dest),
+                            isSelected: selectedDestination == dest
+                        ) {
+                            selectedDestination = dest
+                        }
+                    }
+                    Divider()
+                        .background(Color.mtOutlineVariant)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                    ForEach(secondaryItems, id: \.self) { dest in
+                        MTNavItem(
+                            icon: dest.icon,
+                            label: dest.label,
+                            badge: badge(for: dest),
+                            isSelected: selectedDestination == dest
+                        ) {
+                            selectedDestination = dest
+                        }
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            Spacer()
+            MTDivider()
+            sidebarFooter
+        }
+        .background(Color.mtSurfaceContainerLow)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 260)
+    }
+
+    private var primaryItems: [NavDestination] { NavDestination.sidebarPrimary }
+    private var secondaryItems: [NavDestination] { NavDestination.sidebarSecondary }
+
+    private func badge(for dest: NavDestination) -> Int {
+        switch dest {
+        case .models:
+            let unhealthy = coordinator.state.modelInfos.filter {
+                if case .healthy = $0.health { return false } else { return true }
+            }.count
+            return unhealthy
+        default: return 0
+        }
+    }
+
+    // MARK: Brand header
+
+    private var sidebarBrand: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.mtPrimary)
+                    .frame(width: 36, height: 36)
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.mtOnPrimary)
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                Text(AppBrand.name)
+                    .font(.mtTitleSmall)
+                    .foregroundStyle(Color.mtOnSurface)
+                Text(AppBrand.tagline)
+                    .font(.mtLabelSmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    // MARK: Sidebar footer
+
+    private var sidebarFooter: some View {
+        HStack(spacing: 8) {
+            providerDot
+            Spacer()
+            if coordinator.state.indexingStatus.isRunning {
+                MTProgressChip(
+                    label: "Indexing",
+                    value: coordinator.state.indexingStatus.progress
+                )
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var providerDot: some View {
+        let anyHealthy = coordinator.state.providerHealth.values.contains(.healthy)
+        Circle()
+            .fill(anyHealthy ? Color.mtHealthy : Color.mtUnavailable)
+            .frame(width: 8, height: 8)
+        Text(anyHealthy ? "Model ready" : "No model")
+            .font(.mtLabelSmall)
+            .foregroundStyle(Color.mtOnSurfaceVariant)
+    }
+
+    // MARK: Content panel (center)
+
+    @ViewBuilder
+    private var contentPanel: some View {
+        switch selectedDestination {
+        case .briefs:    EmptyView()
+        case .models:    ModelManagerView()
+        case .prompts:   PromptLibraryView()
+        case .settings:  SettingsView()
+        }
+    }
+
+    // MARK: Detail panel
+
+    @ViewBuilder
+    private var detailPanel: some View {
+        if let id = services.improve.presentedBriefID,
+           let brief = services.briefs.briefs.first(where: { $0.id == id }) {
+            ImproveWorkspaceView(brief: brief)
+        } else {
+            BriefStudioView()
+        }
+    }
+}
+
+// MARK: - Settings view
+
+struct SettingsView: View {
+    @Environment(AppCoordinator.self) private var coordinator
+    @Environment(AppServices.self) private var services
+    @Environment(LoginItemModel.self) private var loginItem
+    @Environment(UpdatesModel.self) private var updates
+    @State private var workspacePath: String = ""
+    @AppStorage(AppTheme.storageKey) private var themeChoice = AppTheme.default.rawValue
+    @AppStorage(AppFont.storageKey) private var fontChoice = AppFont.default.rawValue
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                pageHeader
+                appearanceSection
+                generationSection
+                startupSection
+                AssistantCard()
+                KnowledgeCard()
+                CloudUsageCard()
+                SharingCard()
+                DiagnosticsCard()
+                WorkspacesCard()
+                ExternalServersCard()
+                ConnectCard()
+                indexingSection
+                aboutSection
+            }
+            .padding(24)
+        }
+        .background(Color.mtSurfaceContainerLowest)
+    }
+
+    private var pageHeader: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Settings")
+                .font(.mtHeadlineSmall)
+                .foregroundStyle(Color.mtOnSurface)
+            Text("Models, privacy, project search and sharing for \(AppBrand.name).")
+                .font(.mtBodyMedium)
+                .foregroundStyle(Color.mtOnSurfaceVariant)
+        }
+    }
+
+    private var appearanceSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                MTCardTitle("Appearance", icon: "circle.lefthalf.filled", tint: .accent)
+                MTDivider()
+                Picker("Theme", selection: $themeChoice) {
+                    ForEach(AppTheme.allCases) { Text($0.title).tag($0.rawValue) }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                Text("System follows your Mac's Light or Dark setting as it changes.")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+                MTDivider()
+                HStack {
+                    Text("Font").font(.mtLabelLarge).foregroundStyle(Color.mtOnSurface)
+                    Spacer()
+                    Picker("Font", selection: $fontChoice) {
+                        ForEach(AppFont.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Text("The quick brown fox jumps over the lazy dog. 0123456789")
+                    .font(AppTypography.font(AppFont(stored: fontChoice), size: 14, weight: .regular))
+                    .foregroundStyle(Color.mtOnSurface)
+                Text("Code and diffs always use a monospaced font.")
+                    .font(.mtBodySmall)
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+            }
+        }
+    }
+
+    private var generationSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                MTCardTitle("Inference", icon: "sparkles", tint: .accent)
+                MTDivider()
+                providerHealthRows
+            }
+        }
+    }
+
+    private var startupSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                MTCardTitle("Privacy & startup", icon: "lock.shield", tint: .success)
+                MTDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Where your work is processed")
+                        .font(.mtLabelLarge)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                    Picker("Privacy", selection: Binding(
+                        get: { services.routingPolicy },
+                        set: { policy in Task { await services.setRoutingPolicy(policy) } })
+                    ) {
+                        ForEach(RoutingPolicy.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    Text(services.routingPolicy.summary)
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                MTDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Launch \(AppBrand.name) at login", isOn: Binding(
+                        get: { loginItem.isOn },
+                        set: { loginItem.setEnabled($0) }))
+                        .disabled(!loginItem.isAvailable)
+                    Text("\(AppBrand.name) keeps running in the menu bar when you close its window, so other apps can keep using your local model.")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let message = loginItem.message {
+                        Text(message).font(.mtBodySmall).foregroundStyle(Color.mtDegraded)
+                    }
+                }
+                MTDivider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Check for updates daily", isOn: Binding(
+                        get: { updates.automaticChecks },
+                        set: { updates.setAutomaticChecks($0) }))
+                    Text("Off by default. \(AppBrand.name) only asks GitHub whether a newer version exists when you press \"Check now\" or turn this on (and never under \"Only on this Mac\"). Nothing about you or your work is sent, and it never installs anything by itself.")
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Check now") { Task { await updates.checkNow() } }
+                            .disabled(updates.status == .checking)
+                        if case .available(let info) = updates.status {
+                            Button("Download \(info.version)…") { NSWorkspace.shared.open(info.url) }
+                        }
+                    }
+                    if let line = updates.statusLine {
+                        Text(line).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+
+    private var providerHealthRows: some View {
+        ForEach(
+            coordinator.state.modelInfos.sorted { $0.id < $1.id },
+            id: \.id
+        ) { model in
+            HStack {
+                Image(systemName: model.kind == .local ? "internaldrive" : "cloud")
+                    .foregroundStyle(Color.mtOnSurfaceVariant)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.displayName)
+                        .font(.mtBodyMedium)
+                        .foregroundStyle(Color.mtOnSurface)
+                    Text(model.id)
+                        .font(.mtLabelSmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                }
+                Spacer()
+                healthBadge(model.health)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func healthBadge(_ health: ProviderHealth) -> some View {
+        switch health {
+        case .healthy:
+            MTStatusBadge(label: "Ready", color: .mtHealthy)
+        case .degraded(let m):
+            MTStatusBadge(label: "Degraded", color: .mtDegraded).help(m)
+        case .unavailable(let m):
+            MTStatusBadge(label: "Unavailable", color: .mtUnavailable).help(m)
+        }
+    }
+
+    private var indexingSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                MTCardTitle("Indexing", icon: "arrow.clockwise.circle", tint: .warning)
+                MTDivider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Status")
+                            .font(.mtLabelLarge)
+                            .foregroundStyle(Color.mtOnSurfaceVariant)
+                        Text(coordinator.state.indexingStatus.isRunning
+                             ? "Indexing in progress…"
+                             : "Idle")
+                            .font(.mtBodyMedium)
+                            .foregroundStyle(Color.mtOnSurface)
+                    }
+                    Spacer()
+                    if coordinator.state.indexingStatus.isRunning {
+                        MTProgressChip(
+                            label: "\(coordinator.state.indexingStatus.filesIndexed) / \(coordinator.state.indexingStatus.totalFiles)",
+                            value: coordinator.state.indexingStatus.progress
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private var aboutSection: some View {
+        MTCard {
+            VStack(alignment: .leading, spacing: 16) {
+                MTCardTitle("About", icon: "info.circle", tint: .info)
+                MTDivider()
+                infoRow("Platform", "macOS 26+  ·  Apple Silicon")
+                infoRow("Inference", "MLX Swift (in-process)")
+                infoRow("Vector DB", "SQLite-vec + FTS5")
+                infoRow("Version Control", "libgit2 (C binding)")
+                infoRow("MCP", "modelcontextprotocol/swift-sdk")
+            }
+        }
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.mtLabelLarge)
+                .foregroundStyle(Color.mtOnSurfaceVariant)
+                .frame(width: 140, alignment: .leading)
+            Text(value)
+                .font(.mtBodyMedium)
+                .foregroundStyle(Color.mtOnSurface)
+            Spacer()
+        }
+    }
+}
+#endif

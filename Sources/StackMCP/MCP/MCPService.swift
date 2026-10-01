@@ -6,7 +6,7 @@ import StackCore
 #endif
 
 /// The MCP endpoint for local clients: a Unix socket that any number of tools (Claude Desktop,
-/// Cursor, scripts via `vibe-mcp`) can connect to at once, each with its own server.
+/// Cursor, scripts via `kororo-mcp`) can connect to at once, each with its own server.
 /// The socket is owner-only, so a connection is the signed-in user and gets every permission.
 public actor MCPService {
 
@@ -247,7 +247,7 @@ struct SnapshotCreateTool: AgentToolHandler {
     func execute(arguments: [String: Value]) async throws -> [Tool.Content] {
         let message: String
         if case .string(let m) = arguments["message"] { message = m }
-        else { message = "Kokoro snapshot" }
+        else { message = "Kororo snapshot" }
 
         let ref = try await manager.createSnapshot(message: message)
         return [.text(text: "Snapshot \(ref.oid) — \(ref.message)", annotations: nil, _meta: nil)]

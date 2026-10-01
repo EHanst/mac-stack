@@ -1,4 +1,4 @@
-// VibeCockpit Metal compute kernels
+// Kororo Metal compute kernels
 // Compiled at build time: xcrun metal Kernels.metal -o default.air && xcrun metallib default.air -o default.metallib
 // The .metallib is bundled in Contents/Resources — source is never shipped.
 
