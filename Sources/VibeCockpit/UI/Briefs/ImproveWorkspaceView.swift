@@ -254,14 +254,17 @@ struct ImproveWorkspaceView: View {
             EmptyView()
         } else {
             HStack {
-                Button("Keep mine") { improve.keepMine() }.buttonStyle(MTTextButtonStyle())
+                Button("Discard") { improve.keepMine() }.buttonStyle(MTTextButtonStyle())
+                    .help("Close without saving. The brief stays exactly as it was.")
                 Button("Expand") { improve.expand(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
                     .help("Try again and turn this into a detailed specification")
                 Button("Finer") { improve.expand(studio: studio, finer: true) }.buttonStyle(MTOutlinedButtonStyle())
                     .help("Split the current steps one level finer")
                 Spacer()
-                Button("Accept and continue") { improve.acceptAndContinue(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
-                Button("Accept") { improve.accept() }.buttonStyle(MTFilledButtonStyle())
+                Button("Save and improve again") { improve.acceptAndContinue(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
+                    .help("Save this version to the brief, then run another improve pass on it")
+                Button("Save") { improve.accept() }.buttonStyle(MTFilledButtonStyle())
+                    .help("Save this version as the brief and close")
                     .keyboardShortcut(.defaultAction)
                     .disabled(improve.revision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
