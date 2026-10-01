@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build-and-test:
@@ -39,8 +39,8 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Build libgit2
-        run: brew install cmake && ./Scripts/build-libgit2.sh
+      - name: Install build tools & libgit2
+        run: brew install cmake xcodegen xcbeautify && ./Scripts/build-libgit2.sh
 
       # Cache the SPM build artefacts between runs.
       - name: Cache SPM build
@@ -49,7 +49,7 @@ jobs:
           path: |
             .build
             ~/.swiftpm
-          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}-${{ github.sha }}
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-spm-
 

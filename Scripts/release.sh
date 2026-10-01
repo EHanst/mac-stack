@@ -32,7 +32,7 @@ echo "==> Archiving $VERSION ($BUILD_NUMBER)"
 # Xcode signs nothing here; the app is signed once, explicitly, below.
 xcodebuild archive -scheme Kokoro -project Kokoro.xcodeproj -configuration Release \
   -archivePath "$ARCHIVE" MARKETING_VERSION="$VERSION" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | { command -v xcbeautify >/dev/null && xcbeautify || cat; } | tail -n 40
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO -skipPackagePluginValidation 2>&1 | { command -v xcbeautify >/dev/null && xcbeautify || cat; } | tail -n 40
 cp -R "$ARCHIVE/Products/Applications/Kokoro.app" "$APP"
 
 echo "==> Signing app (hardened runtime)"

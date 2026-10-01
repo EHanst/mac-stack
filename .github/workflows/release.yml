@@ -35,6 +35,9 @@ jobs:
       - name: Install build tools
         run: brew install cmake xcodegen xcbeautify && ./Scripts/build-libgit2.sh
 
+      - name: Run tests
+        run: swift test --parallel
+
       - name: Import signing certificate
         env:
           P12: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
@@ -68,13 +71,27 @@ jobs:
         id: dmg
         run: echo "path=$(ls build/*.dmg | head -1)" >> "$GITHUB_OUTPUT"
 
+      - name: Generate checksum
+        run: |
+          cd build
+          shasum -a 256 *.dmg > "Kokoro-${{ github.ref_name }}.sha256"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Kokoro ${{ github.ref_name }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: ${{ steps.dmg.outputs.path }}
+          files: |
+            ${{ steps.dmg.outputs.path }}
+            build/*.sha256
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/release.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/release.keychain-db" || true
+          fi
