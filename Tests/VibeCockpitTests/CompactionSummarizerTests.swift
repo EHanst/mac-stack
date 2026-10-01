@@ -46,42 +46,6 @@ struct CompactionSummarizerTests {
     }
 }
 
-@Suite("PromptLedger summary")
-struct PromptLedgerSummaryTests {
-
-    private func ledger() -> PromptLedger {
-        var l = PromptLedger()
-        l.begin(system: "SYS")
-        for n in 0..<3 { l.appendUserTurn("question \(n)"); l.appendAssistant(String(repeating: "answer ", count: 300)) }
-        return l
-    }
-
-    @Test("a run is replaced by one assistant message; user turns and the system message are untouched")
-    func replaces() throws {
-        var l = ledger()
-        let run = Array(l.messages[1..<5])
-        let result = l.summarize(1..<5, expecting: run, text: "short summary")
-        let freed = try #require(result)
-        #expect(freed > 500)
-        #expect(l.messages.count == 4)
-        #expect(l.messages[0].role == .system && l.messages[1].role == .assistant)
-        #expect(l.messages[2].content == "question 2")
-        #expect(l.userTurns == 3)
-    }
-
-    @Test("a ledger that changed while the summary was written is left alone")
-    func staleIsRejected() {
-        var l = ledger()
-        let run = Array(l.messages[1..<5])
-        l.trim(toCharacterBudget: 100)
-        #expect(l.summarize(1..<5, expecting: run, text: "short summary") == nil)
-        var m = ledger()
-        m.appendUserTurn("more")
-        let other = Array(m.messages[1..<4])   // wrong slice for the range
-        #expect(m.summarize(1..<5, expecting: other, text: "x") == nil)
-    }
-}
-
 @Suite("CompactionSummarizer parts")
 struct CompactionSummarizerPartTests {
 

@@ -11,7 +11,7 @@ struct AppBrandTests {
 
     @Test("the first-run menu-bar status uses the brand name")
     func onboardingStatus() {
-        let s = MenuBarStatus.make(models: [], isGenerating: false, onboardingNeeded: true)
+        let s = MenuBarStatus.make(models: [], onboardingNeeded: true)
         #expect(s.title == "Set up \(AppBrand.name)")
     }
 }

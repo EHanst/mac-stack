@@ -5,8 +5,7 @@ import VibeCockpitCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The Prompts page: everything saved, plus the per-task guidance ("recipes") the app adds to
-/// your messages.
+/// The Prompts page: everything saved.
 struct PromptLibraryView: View {
     @Environment(AppServices.self) private var services
     @State private var query = ""
@@ -22,7 +21,7 @@ struct PromptLibraryView: View {
                 Section("Your prompts") {
                     let found = studio.search(query)
                     if found.isEmpty {
-                        Text(studio.prompts.isEmpty ? "Nothing saved yet. Save anything you type from the chat box." : "Nothing matches.")
+                        Text(studio.prompts.isEmpty ? "Nothing saved yet. Use New prompt to save a reusable prompt." : "Nothing matches.")
                             .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     }
                     ForEach(found) { p in
@@ -56,23 +55,6 @@ struct PromptLibraryView: View {
                         Text("Prompts committed in a project's .vibe/prompts folder. Read each one before using it.")
                             .font(.mtBodySmall)
                     }
-                }
-                Section {
-                    ForEach(studio.recipes) { r in
-                        NavigationLink(value: r.id) {
-                            HStack {
-                                Image(systemName: r.enabled ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(r.enabled ? Color.mtHealthy : Color.mtOnSurfaceVariant)
-                                Text((r.recipeIntent ?? r.title).capitalized).font(.mtLabelLarge)
-                                Spacer()
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Guidance added to your messages")
-                } footer: {
-                    Text("Each kind of request gets a few lines of guidance added before it is sent. Edit or switch them off here; “What the model sees” in the chat shows the result.")
-                        .font(.mtBodySmall)
                 }
             }
             .searchable(text: $query, prompt: "Search prompts")
@@ -147,7 +129,7 @@ struct PromptLibraryView: View {
                 guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
                 if (try? await studio.importMarkdown(text, fallbackTitle: url.deletingPathExtension().lastPathComponent)) != nil { imported += 1 }
             }
-            message = imported == 0 ? "Couldn't read those files." : "Imported \(imported) prompt\(imported == 1 ? "" : "s"). Imported text is only ever pasted into the chat box; you decide what to send."
+            message = imported == 0 ? "Couldn't read those files." : "Imported \(imported) prompt\(imported == 1 ? "" : "s"). Imported text is only stored here; you decide what to use."
         }
     }
 }
@@ -176,7 +158,7 @@ struct PromptEditorView: View {
         }
         .task {
             await studio.reload()
-            if let p = (studio.prompts + studio.recipes).first(where: { $0.id == promptID }) {
+            if let p = studio.prompts.first(where: { $0.id == promptID }) {
                 draft = p
                 tagsText = p.tags.joined(separator: ", ")
             } else {
@@ -188,24 +170,18 @@ struct PromptEditorView: View {
     private func form(_ p: SavedPrompt) -> some View {
         let binding = Binding<SavedPrompt>(get: { draft ?? p }, set: { draft = $0; saved = false })
         return Form {
-            if p.kind == .recipe {
-                Section {
-                    Toggle("Add this guidance to \((p.recipeIntent ?? "").capitalized) requests", isOn: binding.enabled)
-                }
-            } else {
-                Section {
-                    TextField("Title", text: binding.title)
-                    TextField("Shortcut (type /name in the chat box)", text: Binding(
-                        get: { binding.wrappedValue.slash ?? "" },
-                        set: { var v = binding.wrappedValue; v.slash = SavedPrompt.cleanSlash($0); binding.wrappedValue = v }))
-                    TextField("Tags, comma separated", text: $tagsText)
-                        .onChange(of: tagsText) { _, new in
-                            var v = binding.wrappedValue
-                            v.tags = new.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                            binding.wrappedValue = v
-                        }
-                    Toggle("Pin to the top", isOn: binding.pinned)
-                }
+            Section {
+                TextField("Title", text: binding.title)
+                TextField("Shortcut name", text: Binding(
+                    get: { binding.wrappedValue.slash ?? "" },
+                    set: { var v = binding.wrappedValue; v.slash = SavedPrompt.cleanSlash($0); binding.wrappedValue = v }))
+                TextField("Tags, comma separated", text: $tagsText)
+                    .onChange(of: tagsText) { _, new in
+                        var v = binding.wrappedValue
+                        v.tags = new.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                        binding.wrappedValue = v
+                    }
+                Toggle("Pin to the top", isOn: binding.pinned)
             }
             Section("Text") {
                 TextEditor(text: binding.body).font(.mtBodyMedium).frame(minHeight: 160)
@@ -215,18 +191,16 @@ struct PromptEditorView: View {
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 }
             }
-            if p.kind == .prompt {
-                Section("Different wording for a model") {
-                    Picker("Model", selection: $variantFamily) {
-                        ForEach(Self.families, id: \.0) { Text($0.1).tag($0.0) }
-                    }
-                    TextEditor(text: Binding(
-                        get: { binding.wrappedValue.modelVariants[variantFamily] ?? "" },
-                        set: { var v = binding.wrappedValue; v.modelVariants[variantFamily] = $0.isEmpty ? nil : $0; binding.wrappedValue = v }))
-                        .font(.mtBodyMedium).frame(minHeight: 80)
-                    Text("Used instead of the text above when that kind of model is answering. Leave empty to use the same text everywhere.")
-                        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+            Section("Different wording for a model") {
+                Picker("Model", selection: $variantFamily) {
+                    ForEach(Self.families, id: \.0) { Text($0.1).tag($0.0) }
                 }
+                TextEditor(text: Binding(
+                    get: { binding.wrappedValue.modelVariants[variantFamily] ?? "" },
+                    set: { var v = binding.wrappedValue; v.modelVariants[variantFamily] = $0.isEmpty ? nil : $0; binding.wrappedValue = v }))
+                    .font(.mtBodyMedium).frame(minHeight: 80)
+                Text("Used instead of the text above when that kind of model is answering. Leave empty to use the same text everywhere.")
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
             }
             if !p.versions.isEmpty {
                 Section("Earlier versions") {
@@ -255,7 +229,7 @@ struct PromptEditorView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle(p.kind == .recipe ? (p.recipeIntent ?? "").capitalized : p.title)
+        .navigationTitle(p.title)
     }
 
     private func save() {
@@ -270,7 +244,7 @@ struct PromptEditorView: View {
         Task {
             do {
                 try await studio.restore(id: promptID, versionIndex: index)
-                draft = (studio.prompts + studio.recipes).first { $0.id == promptID }
+                draft = studio.prompts.first { $0.id == promptID }
                 error = nil
             } catch { self.error = error.localizedDescription }
         }
@@ -280,7 +254,7 @@ struct PromptEditorView: View {
         Task {
             do {
                 try await studio.resetToDefault(id: promptID)
-                draft = (studio.prompts + studio.recipes).first { $0.id == promptID }
+                draft = studio.prompts.first { $0.id == promptID }
             } catch { self.error = error.localizedDescription }
         }
     }

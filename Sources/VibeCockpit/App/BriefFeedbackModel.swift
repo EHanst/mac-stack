@@ -28,7 +28,6 @@ public final class BriefFeedbackModel {
 
     private struct UndoEntry {
         let body: String?
-        let inputAtEdit: String?
     }
 
     private let sidecar: BriefSidecar
@@ -55,7 +54,6 @@ public final class BriefFeedbackModel {
         let mine = generation
         editingBriefID = brief.id
         let previousBody = brief.body
-        let previousInputAtEdit = brief.inputAtEdit
         phase = .editing
 
         task = Task { [sidecar, workbench] in
@@ -77,7 +75,7 @@ public final class BriefFeedbackModel {
 
                 // Push the state we captured before the edit.
                 self.undoStacks[brief.id, default: []].append(
-                    UndoEntry(body: previousBody, inputAtEdit: previousInputAtEdit)
+                    UndoEntry(body: previousBody)
                 )
 
                 self.phase = .idle
@@ -99,9 +97,9 @@ public final class BriefFeedbackModel {
 
         workbench.snapshotIfChanged(id: briefID)
         if let body = entry.body {
-            workbench.restoreBody(body, inputAtEdit: entry.inputAtEdit, briefID: briefID)
+            workbench.restoreBody(body, briefID: briefID)
         } else {
-            workbench.restoreBody(nil, inputAtEdit: nil, briefID: briefID)
+            workbench.restoreBody(nil, briefID: briefID)
         }
     }
 

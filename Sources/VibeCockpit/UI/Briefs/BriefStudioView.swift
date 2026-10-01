@@ -31,7 +31,10 @@ struct BriefStudioView: View {
             MTDivider()
             if !fresh {
                 // Same place as the Improve workspace's strip, so suggestions never change position.
-                CappedScroll(maxHeight: 150) { BrainstormBanner() }
+                CappedScroll(maxHeight: 150) { BrainstormBanner { question in
+                    draft = "On “\(question)”: "
+                    inputFocused = true
+                } }
                     .padding(.horizontal, 16).padding(.top, 8)
             }
             if fresh { welcome } else { BriefPane() }
@@ -122,7 +125,7 @@ struct BriefStudioView: View {
             Image(systemName: "text.cursor").font(.system(size: 40))
                 .foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.4))
             Text("What do you want the AI to do?").font(.mtTitleMedium)
-            Text("Type it below in plain words. Then keep typing to change the brief: “add acceptance criteria”, “make step 3 more specific”.")
+            Text("Type it below in plain words. Then keep typing to change the brief: “add acceptance criteria”, “make step 3 more specific”. Pick the model and where it will run once the brief appears.")
                 .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 .multilineTextAlignment(.center).frame(maxWidth: 380)
         }

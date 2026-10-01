@@ -15,7 +15,7 @@ struct ReviewProjectPromptSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label(entry.prompt.title, systemImage: "shippingbox").font(.mtTitleMedium)
-            Text("From the project “\(entry.workspace)”, file \(entry.fileName). Someone else may have written it, so read it first. Approving only lets you paste this text into the chat box and lets apps you've allowed read it; it can't run anything or change a setting. If the file changes later, you'll be asked again.")
+            Text("From the project “\(entry.workspace)”, file \(entry.fileName). Someone else may have written it, so read it first. Approving only lets you use this text and lets apps you've allowed read it; it can't run anything or change a setting. If the file changes later, you'll be asked again.")
                 .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 .fixedSize(horizontal: false, vertical: true)
             ScrollView {

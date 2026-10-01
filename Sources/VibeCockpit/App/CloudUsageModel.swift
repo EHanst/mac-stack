@@ -36,8 +36,6 @@ public final class CloudUsageModel {
         let what: String
         switch e.purpose {
         case .cloudInference: what = "Question to \(e.provider ?? "cloud model")"
-        case .webFetch: what = "Web page read"
-        case .webSearch: what = "Web search"
         case .modelDownload: what = "Model download"
         case .updateCheck: what = "Update check"
         }

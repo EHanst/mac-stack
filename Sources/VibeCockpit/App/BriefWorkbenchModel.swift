@@ -120,12 +120,11 @@ public final class BriefWorkbenchModel {
         setBody(text, briefID: id)
     }
 
-    /// Sets the body of a named brief, which need not be the selected one. If the brief is linked,
-    /// sets inputAtEdit to the current input. No-op if it no longer exists.
+    /// Sets the body of a named brief, which need not be the selected one.
+    /// No-op if it no longer exists.
     public func setBody(_ text: String, briefID: String) {
         guard briefs.contains(where: { $0.id == briefID }) else { return }
         mutate(id: briefID) { brief in
-            if brief.body == nil { brief.inputAtEdit = brief.input }
             brief.body = text
             brief.updatedAt = Date()
         }
@@ -146,32 +145,20 @@ public final class BriefWorkbenchModel {
         guard let brief = briefs.first(where: { $0.id == id }),
               let draft = brief.draft, draft != newStartingText else { return }
         mutate(id: id) { brief in
-            brief.versions.append(Brief.Version(date: Date(), input: brief.input, body: draft, inputAtEdit: brief.inputAtEdit))
+            brief.versions.append(Brief.Version(date: Date(), input: brief.input, body: draft))
             if brief.versions.count > Brief.maxVersions { brief.versions.removeFirst(brief.versions.count - Brief.maxVersions) }
             brief.updatedAt = Date()
         }
     }
 
-    /// Restores both the body and its linked-input snapshot in one call. Used by the undo stack.
-    /// If `text` is nil, the brief is relinked to its input (body cleared, inputAtEdit cleared).
-    public func restoreBody(_ text: String?, inputAtEdit: String?, briefID: String) {
+    /// Restores the body in one call. Used by the undo stack.
+    /// If `text` is nil, the brief is relinked to its input (body cleared).
+    public func restoreBody(_ text: String?, briefID: String) {
         guard briefs.contains(where: { $0.id == briefID }) else { return }
         mutate(id: briefID) { brief in
             brief.body = text
-            brief.inputAtEdit = inputAtEdit
             brief.updatedAt = Date()
         }
-    }
-
-    public func rebuildFromInput() {
-        guard let brief = selected, brief.body != nil else { return }
-        snapshotIfChanged(id: brief.id)
-        mutate { $0.body = nil; $0.inputAtEdit = nil; $0.updatedAt = Date() }
-    }
-
-    public var inputChangedSinceEdit: Bool {
-        guard let brief = selected, brief.body != nil else { return false }
-        return brief.input != brief.inputAtEdit
     }
 
     public func appendToBody(_ text: String) {
@@ -179,14 +166,13 @@ public final class BriefWorkbenchModel {
         appendToBody(text, briefID: id)
     }
 
-    /// Appends to the body of a named brief, which need not be the selected one. If the brief is linked,
-    /// sets inputAtEdit to the current input. No-op if it no longer exists.
+    /// Appends to the body of a named brief, which need not be the selected one. A linked brief
+    /// becomes edited. No-op if it no longer exists.
     @discardableResult
     public func appendToBody(_ text: String, briefID: String) -> Bool {
         guard briefs.contains(where: { $0.id == briefID }) else { return false }
         mutate(id: briefID) { brief in
             if brief.body == nil {
-                brief.inputAtEdit = brief.input
                 brief.body = brief.input + (brief.input.isEmpty ? "" : "\n\n") + text
             } else {
                 brief.body! += (brief.body!.isEmpty ? "" : "\n\n") + text
@@ -258,7 +244,6 @@ public final class BriefWorkbenchModel {
             if hasUnsavedVersion(b) { b.snapshot() }
             b.input = version.input
             b.body = version.body
-            b.inputAtEdit = version.inputAtEdit
             b.updatedAt = Date()
         }
     }

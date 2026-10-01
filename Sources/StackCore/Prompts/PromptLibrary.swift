@@ -7,13 +7,11 @@ public actor PromptLibrary {
 
     public enum LibraryError: LocalizedError, Equatable {
         case slashInUse(String)
-        case cannotDelete(String)
         case notFound(String)
 
         public var errorDescription: String? {
             switch self {
             case .slashInUse(let s): "/\(s) already belongs to another prompt."
-            case .cannotDelete(let t): "“\(t)” came with the app and can't be deleted; you can edit it or switch it off."
             case .notFound: "That prompt no longer exists."
             }
         }
@@ -35,7 +33,7 @@ public actor PromptLibrary {
 
     // MARK: Loading and seeding
 
-    /// Reads the folder and adds any built-in recipe that's missing. Starter prompts are added once
+    /// Reads the folder. Starter prompts are added once
     /// (a marker file records that), so deleting one doesn't bring it back.
     public func load() {
         guard !loaded else { return }
@@ -46,12 +44,15 @@ public actor PromptLibrary {
         for file in files where file.pathExtension == "json" {
             do {
                 let prompt = try decoder.decode(SavedPrompt.self, from: Data(contentsOf: file))
+                if prompt.id.hasPrefix("builtin.recipe.") {   // per-task guidance, retired
+                    try? FileManager.default.removeItem(at: file)
+                    continue
+                }
                 prompts[prompt.id] = prompt
             } catch {
                 logger.error("skipping unreadable prompt \(file.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
-        for recipe in BuiltInPrompts.recipes where prompts[recipe.id] == nil { prompts[recipe.id] = recipe; write(recipe) }
         let marker = directory.appendingPathComponent(".starters-v1")
         if !FileManager.default.fileExists(atPath: marker.path) {
             for starter in BuiltInPrompts.starters where prompts[starter.id] == nil { prompts[starter.id] = starter; write(starter) }
@@ -71,30 +72,21 @@ public actor PromptLibrary {
         return prompts[id]
     }
 
-    /// Ordinary prompts (not recipes), pinned first, then most recently used.
-    public func userPrompts() -> [SavedPrompt] { all().filter { $0.kind == .prompt } }
-
-    public func recipes() -> [SavedPrompt] { all().filter { $0.kind == .recipe } }
+    /// Pinned first, then most recently used.
+    public func userPrompts() -> [SavedPrompt] { all() }
 
     public func prompt(slash: String) -> SavedPrompt? {
         guard let key = SavedPrompt.cleanSlash(slash) else { return nil }
-        return all().first { $0.kind == .prompt && $0.slash == key }
+        return all().first { $0.slash == key }
     }
 
     /// Case-insensitive match on title, body, tags and slash name. Empty query = everything.
-    public func search(_ query: String, kind: SavedPrompt.Kind = .prompt) -> [SavedPrompt] {
+    public func search(_ query: String) -> [SavedPrompt] {
         let terms = query.lowercased().split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        return all().filter { $0.kind == kind }.filter { p in
+        return all().filter { p in
             let haystack = ([p.title, p.body, p.slash ?? ""] + p.tags).joined(separator: "\n").lowercased()
             return terms.allSatisfy { haystack.contains($0) }
         }
-    }
-
-    /// The guidance text for a task. `nil` means "no recipe stored, use the built-in text";
-    /// an empty string means the user switched the recipe off.
-    public func recipeText(for intent: String) -> String? {
-        guard let recipe = recipes().first(where: { $0.recipeIntent == intent }) else { return nil }
-        return recipe.enabled ? recipe.body : ""
     }
 
     // MARK: Writing
@@ -105,7 +97,7 @@ public actor PromptLibrary {
         load()
         var prompt = incoming
         if let slash = prompt.slash,
-           prompts.values.contains(where: { $0.id != prompt.id && $0.kind == .prompt && $0.slash == slash }) {
+           prompts.values.contains(where: { $0.id != prompt.id && $0.slash == slash }) {
             throw LibraryError.slashInUse(slash)
         }
         if let old = prompts[prompt.id] {
@@ -131,7 +123,6 @@ public actor PromptLibrary {
     public func delete(id: String) throws {
         load()
         guard let p = prompts[id] else { throw LibraryError.notFound(id) }
-        if p.builtIn && p.kind == .recipe { throw LibraryError.cannotDelete(p.title) }
         prompts[id] = nil
         try? FileManager.default.removeItem(at: file(for: id))
     }
@@ -147,16 +138,15 @@ public actor PromptLibrary {
         return try save(p)
     }
 
-    /// Gives a built-in recipe or starter its shipped text back.
+    /// Gives a starter its shipped text back.
     @discardableResult
     public func resetToDefault(id: String) throws -> SavedPrompt {
         load()
         guard var p = prompts[id], p.builtIn else { throw LibraryError.notFound(id) }
-        let original = (BuiltInPrompts.recipes + BuiltInPrompts.starters).first { $0.id == id }
+        let original = BuiltInPrompts.starters.first { $0.id == id }
         guard let original else { throw LibraryError.notFound(id) }
         p.title = original.title
         p.body = original.body
-        p.enabled = true
         return try save(p)
     }
 

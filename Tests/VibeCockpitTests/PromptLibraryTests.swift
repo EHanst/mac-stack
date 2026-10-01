@@ -10,20 +10,11 @@ struct PromptLibraryTests {
             .appendingPathComponent("prompts-\(UUID().uuidString)", isDirectory: true))
     }
 
-    @Test("first load seeds one recipe per task and the starter pack")
+    @Test("first load seeds the starter pack")
     func seeds() async {
         let lib = makeLibrary()
-        #expect(await lib.recipes().count == BuiltInPrompts.intents.count)
         #expect(await lib.userPrompts().count == BuiltInPrompts.starters.count)
         #expect(await lib.prompt(slash: "/review")?.title == "Review a file")
-    }
-
-    @Test("seeded recipes match the text the app used before recipes were editable")
-    func recipeText() async {
-        let lib = makeLibrary()
-        for intent in BuiltInPrompts.intents {
-            #expect(await lib.recipeText(for: intent) == BuiltInPrompts.recipeText(for: intent))
-        }
     }
 
     @Test("a deleted starter does not come back on the next launch")
@@ -32,7 +23,7 @@ struct PromptLibraryTests {
         try await lib.delete(id: "builtin.starter.review")
         let again = PromptLibrary(directory: lib.directory)
         #expect(await again.prompt(id: "builtin.starter.review") == nil)
-        #expect(await again.recipes().count == BuiltInPrompts.intents.count)
+        #expect(await again.all().count == BuiltInPrompts.starters.count - 1)
     }
 
     @Test("saved prompts survive a relaunch")
@@ -83,18 +74,29 @@ struct PromptLibraryTests {
         }
     }
 
-    @Test("a built-in recipe can be switched off and reset, but not deleted")
-    func recipeControls() async throws {
+    @Test("a built-in starter can be reset to its shipped text")
+    func starterReset() async throws {
         let lib = makeLibrary()
-        let id = BuiltInPrompts.recipeID(for: "debug")
-        var recipe = try #require(await lib.prompt(id: id))
-        recipe.enabled = false
-        recipe.body = "Custom"
-        _ = try await lib.save(recipe)
-        #expect(await lib.recipeText(for: "debug") == "")
-        await #expect(throws: PromptLibrary.LibraryError.self) { try await lib.delete(id: id) }
+        let id = "builtin.starter.review"
+        var starter = try #require(await lib.prompt(id: id))
+        let shipped = starter.body
+        starter.body = "Custom"
+        _ = try await lib.save(starter)
         _ = try await lib.resetToDefault(id: id)
-        #expect(await lib.recipeText(for: "debug") == BuiltInPrompts.recipeText(for: "debug"))
+        #expect(await lib.prompt(id: id)?.body == shipped)
+    }
+
+    @Test("retired per-task guidance files are removed on load")
+    func retiredRecipes() async throws {
+        let lib = makeLibrary()
+        _ = await lib.all()
+        let file = lib.directory.appendingPathComponent("builtin.recipe.debug.json")
+        let old = SavedPrompt(id: "builtin.recipe.debug", title: "Guidance", body: "x", builtIn: true)
+        let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(old).write(to: file)
+        let again = PromptLibrary(directory: lib.directory)
+        #expect(await again.prompt(id: old.id) == nil)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
     }
 
     @Test("search matches title, body and tags; pinned and recently used come first")
@@ -128,6 +130,6 @@ struct PromptLibraryTests {
         _ = await lib.all()
         try Data("{ nope".utf8).write(to: lib.directory.appendingPathComponent("bad.json"))
         let again = PromptLibrary(directory: lib.directory)
-        #expect(await again.recipes().count == BuiltInPrompts.intents.count)
+        #expect(await again.all().count == BuiltInPrompts.starters.count)
     }
 }
