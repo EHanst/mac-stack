@@ -25,6 +25,7 @@
 - Empty body in machine form: no empty `<task>` / `# task` / `#TASK` block.
 - A reference item with a newline in its path stays on one line in every structure.
 - Inline file text containing a triple-backtick fence in the markdown form uses a longer fence.
+- A Human body that already contains its own `<task>` tag is not wrapped again in the XML machine form.
 - Stored view mode of an unknown or legacy value ("Preview", "Edit", "") opens Human.
 
 ---
@@ -103,6 +104,23 @@
         #expect(t.components(separatedBy: "</file>").count == 2)
     }
 
+    @Test("a body that already has a task tag is not wrapped again")
+    func compactXMLNoNesting() {
+        var b = compactBrief(family: "claude")
+        b.input = "<task>Fix it</task>"
+        let t = BriefCompiler.compile(b, compact: true).text
+        #expect(t.hasPrefix("<task>Fix it</task>") && t.components(separatedBy: "<task>").count == 2)
+    }
+
+    @Test("machine form is strictly smaller for a decorated brief (estimate is characters / 2.5)")
+    func compactStrictlySmaller() {
+        for family in ["claude", "gpt", "local"] {
+            var b = compactBrief(family: family)
+            b.input = "## Goal\n\n**Fix** the __login__ timeout.\n\n\n## Notes\n\nKeep the API stable.   \n"
+            #expect(BriefCompiler.compile(b, compact: true).tokens < BriefCompiler.compile(b).tokens, "\(family)")
+        }
+    }
+
     @Test("an empty body emits no task block")
     func compactEmptyBody() {
         var b = compactBrief(family: "claude")
@@ -128,7 +146,11 @@
         var out: [String] = []
         switch structure {
         case .xmlTags:
-            if !task.isEmpty { out.append("<task>\n" + task.replacingOccurrences(of: "</task", with: "<\\/task", options: .caseInsensitive) + "\n</task>") }
+            if !task.isEmpty {
+                // A body that already carries its own <task> block is passed through, not nested.
+                if task.range(of: "<task>", options: .caseInsensitive) != nil { out.append(task) }
+                else { out.append("<task>\n" + task.replacingOccurrences(of: "</task", with: "<\\/task", options: .caseInsensitive) + "\n</task>") }
+            }
             for item in items {
                 if item.mode == .reference { out.append("<ref p=\"\(attribute(item.ref))\"/>"); continue }
                 out.append("<file p=\"\(attribute(item.ref))\">\n" + neutralize(compactItemText(item)) + "\n</file>")
@@ -176,7 +198,7 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 - Test: `Tests/KororoTests/BriefUXTests.swift` (append)
 
 **Interfaces:**
-- Produces: `public enum BriefViewMode: String, Sendable, CaseIterable { case human, machine; public static func from(stored: String) -> BriefViewMode; public var label: String }`
+- Produces: `public enum BriefViewMode: String, Sendable, CaseIterable { case human, machine; public static func from(stored: String) -> BriefViewMode; public var label: String; public static func machineCaption(for target: TargetProfile) -> String }`
 
 - [ ] **Step 1: Write the failing test.** Append to `BriefUXTests.swift` inside its suite:
 
@@ -187,6 +209,13 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
         #expect(BriefViewMode.from(stored: "human") == .human)
         for legacy in ["Preview", "Edit", "", "junk"] { #expect(BriefViewMode.from(stored: legacy) == .human) }
         #expect(BriefViewMode.human.label == "Human" && BriefViewMode.machine.label == "Machine")
+    }
+
+    @Test("machine caption names the model and its structure")
+    func machineCaption() {
+        #expect(BriefViewMode.machineCaption(for: .make(modelFamily: "claude", surface: .other)) == "Claude · XML tags")
+        #expect(BriefViewMode.machineCaption(for: .make(modelFamily: "gpt", surface: .other)) == "GPT · Markdown")
+        #expect(BriefViewMode.machineCaption(for: .make(modelFamily: "local", surface: .other)) == "Model on this Mac · plain markers")
     }
 ```
 
@@ -204,6 +233,17 @@ public enum BriefViewMode: String, Sendable, CaseIterable {
 
     public static func from(stored: String) -> BriefViewMode { BriefViewMode(rawValue: stored) ?? .human }
     public var label: String { self == .human ? "Human" : "Machine" }
+
+    /// One line saying why the machine form looks the way it does, e.g. "Claude · XML tags".
+    public static func machineCaption(for target: TargetProfile) -> String {
+        let shape: String
+        switch target.structure {
+        case .xmlTags: shape = "XML tags"
+        case .markdown: shape = "Markdown"
+        case .plainNumbered: shape = "plain markers"
+        }
+        return "\(target.model.displayName) · \(shape)"
+    }
 }
 ```
 
@@ -222,9 +262,23 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `Sources/Kororo/UI/Briefs/BriefPane.swift` (`ViewMode`, `viewMode`, `editor(_:compiled:)`)
+- Test: `Tests/KororoTests/BriefWorkbenchModelTests.swift` (append; mirror that file's existing setup for a model with a selected brief)
 
 **Interfaces:**
 - Consumes: `BriefViewMode` (Task 2), `BriefCompiler.compile(_:compact:)` (Task 1), `EchoGuardedEditor`.
+
+- [ ] **Step 0: Write the failing test.** Using the file's existing helper to make a workbench model with one selected brief targeting Claude, assert the view and the clipboard share one source:
+
+```swift
+    @Test("copy for machine is exactly the compiled machine text the panel shows")
+    func machineCopyMatchesView() async throws {
+        // build `model` with a selected brief exactly as neighbouring tests do
+        let brief = try #require(model.selected)
+        #expect(model.copyText(for: nil, compact: true) == BriefCompiler.compile(brief, compact: true).text)
+    }
+```
+
+Run `swift test --filter BriefWorkbenchModelTests`; it should already PASS (it pins existing behaviour so the view and clipboard cannot drift).
 
 - [ ] **Step 1: Replace the mode state.** Delete `private enum ViewMode`; change the storage and accessor to:
 
@@ -262,6 +316,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 ```
+
+Under the picker add `Text(BriefViewMode.machineCaption(for: brief.target)).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)` shown only when `viewMode == .machine`.
 
 Compute `let compact = BriefCompiler.compile(brief, compact: true)` once at the top (replacing the `compactTokens` line) and use `compact.tokens` and `compact.text` (`compactText`) throughout. Remove the now-unused `MarkdownText` usage here (leave the type; Improve still uses it).
 
