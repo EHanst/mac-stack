@@ -14,6 +14,7 @@ struct ImproveInlineView: View {
 
     @State private var tab = Tab.result
     @State private var acceptedChanges: Set<Int> = []
+    @State private var cachedChanges: [WordDiff.Change] = []
 
     private enum Tab: String, CaseIterable {
         case result = "Result"
@@ -139,7 +140,7 @@ struct ImproveInlineView: View {
     // MARK: Changes
 
     private var changes: [WordDiff.Change] {
-        WordDiff.changes(from: improve.originalText, to: improve.revision)
+        cachedChanges
     }
 
     @ViewBuilder
@@ -225,7 +226,9 @@ struct ImproveInlineView: View {
     }
 
     private func resetAccepted() {
-        acceptedChanges = Set(changes.map(\.id))
+        let diffs = WordDiff.changes(from: improve.originalText, to: improve.revision)
+        cachedChanges = diffs
+        acceptedChanges = Set(diffs.map(\.id))
     }
 
     // MARK: Actions

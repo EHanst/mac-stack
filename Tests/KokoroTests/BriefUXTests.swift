@@ -53,7 +53,8 @@ struct BriefUXTests {
         #expect(BriefViewMode.from(stored: "machine") == .machine)
         #expect(BriefViewMode.from(stored: "human") == .human)
         for legacy in ["Preview", "Edit", "", "junk"] { #expect(BriefViewMode.from(stored: legacy) == .human) }
-        #expect(BriefViewMode.human.label == "Human" && BriefViewMode.machine.label == "Machine")
+        #expect(BriefViewMode.from(stored: "json") == .json)
+        #expect(BriefViewMode.human.label == "Human" && BriefViewMode.machine.label == "Machine" && BriefViewMode.json.label == "JSON")
     }
 
     @Test("machine caption names the model and its structure")

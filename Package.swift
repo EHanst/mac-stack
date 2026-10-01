@@ -119,6 +119,9 @@ let package = Package(
             name: "Kokoro",
             dependencies: ["KokoroCore"],
             path: "Sources/Kokoro",
+            exclude: [
+                "Info.plist",
+            ],
             sources: [
                 "App/KokoroApp.swift",
                 "UI/",

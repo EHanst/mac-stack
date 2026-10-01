@@ -321,6 +321,22 @@ struct BriefCompilerTests {
         #expect(t.contains("#REF B .swift"))
     }
 
+    @Test("JSON form is valid, carries task, target and files, and omits text for references")
+    func jsonForm() throws {
+        var b = compactBrief(family: "claude")
+        b.input = "## Goal\n\nFix the \"login\" timeout.\n```\nlet a = 1\n```"
+        let out = BriefCompiler.compile(b, form: .json)
+        let obj = try #require(JSONSerialization.jsonObject(with: Data(out.text.utf8)) as? [String: Any])
+        #expect((obj["task"] as? String)?.contains("Fix the \"login\" timeout.\n```\nlet a = 1\n```") == true)
+        #expect((obj["target"] as? [String: Any])?["model"] as? String == "claude")
+        let files = try #require(obj["files"] as? [[String: Any]])
+        #expect(files.count == 2)
+        #expect(files[0]["path"] as? String == "A.swift" && files[0]["text"] as? String == "let a = 1\n\n\nlet b = 2")
+        #expect(files[1]["mode"] as? String == "reference" && files[1]["text"] == nil)
+        #expect(out.text == BriefCompiler.compile(b, form: .json).text)
+        #expect(out.tokens > 0)
+    }
+
     @Test("machine form is deterministic")
     func compactDeterministic() {
         let b = compactBrief(family: "claude")

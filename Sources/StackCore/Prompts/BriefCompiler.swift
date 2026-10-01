@@ -32,6 +32,13 @@ public enum BriefCompiler {
     public static func compile(_ original: Brief) -> CompiledPrompt { compile(original, compact: false) }
 
     public static func compile(_ original: Brief, compact: Bool) -> CompiledPrompt {
+        compile(original, form: compact ? .compact : .readable)
+    }
+
+    /// `json` is the same content as one JSON object, for programs that need to parse it.
+    public enum Form: Sendable { case readable, compact, json }
+
+    public static func compile(_ original: Brief, form: Form) -> CompiledPrompt {
         var warnings: [BriefWarning] = []
         var totalRedactions = 0
         var brief = original
@@ -46,13 +53,13 @@ public enum BriefCompiler {
                                   itemID: nil))
         }
 
-        for i in brief.contextItems.indices {
+        for i in brief.contextItems.indices where brief.contextItems[i].included {
             let redactedText = ContextRedactor.redact(brief.contextItems[i].text)
             let redactedRef = ContextRedactor.redact(brief.contextItems[i].ref)
             brief.contextItems[i].text = redactedText.text
             brief.contextItems[i].ref = redactedRef.text
-            if brief.contextItems[i].included, redactedText.count + redactedRef.count > 0 {
-                let n = redactedText.count + redactedRef.count
+            let n = redactedText.count + redactedRef.count
+            if n > 0 {
                 totalRedactions += n
                 warnings.append(.init(code: .secretRedacted,
                                       message: "\(n) secret\(n == 1 ? " was" : "s were") removed from \(brief.contextItems[i].ref).",
@@ -83,8 +90,11 @@ public enum BriefCompiler {
         }
 
         func render(_ items: [ContextItem]) -> String {
-            compact ? renderCompact(body.text, items: items, structure: structure)
-                    : renderText(body.text, items: items, structure: structure)
+            switch form {
+            case .readable: renderText(body.text, items: items, structure: structure)
+            case .compact: renderCompact(body.text, items: items, structure: structure)
+            case .json: renderJSON(body.text, items: items, target: brief.target)
+            }
         }
 
         var text = render(items)
@@ -170,6 +180,23 @@ public enum BriefCompiler {
             }
         }
         return out.joined(separator: "\n")
+    }
+
+    private static func renderJSON(_ body: String, items: [ContextItem], target: TargetProfile) -> String {
+        let files: [[String: String]] = items.map { item in
+            var entry = ["path": item.ref, "kind": item.kind.rawValue,
+                         "mode": item.mode == .reference ? "reference" : "inline"]
+            if item.mode != .reference { entry["text"] = item.text }
+            return entry
+        }
+        let object: [String: Any] = [
+            "task": body.trimmingCharacters(in: .whitespacesAndNewlines),
+            "target": ["model": target.modelFamily, "surface": target.surface.rawValue],
+            "files": files,
+        ]
+        let data = try? JSONSerialization.data(withJSONObject: object,
+                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        return data.flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 
     private static func compactItemText(_ item: ContextItem) -> String {

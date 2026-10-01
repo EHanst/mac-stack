@@ -3,10 +3,16 @@ import Foundation
 /// Which form of the brief the panel shows. Persisted as the raw value; anything unrecognised
 /// (including the old "Preview" and "Edit" tabs) opens the editable human form.
 public enum BriefViewMode: String, Sendable, CaseIterable {
-    case human, machine
+    case human, machine, json
 
     public static func from(stored: String) -> BriefViewMode { BriefViewMode(rawValue: stored) ?? .human }
-    public var label: String { self == .human ? "Human" : "Machine" }
+    public var label: String {
+        switch self {
+        case .human: "Human"
+        case .machine: "Machine"
+        case .json: "JSON"
+        }
+    }
 
     /// One line saying why the machine form looks the way it does, e.g. "Claude · XML tags".
     public static func machineCaption(for target: TargetProfile) -> String {

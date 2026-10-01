@@ -81,10 +81,13 @@ public enum WordDiff {
     }
 
     public static func hunks(from old: String, to new: String) -> [Hunk] {
-        let all = segments(from: old, to: new)
+        hunks(from: segments(from: old, to: new))
+    }
+
+    public static func hunks(from segments: [Segment]) -> [Hunk] {
         var result: [Hunk] = []
         var current: [Segment] = []
-        for segment in all {
+        for segment in segments {
             if segment.kind == .same {
                 if !current.isEmpty {
                     result.append(Hunk(id: result.count, segments: current))
@@ -100,7 +103,7 @@ public enum WordDiff {
 
     public static func merge(original: String, proposed: String, acceptedHunkIndexes: Set<Int>) -> String {
         let all = segments(from: original, to: proposed)
-        let hunks = hunks(from: original, to: proposed)
+        let hunks = hunks(from: all)
         var out = ""
         var hunkIndex = -1
         var inHunk = false
