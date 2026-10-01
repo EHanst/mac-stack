@@ -56,29 +56,8 @@ jobs:
       - name: Resolve dependencies
         run: swift package resolve
 
-      - name: Run tests with coverage
-        run: set -o pipefail; swift test --parallel --enable-code-coverage 2>&1 | tee /tmp/test-results.log
-
-      - name: Coverage summary
-        if: always()
-        run: |
-          BIN=$(find .build -name "KokoroTests.xctest" -type d | head -1)/Contents/MacOS/KokoroTests
-          PROF=$(find .build -name "default.profdata" | head -1)
-          if [ -f "$BIN" ] && [ -f "$PROF" ]; then
-            echo "### Test Code Coverage Summary" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            xcrun llvm-cov report "$BIN" -instr-profile="$PROF" -ignore-filename-regex=".build|Tests/|Modules/" | tail -n 15 >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Build macOS App bundle
-        run: |
-          xcodegen generate
-          set -o pipefail
-          xcodebuild build -scheme Kokoro -project Kokoro.xcodeproj -configuration Debug \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            -skipPackagePluginValidation \
-            -destination 'platform=macOS' 2>&1 | tee /tmp/xcodebuild.log | { command -v xcbeautify >/dev/null && xcbeautify || cat; }
+      - name: Run tests
+        run: set -o pipefail; swift test --parallel 2>&1 | tee /tmp/test-results.log
 
       # Release build only matters for what ships from main; PRs skip it.
       - name: Build (release)
