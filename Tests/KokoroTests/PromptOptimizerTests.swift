@@ -390,6 +390,13 @@ struct PromptOptimizerTests {
         #expect(o.improved.contains("never hold a lock longer than 2s"))
     }
 
+    @Test("clauses never split inside a URL and drop a leading 'and'")
+    func clausesKeepUrls() {
+        let original = "upgrade swift-nio, see https://github.com/apple/swift-nio/releases and fix what breaks. Also never hold a lock, and never wait"
+        let out = PromptLiterals.clauses(containing: ["breaks", "wait"], in: original)
+        #expect(out == ["see https://github.com/apple/swift-nio/releases and fix what breaks", "never wait"])
+    }
+
     @Test("a lost word whose clause is too long is left for the model to repair")
     func longClauseNotRestored() {
         let original = "make the build faster by caching every dependency download between runs on the continuous integration machines overnight"
