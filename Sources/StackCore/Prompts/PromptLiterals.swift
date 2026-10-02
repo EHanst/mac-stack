@@ -58,6 +58,20 @@ public enum PromptLiterals {
         return missing.count > allowed ? missing : []
     }
 
+    /// The short clauses of `original` (split at sentence marks and commas) that carry `terms`, verbatim, so a
+    /// dropped requirement can be put back without asking the model. Clauses over `maxWords` are skipped.
+    public static func clauses(containing terms: [String], in original: String, maxWords: Int = 15) -> [String] {
+        let parts = original.split(whereSeparator: { ".;,!?\n".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0.split(whereSeparator: \.isWhitespace).count <= maxWords }
+        var out: [String] = []
+        for term in terms {
+            let stem = String(term.lowercased().prefix(5))
+            if let hit = parts.first(where: { $0.lowercased().contains(stem) }), !out.contains(hit) { out.append(hit) }
+        }
+        return out
+    }
+
     /// Literals from `original` that don't appear in `rewritten`.
     public static func missing(from original: String, in rewritten: String) -> [String] {
         extract(from: original).filter { !isPresent($0, in: rewritten) }

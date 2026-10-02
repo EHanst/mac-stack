@@ -234,16 +234,20 @@ public struct PromptOptimizer: Sendable {
 
     // MARK: Prompt
 
-    /// `raw` with every literal of `original` it dropped appended verbatim under a label, so the
-    /// acceptance check passes without a second generation. Returns `raw` when nothing was dropped.
+    /// `raw` with what it dropped from `original` appended verbatim under a label, so the acceptance check
+    /// passes without a second generation: every lost literal, plus the short clause of the draft behind each
+    /// lost plain word. Returns `raw` when nothing was dropped or nothing short enough could be restored.
     public static func restoringLiterals(raw: String, original: String) -> String {
         let parsed = parse(raw)
         guard !parsed.improved.isEmpty else { return raw }
         let lost = PromptLiterals.missing(from: original, in: parsed.improved)
-        guard !lost.isEmpty else { return raw }
+        let terms = PromptLiterals.missingTerms(from: original, in: parsed.improved + "\n" + lost.joined(separator: "\n"))
+        let kept = PromptLiterals.clauses(containing: terms, in: original).filter { clause in !lost.contains { $0.contains(clause) } }
+        let items = lost + kept
+        guard !items.isEmpty else { return raw }
         func list(_ items: [String]) -> String { items.map { "- \($0)" }.joined(separator: "\n") }
-        let note = "Added back exactly as written: " + lost.map { $0.hasPrefix("```") ? "a code block" : $0 }.joined(separator: ", ")
-        return "<improved>\n\(parsed.improved)\n\nKeep exactly as written:\n\(lost.joined(separator: "\n"))\n</improved>\n"
+        let note = "Added back exactly as written: " + items.map { $0.hasPrefix("```") ? "a code block" : $0 }.joined(separator: ", ")
+        return "<improved>\n\(parsed.improved)\n\nKeep exactly as written:\n\(items.joined(separator: "\n"))\n</improved>\n"
             + "<changes>\n\(list(parsed.changes + [note]))\n</changes>\n"
             + (parsed.questions.isEmpty ? "" : "<questions>\n\(list(parsed.questions))\n</questions>")
     }

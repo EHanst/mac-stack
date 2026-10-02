@@ -325,9 +325,9 @@ struct PromptOptimizerTests {
     func repairPassFreezesDraft() async throws {
         let cap = Captured()
         // First reply rewords "crash", a plain word that can't be restored by program
-        let firstReply = ["<improved>Fix the failure in `load()` and explain why.</improved>"]
+        let firstReply = ["<improved>Fix the failure in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time.</improved>"]
         // Second reply restores it
-        let secondReply = ["<improved>Fix the crash in `load()` and explain why.</improved>"]
+        let secondReply = ["<improved>Fix the crash in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time.</improved>"]
         let svc = await service([ReplyProvider(id: "local:test", replies: [firstReply, secondReply], captured: cap)])
         let ctx = OptimizeContext(workspaceName: "Demo", intent: "debug", profile: .localSmall)
 
@@ -335,7 +335,7 @@ struct PromptOptimizerTests {
         var partials: [String] = []
         var finalOptimization: Optimization?
 
-        let stream = PromptOptimizer(inference: svc).optimize(draft: "fix crash in `load()`", context: ctx)
+        let stream = PromptOptimizer(inference: svc).optimize(draft: "fix the crash in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time", context: ctx)
         for try await event in stream {
             switch event {
             case .partial(let text):
@@ -350,11 +350,11 @@ struct PromptOptimizerTests {
 
         #expect(repairingReceived)
         let done = try #require(finalOptimization)
-        #expect(done.improved == "Fix the crash in `load()` and explain why.")
+        #expect(done.improved == "Fix the crash in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time.")
         #expect(done.rejection == nil)
         // Partials should only reflect the first pass, NOT the second pass
-        #expect(!partials.contains("Fix the crash in `load()` and explain why."))
-        #expect(partials.contains("Fix the failure in `load()` and explain why."))
+        #expect(!partials.contains("Fix the crash in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time."))
+        #expect(partials.contains("Fix the failure in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time."))
     }
 
     @Test("dropped literals are restored by program, with no second generation")
@@ -374,6 +374,27 @@ struct PromptOptimizerTests {
         #expect(o.rejection == nil)
         #expect(o.improved.contains("`load()`") && o.improved.hasPrefix("Fix the crash in the loader and explain why."))
         #expect(o.changes.contains { $0.contains("Added back exactly as written") && $0.contains("`load()`") })
+    }
+
+    @Test("a dropped plain word is restored from the short clause of the draft that carries it")
+    func restoresClause() async throws {
+        let cap = Captured()
+        let svc = await service([ReplyProvider(id: "local:test", reply: ["<improved>Write a migration that backfills in batches of 5000 rows.</improved>"], captured: cap)])
+        let draft = "Write a migration that backfills in batches of 5000 rows, and never hold a lock longer than 2s"
+        var done: Optimization?
+        for try await e in PromptOptimizer(inference: svc).optimize(draft: draft, context: OptimizeContext(profile: .localSmall)) {
+            if case .finished(let o) = e { done = o }
+        }
+        let o = try #require(done)
+        #expect(await cap.calls == 1 && o.rejection == nil)
+        #expect(o.improved.contains("never hold a lock longer than 2s"))
+    }
+
+    @Test("a lost word whose clause is too long is left for the model to repair")
+    func longClauseNotRestored() {
+        let original = "make the build faster by caching every dependency download between runs on the continuous integration machines overnight"
+        let raw = "<improved>Cache dependency downloads between runs on the CI machines overnight.</improved>"
+        #expect(PromptOptimizer.restoringLiterals(raw: raw, original: original) == raw)
     }
 
     @Test("restoringLiterals keeps changes and questions, and leaves a complete reply alone")
