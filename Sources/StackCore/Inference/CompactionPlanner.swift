@@ -5,7 +5,6 @@ import Foundation
 ///
 /// Pure: no I/O and no model calls. The caller measures tokens, runs the plan, and stores the
 /// result as ordinary transcript messages (so the rewrite happens once and then stays frozen).
-/// See docs/plans/2026-09-29-auto-compaction-plan.md.
 public struct CompactionPlanner: Sendable, Equatable {
 
     /// One transcript message as the planner sees it.
@@ -67,7 +66,7 @@ public struct CompactionPlanner: Sendable, Equatable {
     public var stubTokens: Int
     /// What a summary costs (planning estimate).
     public var summaryTokens: Int
-    /// Off for the local model until the summary-quality gate passes (plan §8 decision 1).
+    /// Off for the local model until the summary-quality gate passes.
     public var allowSummarize: Bool
     /// Leading messages that make up the stable prefix (system prompt, pinned context); never touched.
     public var stablePrefixCount: Int

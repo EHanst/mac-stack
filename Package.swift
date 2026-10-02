@@ -24,7 +24,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers.git", from: "0.1.17"),
         // Auxiliary (non-Bonsai) models: embeddings via MLXEmbedders. See docs/plans/m0-status.md item 4.
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.31.3"),
-        // HTTP server for the opt-in OpenAI-compatible API (decision 6 in docs/plans/2026-09-28-next-phase-plan.md).
+        // HTTP server for the opt-in OpenAI-compatible API.
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.27.0"),
     ],
     targets: [
@@ -143,7 +143,6 @@ let package = Package(
                 "App/NavDestination.swift",
                 "App/PromptStudioModel.swift",
                 "App/QuitPolicy.swift",
-                "App/RevealPacer.swift",
                 "App/RoutingPolicyLabels.swift",
                 "App/SetupModel.swift",
                 "App/StackExports.swift",
@@ -160,7 +159,7 @@ let package = Package(
             ]
         ),
 
-        // Performance harness for the local model (see docs/plans/2026-09-28-next-phase-plan.md, M0).
+        // Performance harness for the local model.
         .executableTarget(
             name: "KokoroBench",
             dependencies: [

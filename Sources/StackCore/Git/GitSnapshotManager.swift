@@ -106,26 +106,6 @@ public actor GitSnapshotManager {
         return try buildDiff(repo: repo, snapshotOid: ref.oid)
     }
 
-    public func restoreSnapshot(_ ref: SnapshotRef) async throws {
-        guard let repo else { throw GitError.notARepository(workspaceURL.path) }
-        var oid = git_oid()
-        git_oid_fromstr(&oid, ref.oid)
-        var obj: OpaquePointer?
-        let rc1 = git_object_lookup(&obj, repo, &oid, GIT_OBJECT_COMMIT)
-        guard rc1 == 0, let obj else { throw GitError.operationFailed(lastGitError()) }
-        defer { git_object_free(obj) }
-        var opts = git_checkout_options()
-        git_checkout_options_init(&opts, UInt32(GIT_CHECKOUT_OPTIONS_VERSION))
-        opts.checkout_strategy = GIT_CHECKOUT_FORCE.rawValue
-        let rc2 = git_checkout_tree(repo, obj, &opts)
-        guard rc2 == 0 else { throw GitError.operationFailed(lastGitError()) }
-    }
-
-    public func listSnapshots(limit: Int = 50) async throws -> [SnapshotRef] {
-        // Full reflog iteration requires a ref walker — stubbed for now
-        return []
-    }
-
     // MARK: - Private
 
     private func stageAndCommit(repo: OpaquePointer, message: String) throws -> SnapshotRef {
