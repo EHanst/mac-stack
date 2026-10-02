@@ -24,11 +24,14 @@ enum OptimizerEval {
         ["improve": .improve, "expand": .expand, "adapt": .adapt][name]
     }
 
-    static func run(provider: LocalMLXProvider, modes: [String], repeats: Int, json: URL?, sampling: String, repair: Bool, profile: String = "local") async {
+    static func run(provider: LocalMLXProvider, modes: [String], repeats: Int, json: URL?, sampling: String, repair: Bool, profile: String = "local", modelName: String = "") async {
+        // The same per-model tuning production picks for this model; EVAL_TUNING=standard measures the baseline.
+        let tuning = ProcessInfo.processInfo.environment["EVAL_TUNING"] == "standard"
+            ? OptimizerTuning.standard : OptimizerTuning.forModel("local:" + modelName)
         let params: SamplingParameters? = switch sampling {
         case "greedy": .greedy
         case "chat": .bonsaiInstruct
-        default: .rewrite   // what the optimizer uses
+        default: tuning.sampling   // what the optimizer uses
         }
         let target: ModelPromptProfile = switch profile {
         case "claude": .claude
@@ -40,9 +43,10 @@ enum OptimizerEval {
         case "generic": .generic
         default: .localSmall
         }
-        let context = OptimizeContext(profile: target)
+        let context = OptimizeContext(profile: target, tuning: tuning)
         var rows: [[String: Any]] = []
-        var specCycles = 0, specAccepted = 0
+        var specCycles = 0, specAccepted = 0, novelTotal = 0
+        defer { print("  novel literals in accepted rewrites: \(novelTotal)") }
         defer { if specCycles > 0 { print("  draft acceptance: \(specAccepted * 100 / specCycles)% over \(specCycles) cycles") } }
         var tally: [String: [String: Int]] = [:]
         print("[optimizer eval] sampling=\(sampling) · \(drafts.count) drafts × modes \(modes.joined(separator: ",")) × \(repeats) run(s)")
@@ -94,6 +98,9 @@ enum OptimizerEval {
                         func g(_ x: Int) -> String { String(format: "%.2f", Double(x) / 1_073_741_824) }
                         print("    mem: ws \(g(b.workingSet)) weights \(g(b.weights)) active \(g(b.active)) cache \(g(b.cache)) avail \(g(b.available)) → \(await provider.contextVerdict())")
                     }
+                    // Literals the rewrite introduced that the draft never had: a count of invention, not a gate.
+                    let novel = r.rejection == nil ? PromptLiterals.extract(from: r.improved).filter { !text.localizedCaseInsensitiveContains($0) } : []
+                    novelTotal += novel.count
                     let outcome: String
                     if let rej = r.rejection {
                         outcome = rej.missing.isEmpty ? "rejected:\(rej.reason.prefix(40))" : "rejected:dropped-literal"
@@ -106,7 +113,7 @@ enum OptimizerEval {
                     print("  \(modeName) · \(name)#\(run): \(outcome)\(cut ? " (cut off)" : "") · \(tokens) tok · \(String(format: "%.1f", secs)) s"
                           + (r.rejection?.missing.isEmpty == false ? " · missing \(r.rejection!.missing)" : ""))
                     rows.append(["mode": modeName, "draft": name, "outcome": outcome, "tokens": tokens, "seconds": secs,
-                                 "missing": r.rejection?.missing ?? [], "improved": r.improved, "changes": r.changes,
+                                 "missing": r.rejection?.missing ?? [], "novel": novel, "improved": r.improved, "changes": r.changes,
                                  "questions": r.questions, "raw": raw])
                 }
             }

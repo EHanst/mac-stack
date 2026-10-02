@@ -1,6 +1,6 @@
 import Foundation
 
-public enum OptimizeMode: Sendable, Equatable {
+public enum OptimizeMode: Sendable, Hashable {
     /// Same request, clearer. Output stays close to the original length.
     case improve
     /// Fill in what a good version of this request would specify. May be several times longer.
@@ -41,12 +41,15 @@ public struct OptimizeContext: Sendable {
     public var sharedPrefix: [Message]
     /// Marks a follow-up finer-grained pass: split steps one level finer, do not repeat.
     public var finer: Bool
+    /// Overrides the tuning chosen from the model that answers (the eval sets it to match the model it loads).
+    public var tuning: OptimizerTuning?
 
     public init(workspaceName: String? = nil, intent: String? = nil,
                 profile: ModelPromptProfile = .generic, pin: ProviderID? = nil,
                 priority: InferenceScheduler.Priority = .interactive,
                 sharedPrefix: [Message] = [], depth: OptimizeDepth? = nil,
-                finer: Bool = false) {
+                finer: Bool = false, tuning: OptimizerTuning? = nil) {
+        self.tuning = tuning
         self.depth = depth
         self.priority = priority
         self.sharedPrefix = sharedPrefix
@@ -148,6 +151,9 @@ public struct PromptOptimizer: Sendable {
                 }
                 let target = await inference.plannedModel()
                 let servedLocally = (context.pin ?? target)?.hasPrefix("local:") == true
+                var context = context
+                if context.tuning == nil { context.tuning = OptimizerTuning.forModel(context.pin ?? target) }
+                let sampling = context.tuning?.sampling ?? .rewrite
                 var messages = Self.requestMessages(draft: trimmed, context: context, mode: mode,
                                                     useSharedPrefix: servedLocally && !context.sharedPrefix.isEmpty)
                 if messages.count > 2, let limit = await inference.localContextLimit(),
@@ -177,7 +183,7 @@ public struct PromptOptimizer: Sendable {
                     func pass(_ messages: [Message], budget: Int, yieldPartials: Bool = true) async throws -> String {
                         let stream = try await inference.generate(
                             messages: messages, tools: [],
-                            options: GenerationOptions(maxTokens: budget, sampling: .rewrite),
+                            options: GenerationOptions(maxTokens: budget, sampling: sampling),
                             priority: context.priority, pin: context.pin,
                             onRoute: { notice in
                                 switch notice.kind {
@@ -352,8 +358,10 @@ public struct PromptOptimizer: Sendable {
             lines.append(rule)
         }
         lines.append("6. If the request is too vague to rewrite honestly, ask at most 2 short questions instead.")
+        if mode == .adapt, let extra = context.tuning?.extraRules[mode] { lines.append("7. \(extra)") }
         if mode != .adapt {
             lines.append("7. Never invent file names, APIs or facts the request does not give; write \"unspecified\" or ask.")
+            if let extra = context.tuning?.extraRules[mode] { lines.append("8. \(extra)") }
             // Concise expansion is meant to stay short, so it skips the principles that ask for more sections.
             let concise = mode == .expand && (context.depth ?? OptimizeDepth.defaultDepth(for: context.profile)) == .concise
             if !concise {
