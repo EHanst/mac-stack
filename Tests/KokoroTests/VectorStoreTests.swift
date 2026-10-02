@@ -22,11 +22,11 @@ struct VectorStoreTests {
         let chunk = CodeChunk(filePath: "/ws/A.swift", declarationKind: "struct",
                               startLine: 1, endLine: 2, content: "struct A {}")
         try await store.upsertChunks([chunk])
-        try await store.storeEmbedding([Float](repeating: 0.1, count: 384),
+        try await store.storeEmbedding([Float](repeating: 0.1, count: 512),
                                         for: chunk.id, contentHash: chunk.contentHash)
         let cached = await store.cachedEmbedding(for: chunk.contentHash)
         #expect(cached != nil)
-        #expect(cached?.count == 384)
+        #expect(cached?.count == 512)
     }
 
     @Test("query embedding cache LRU eviction at capacity 128")
@@ -34,7 +34,7 @@ struct VectorStoreTests {
         let (store, tmp) = try await makeStore()
         defer { try? FileManager.default.removeItem(at: tmp.deletingLastPathComponent()) }
         for i in 0..<130 {
-            let embedding = [Float](repeating: Float(i), count: 384)
+            let embedding = [Float](repeating: Float(i), count: 512)
             await store.cacheQueryEmbedding(embedding, for: "query \(i)")
         }
         let evicted = await store.cachedQueryEmbedding(for: "query 0")
