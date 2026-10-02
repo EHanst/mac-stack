@@ -46,17 +46,20 @@ struct BriefVersionsSheet: View {
                 .frame(width: 180)
                 ScrollView { detail }.frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            HStack {
-                Spacer()
-                Button("Close", action: onClose)
-                if mode == .restore {
-                    Button("Restore this version") { if let selection { onRestore(selection); onClose() } }
-                        .buttonStyle(MTFilledButtonStyle())
-                        .disabled(!brief.versions.indices.contains(selection ?? -1))
+            MTSheetFooter(
+                cancelTitle: "Close",
+                primaryTitle: "Restore this version",
+                isPrimaryDisabled: mode != .restore || !brief.versions.indices.contains(selection ?? -1),
+                onCancel: onClose,
+                onPrimary: {
+                    if let selection {
+                        onRestore(selection)
+                        onClose()
+                    }
                 }
-            }
+            )
         }
-        .padding(16)
+        .padding(Spacing.xxl)
         .frame(width: 640, height: 420)
         .onAppear { clampCompareSelections() }
         .onChange(of: brief.versions.count) { _ in clampCompareSelections() }

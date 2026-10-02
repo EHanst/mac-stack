@@ -91,6 +91,12 @@ extension ContextBudget {
     public static let qwen35_4b = ContextBudget(
         model: Model(fixedOverheadBytes: 512 << 20, bytesPerToken: 64_000))
 
+    /// Qwen3.5-9B (OptiQ mixed 4/8-bit) with 128-token prefill chunks, M3 Pro 18 GB. Peak GPU was 7.34 GB at 528
+    /// prompt tokens and 7.64 GB at 4,170, a slope of about 82 KB/token (8 of 32 layers keep a KV cache, 4 KV heads
+    /// of 256). Rounded up to 0.5 GiB fixed and 128 KB/token, about 1.5× the measured slope.
+    public static let qwen35_9b = ContextBudget(
+        model: Model(fixedOverheadBytes: 512 << 20, bytesPerToken: 128_000))
+
     /// The measured budget for the model in `directory`, recognised by its shape. Anything we have not
     /// measured gets the 27B budget, the most conservative one.
     public static func forModel(at directory: URL) -> ContextBudget {
@@ -99,6 +105,7 @@ extension ContextBudget {
         else { return .bonsai27B2bit }
         let text = (dict["text_config"] as? [String: Any]) ?? dict
         if text["num_hidden_layers"] as? Int == 32, text["hidden_size"] as? Int == 2560 { return .qwen35_4b }
+        if text["num_hidden_layers"] as? Int == 32, text["hidden_size"] as? Int == 4096 { return .qwen35_9b }
         return .bonsai27B2bit
     }
 }

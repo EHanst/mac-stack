@@ -51,6 +51,8 @@ public struct AppState: Sendable {
     public var indexingStatus: IndexingStatus = .init()
     public var mcpToolNames: [String] = []
     public var onboardingNeeded: Bool = false
+    public var selectedDestination: NavDestination = .briefs
+    public var showSidebar: Bool = true
 
     public init() {}
 }
@@ -73,6 +75,10 @@ public final class AppCoordinator {
         case indexingStatusUpdated(IndexingStatus)
         // MCP tools
         case mcpToolsUpdated([String])
+        // Navigation
+        case selectDestination(NavDestination)
+        case toggleSidebar
+        case setSidebar(Bool)
     }
 
     public private(set) var state: AppState
@@ -114,6 +120,15 @@ public final class AppCoordinator {
 
         case .mcpToolsUpdated(let names):
             next.mcpToolNames = names
+
+        case .selectDestination(let dest):
+            next.selectedDestination = dest
+
+        case .toggleSidebar:
+            next.showSidebar.toggle()
+
+        case .setSidebar(let show):
+            next.showSidebar = show
         }
         return next
     }

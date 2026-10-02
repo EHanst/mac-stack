@@ -9,6 +9,7 @@ import AppKit
 /// The whole Briefs screen: the finished brief fills the window, one input bar sits at the bottom,
 /// and "Start over" in the top right clears the slate so the next thing typed starts a new brief.
 struct BriefStudioView: View {
+    @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
     @State private var draft = ""
     @State private var continuing = false
@@ -77,6 +78,18 @@ struct BriefStudioView: View {
 
     private var topBar: some View {
         HStack(spacing: 10) {
+            if !coordinator.state.showSidebar {
+                Button {
+                    withAnimation(Motion.quick) {
+                        coordinator.send(.toggleSidebar)
+                    }
+                } label: {
+                    Image(systemName: "sidebar.leading")
+                }
+                .buttonStyle(MTIconButtonStyle(variant: .standard))
+                .help("Show Sidebar (⌃⌘S)")
+            }
+
             Menu {
                 ForEach(model.briefs.prefix(15)) { brief in
                     Button(brief.isDraft ? "\(brief.title) (draft)" : brief.title) {

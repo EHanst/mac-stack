@@ -49,37 +49,30 @@ struct ModelManagerView: View {
     // MARK: Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Models")
-                    .font(.mtTitleLarge)
-                    .foregroundStyle(Color.mtOnSurface)
-                Text("\(coordinator.state.modelInfos.count) provider(s) registered")
-                    .font(.mtBodySmall)
-                    .foregroundStyle(Color.mtOnSurfaceVariant)
-            }
-            Spacer()
-            Button {
-                isRefreshing = true
-                Task {
-                    await services.refreshModels(coordinator: coordinator)
-                    isRefreshing = false
+        MTPageHeader(
+            title: "Models",
+            subtitle: "\(coordinator.state.modelInfos.count) provider(s) registered"
+        ) {
+            HStack(spacing: 8) {
+                Button {
+                    isRefreshing = true
+                    Task {
+                        await services.refreshModels(coordinator: coordinator)
+                        isRefreshing = false
+                    }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(MTIconButtonStyle(variant: .standard))
-            .help("Refresh provider health")
+                .buttonStyle(MTIconButtonStyle(variant: .standard))
+                .help("Refresh provider health")
 
-            Button { showAddSheet = true } label: {
-                Image(systemName: "plus")
+                Button { showAddSheet = true } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(MTIconButtonStyle(variant: .tonal))
+                .help("Add model or remote provider")
             }
-            .buttonStyle(MTIconButtonStyle(variant: .tonal))
-            .help("Add model or remote provider")
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-        .background(Color.mtSurface)
     }
 
     // MARK: Filter chips
@@ -365,11 +358,12 @@ struct AddModelSheet: View {
                     .foregroundStyle(Color.mtOnSurfaceVariant)
             }
             Spacer()
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(MTOutlinedButtonStyle())
-                Button(isBusy ? "Scanning…" : "Add Model") {
+            MTSheetFooter(
+                cancelTitle: "Cancel",
+                primaryTitle: isBusy ? "Scanning…" : "Add Model",
+                isPrimaryDisabled: localURL == nil || isBusy,
+                onCancel: { dismiss() },
+                onPrimary: {
                     guard let url = localURL else { return }
                     isBusy = true
                     Task {
@@ -379,9 +373,7 @@ struct AddModelSheet: View {
                         dismiss()
                     }
                 }
-                .buttonStyle(MTFilledButtonStyle())
-                .disabled(localURL == nil || isBusy)
-            }
+            )
         }
     }
 
@@ -414,22 +406,19 @@ struct AddModelSheet: View {
                 MTTextField("model-name", text: $remoteModelID)
             }
             fieldGroup("API Key", hint: CloudPreset.preset(id: remotePreset)?.keyHint ?? "Stored in macOS Keychain") {
-                SecureField(keyOptional ? "optional" : "paste key", text: $remoteToken)
-                    .textFieldStyle(.plain)
-                    .padding(10)
-                    .background(Color.mtSurfaceContainerHighest)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.mtOutline, lineWidth: 1))
+                MTSecureField("API Key / Token", text: $remoteToken)
             }
             Spacer()
             if let saveError {
                 Text(saveError).font(.mtBodySmall).foregroundStyle(Color.mtError)
             }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(MTOutlinedButtonStyle())
-                Button(isBusy ? "Saving…" : "Add Provider") {
+            MTSheetFooter(
+                cancelTitle: "Cancel",
+                primaryTitle: isBusy ? "Saving…" : "Add Provider",
+                isPrimaryDisabled: remoteID.isEmpty || remoteBaseURL.isEmpty || (remoteToken.isEmpty && !keyOptional)
+                    || remoteModelID.trimmingCharacters(in: .whitespaces).isEmpty || isBusy,
+                onCancel: { dismiss() },
+                onPrimary: {
                     guard let base = URL(string: remoteBaseURL),
                           !remoteID.isEmpty, keyOptional || !remoteToken.isEmpty,
                           !remoteModelID.trimmingCharacters(in: .whitespaces).isEmpty else { return }
@@ -451,10 +440,7 @@ struct AddModelSheet: View {
                         isBusy = false
                     }
                 }
-                .buttonStyle(MTFilledButtonStyle())
-                .disabled(remoteID.isEmpty || remoteBaseURL.isEmpty || (remoteToken.isEmpty && !keyOptional)
-                          || remoteModelID.trimmingCharacters(in: .whitespaces).isEmpty || isBusy)
-            }
+            )
         }
     }
 
@@ -464,27 +450,6 @@ struct AddModelSheet: View {
             content()
             Text(hint).font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant.opacity(0.7))
         }
-    }
-}
-
-// MARK: - Minimal text field with Material styling
-
-struct MTTextField: View {
-    let placeholder: String
-    @Binding var text: String
-
-    init(_ placeholder: String, text: Binding<String>) {
-        self.placeholder = placeholder
-        self._text = text
-    }
-
-    var body: some View {
-        TextField(placeholder, text: $text)
-            .textFieldStyle(.plain)
-            .padding(10)
-            .background(Color.mtSurfaceContainerHighest)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.mtOutline, lineWidth: 1))
     }
 }
 #endif

@@ -417,6 +417,7 @@ struct ImproveActionBar: View {
                     copied = true
                     Task { try? await Task.sleep(for: .seconds(2)); copied = false }
                 } label: { HotkeyLabel(title: copied ? "Copied" : "Copy", systemImage: "doc.on.doc", hotkey: .copyMachine) }
+                .buttonStyle(MTOutlinedButtonStyle())
                 .hotkey(.copyMachine)
                 .help("Copy this improved prompt without saving it")
                 .disabled(empty)

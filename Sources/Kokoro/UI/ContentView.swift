@@ -35,22 +35,32 @@ struct ContentView: View {
 struct MainLayout: View {
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(AppServices.self) private var services
-    @State private var selectedDestination: NavDestination = .briefs
-    @State private var columnVisibility: NavigationSplitViewVisibility = .detailOnly
+    private var selectedDestination: NavDestination { coordinator.state.selectedDestination }
     /// Re-identifies the panels when the font changes so every `Font.mt*` is re-read.
     @AppStorage(AppFont.storageKey) private var fontChoice = AppFont.default.rawValue
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        NavigationSplitView(columnVisibility: Binding(
+            get: { coordinator.state.showSidebar ? .all : .detailOnly },
+            set: { coordinator.send(.setSidebar($0 != .detailOnly)) }
+        )) {
             sidebar.id(fontChoice)
         } detail: {
             mainArea.id(fontChoice)
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 980, minHeight: 640)
-        // Briefs get the whole window; every other screen keeps the sidebar.
-        .onChange(of: selectedDestination) { _, destination in
-            columnVisibility = destination == .briefs ? .detailOnly : .all
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    withAnimation(Motion.quick) {
+                        coordinator.send(.toggleSidebar)
+                    }
+                } label: {
+                    Image(systemName: "sidebar.leading")
+                }
+                .help("Toggle Sidebar (⌃⌘S)")
+            }
         }
     }
 
@@ -79,7 +89,7 @@ struct MainLayout: View {
                             badge: badge(for: dest),
                             isSelected: selectedDestination == dest
                         ) {
-                            selectedDestination = dest
+                            coordinator.send(.selectDestination(dest))
                         }
                     }
                     Divider()
@@ -93,7 +103,7 @@ struct MainLayout: View {
                             badge: badge(for: dest),
                             isSelected: selectedDestination == dest
                         ) {
-                            selectedDestination = dest
+                            coordinator.send(.selectDestination(dest))
                         }
                     }
                 }

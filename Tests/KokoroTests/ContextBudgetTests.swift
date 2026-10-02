@@ -89,6 +89,11 @@ struct ContextBudgetTests {
         #expect(ContextBudget.forModel(at: dir) == .qwen35_4b)
     }
 
+    @Test func recognisesTheMeasured9B() throws {
+        let dir = try directory(config: #"{"text_config": {"num_hidden_layers": 32, "hidden_size": 4096}}"#)
+        #expect(ContextBudget.forModel(at: dir) == .qwen35_9b)
+    }
+
     @Test func unknownShapesAndMissingConfigsGetTheConservativeBudget() throws {
         let other = try directory(config: #"{"num_hidden_layers": 64, "hidden_size": 5120}"#)
         #expect(ContextBudget.forModel(at: other) == .bonsai27B2bit)

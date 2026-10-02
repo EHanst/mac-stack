@@ -356,6 +356,17 @@ struct ModelCatalogTests {
         #expect(q.contextBudget == .qwen35_4b)
     }
 
+    @Test("the 9B is offered from 16 GB, fetches both shards and its MTP head, and never the vision tower")
+    func qwen9BMetadata() {
+        let q = ModelCatalog.qwen35_9b
+        #expect(q.installSubpath == "Models/Qwen3.5-9B-OptiQ-4bit")
+        #expect(q.minimumRAMBytes == 16 << 30)
+        #expect(q.include.contains("model-00001-of-00002.safetensors") && q.include.contains("model-00002-of-00002.safetensors"))
+        #expect(q.include.contains("optiq/mtp.safetensors"))
+        #expect(!q.include.contains { $0.contains("vision") })
+        #expect(q.contextBudget == .qwen35_9b)
+    }
+
     @Test("tier default: 4B below 24 GB, 27B from 24 GB, an installed model wins")
     func tiers() {
         let g: UInt64 = 1 << 30

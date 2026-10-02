@@ -128,7 +128,28 @@ struct KokoroApp: App {
                 .task { await services.startup(coordinator: coordinator) }
         }
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("New Brief") {
+                    coordinator.send(.selectDestination(.briefs))
+                    Task { await services.briefs.newBrief(title: "Untitled brief", input: "") }
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
+            CommandMenu("View") {
+                Button(coordinator.state.showSidebar ? "Hide Sidebar" : "Show Sidebar") {
+                    coordinator.send(.toggleSidebar)
+                }
+                .keyboardShortcut("s", modifiers: [.control, .command])
+                Divider()
+                Button("Briefs") { coordinator.send(.selectDestination(.briefs)) }
+                    .keyboardShortcut("1", modifiers: [.option, .command])
+                Button("Library") { coordinator.send(.selectDestination(.prompts)) }
+                    .keyboardShortcut("2", modifiers: [.option, .command])
+                Button("Models") { coordinator.send(.selectDestination(.models)) }
+                    .keyboardShortcut("3", modifiers: [.option, .command])
+                Button("Settings") { coordinator.send(.selectDestination(.settings)) }
+                    .keyboardShortcut("4", modifiers: [.option, .command])
+            }
         }
 
         MenuBarExtra {

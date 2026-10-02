@@ -29,7 +29,6 @@ struct ContextPickerSheet: View {
             HStack {
                 Text("Add context").font(.mtTitleMedium)
                 Spacer()
-                Button("Done", action: onClose).buttonStyle(MTFilledButtonStyle()).keyboardShortcut(.defaultAction)
             }
             Picker("", selection: $tab) { ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).labelsHidden().disabled(readiness != .ready)
@@ -46,8 +45,14 @@ struct ContextPickerSheet: View {
                 }
             }
             if let message { note(message) }
+            MTSheetFooter(
+                cancelTitle: "Close",
+                primaryTitle: "Done",
+                onCancel: onClose,
+                onPrimary: onClose
+            )
         }
-        .padding(20)
+        .padding(Spacing.xxl)
         .frame(width: 560, height: 460)
         .task { await refreshReadiness() }
         .onChange(of: tab) { _, _ in message = nil }
