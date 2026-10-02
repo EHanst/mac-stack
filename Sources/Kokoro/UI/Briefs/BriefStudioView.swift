@@ -12,7 +12,6 @@ struct BriefStudioView: View {
     @Environment(AppServices.self) private var services
     @State private var draft = ""
     @State private var continuing = false
-    @State private var showFix = false
     @State private var showBrainstorm = false
     @FocusState private var inputFocused: Bool
 
@@ -101,11 +100,6 @@ struct BriefStudioView: View {
             .menuStyle(.button)
             .fixedSize()
 
-            Button { showFix = true } label: { Label("Fix from AI's answer", systemImage: "arrowshape.turn.up.left") }
-                .disabled(model.selected == nil)
-                .popover(isPresented: $showFix, arrowEdge: .bottom) {
-                    ScrollView { SidecarRailView().padding(14) }.frame(width: 460, height: 340)
-                }
             if !fresh {
                 if let brief = model.selected {
                     Text(BriefPhase.of(brief).rawValue)
@@ -259,10 +253,14 @@ struct BriefInputBar: View {
         if improving {
             improve.applyEdit(instruction)
         } else if fresh {
-            if model.selected != nil {
-                model.setInput(instruction)
-            } else {
-                Task { _ = await model.newBrief(fromClipboard: instruction) }
+            // The first message is improved right away; later ones edit the result.
+            Task {
+                if model.selected == nil {
+                    guard await model.newBrief(fromClipboard: instruction) else { return }
+                } else {
+                    model.setInput(instruction)
+                }
+                if let brief = model.selected { improve.open(brief, studio: services.promptStudio) }
             }
             services.sidecar.clear()
         } else if let brief = model.selected {
