@@ -2,6 +2,31 @@ import Foundation
 import CSQLiteVec
 import os
 import SQLite3
+import Accelerate
+
+/// Vector math operations accelerated via Apple's Accelerate framework (vDSP).
+public enum VectorMath {
+    /// L2 normalize a float array using Accelerate vDSP.
+    public static func normalize(_ vector: [Float]) -> [Float] {
+        guard !vector.isEmpty else { return [] }
+        var norm: Float = 0
+        vDSP_svesq(vector, 1, &norm, vDSP_Length(vector.count))
+        let length = sqrt(norm)
+        guard length > 1e-9 else { return vector }
+        var divisor = length
+        var result = [Float](repeating: 0, count: vector.count)
+        vDSP_vsdiv(vector, 1, &divisor, &result, 1, vDSP_Length(vector.count))
+        return result
+    }
+
+    /// Fast cosine similarity via Accelerate vDSP dot product for normalized vectors.
+    public static func dotProduct(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        var dot: Float = 0
+        vDSP_dotpr(a, 1, b, 1, &dot, vDSP_Length(a.count))
+        return dot
+    }
+}
 
 // SQLITE_TRANSIENT is a C macro that Swift doesn't import directly.
 // It tells SQLite to make its own copy of the data immediately.
@@ -58,6 +83,15 @@ public actor VectorStore {
         set { dbBox.readPool = newValue }
     }
     private let readPoolSize = 4
+    private var nextReadIndex = 0
+
+    private func nextReadDB() -> OpaquePointer? {
+        if readPool.isEmpty { return writeDB }
+        let db = readPool[nextReadIndex % readPool.count]
+        nextReadIndex &+= 1
+        return db
+    }
+
     private let dbURL: URL
     private let embeddingDimension: Int
     private let logger = Logger(subsystem: "com.vibecockpit", category: "VectorStore")
@@ -151,13 +185,21 @@ public actor VectorStore {
     }
 
     private func insertAll(_ chunks: [CodeChunk], db: OpaquePointer) throws {
+        guard !chunks.isEmpty else { return }
+        let upsertSQL = """
+            INSERT OR REPLACE INTO chunks(id, file_path, decl_kind, content, content_hash)
+            VALUES(?, ?, ?, ?, ?);
+        """
+        let stmt = try prepare(db, upsertSQL)
+        defer { sqlite3_finalize(stmt) }
+
+        let ftsSQL = "INSERT OR REPLACE INTO chunk_fts(rowid, chunk_id, content) SELECT rowid, id, content FROM chunks WHERE id=?;"
+        let ftsStmt = try prepare(db, ftsSQL)
+        defer { sqlite3_finalize(ftsStmt) }
+
         for chunk in chunks {
-            let upsertSQL = """
-                INSERT OR REPLACE INTO chunks(id, file_path, decl_kind, content, content_hash)
-                VALUES(?, ?, ?, ?, ?);
-            """
-            let stmt = try prepare(db, upsertSQL)
-            defer { sqlite3_finalize(stmt) }
+            sqlite3_reset(stmt)
+            sqlite3_clear_bindings(stmt)
             let idStr = chunk.id.uuidString
             sqlite3_bind_text(stmt, 1, idStr, -1, SQLITE_TRANSIENT)
             sqlite3_bind_text(stmt, 2, chunk.filePath, -1, SQLITE_TRANSIENT)
@@ -169,9 +211,8 @@ public actor VectorStore {
             try stepDone(db, stmt)
 
             // FTS upsert
-            let ftsSQL = "INSERT OR REPLACE INTO chunk_fts(rowid, chunk_id, content) SELECT rowid, id, content FROM chunks WHERE id=?;"
-            let ftsStmt = try prepare(db, ftsSQL)
-            defer { sqlite3_finalize(ftsStmt) }
+            sqlite3_reset(ftsStmt)
+            sqlite3_clear_bindings(ftsStmt)
             sqlite3_bind_text(ftsStmt, 1, idStr, -1, SQLITE_TRANSIENT)
             try stepDone(db, ftsStmt)
         }
@@ -228,14 +269,18 @@ public actor VectorStore {
     /// ones whose text was embedded before reuse the cached vector.
     public func chunksNeedingEmbedding(_ chunks: [CodeChunk]) throws -> [CodeChunk] {
         guard let db = writeDB else { throw StoreError.openFailed("Not open") }
+        guard !chunks.isEmpty else { return [] }
+        var has: OpaquePointer?
+        sqlite3_prepare_v2(db, "SELECT 1 FROM chunk_embeddings WHERE chunk_id = ?;", -1, &has, nil)
+        defer { sqlite3_finalize(has) }
+
         var needed: [CodeChunk] = []
         for chunk in chunks {
             let id = chunk.id.uuidString
-            var has: OpaquePointer?
-            sqlite3_prepare_v2(db, "SELECT 1 FROM chunk_embeddings WHERE chunk_id = ?;", -1, &has, nil)
+            sqlite3_reset(has)
+            sqlite3_clear_bindings(has)
             sqlite3_bind_text(has, 1, id, -1, SQLITE_TRANSIENT)
             let alreadyEmbedded = sqlite3_step(has) == SQLITE_ROW
-            sqlite3_finalize(has)
             if alreadyEmbedded { continue }
             if let cached = cachedEmbedding(for: chunk.contentHash) {
                 try storeEmbedding(cached, for: chunk.id, contentHash: chunk.contentHash)
@@ -331,7 +376,7 @@ public actor VectorStore {
     }
 
     public func cachedEmbedding(for contentHash: Data) -> [Float]? {
-        guard let db = readPool.first else { return nil }
+        guard let db = nextReadDB() ?? writeDB else { return nil }
         let sql = "SELECT embedding FROM embedding_cache WHERE content_hash=?"
         var stmt: OpaquePointer?
         sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
@@ -345,11 +390,11 @@ public actor VectorStore {
         guard let ptr = blobPtr else { return nil }
         let expectedBytes = embeddingDimension * MemoryLayout<Float>.stride
         guard Int(blobSize) == expectedBytes else { return nil }
-        var floats = [Float](repeating: 0, count: embeddingDimension)
-        floats.withUnsafeMutableBytes { dest in
-            dest.copyMemory(from: UnsafeRawBufferPointer(start: ptr, count: expectedBytes))
+        return [Float](unsafeUninitializedCapacity: embeddingDimension) { buffer, initializedCount in
+            let rawDest = UnsafeMutableRawBufferPointer(buffer)
+            rawDest.copyMemory(from: UnsafeRawBufferPointer(start: ptr, count: expectedBytes))
+            initializedCount = embeddingDimension
         }
-        return floats
     }
 
     public func cacheQueryEmbedding(_ embedding: [Float], for query: String) {
@@ -391,7 +436,7 @@ public actor VectorStore {
     // MARK: - Private
 
     private func denseSearch(embedding: [Float], topK: Int) throws -> [SearchResult] {
-        guard let db = writeDB ?? readPool.first else { return [] }
+        guard let db = nextReadDB() ?? writeDB else { return [] }
         let vecSQL = """
             SELECT c.id, c.file_path, c.decl_kind, c.content,
                    vec_distance_cosine(e.embedding, ?) AS distance
@@ -411,7 +456,7 @@ public actor VectorStore {
     }
 
     private func sparseSearch(query: String, topK: Int) throws -> [SearchResult] {
-        guard let db = writeDB ?? readPool.first, FTSQuery.match(query) != nil else { return [] }
+        guard let db = nextReadDB() ?? writeDB, FTSQuery.match(query) != nil else { return [] }
         let ftsSQL = """
             SELECT c.id, c.file_path, c.decl_kind, c.content,
                    bm25(chunk_fts) AS score

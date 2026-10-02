@@ -88,6 +88,14 @@ public struct BriefSidecar: Sendable {
     public static let maxSessionChars = 30_000
     private static let chunkChars = 1_400
 
+    /// Parser schema tags and delimiter invariants.
+    public static let questionsTag = "questions"
+    public static let findingsTag = "findings"
+    public static let revisionTag = "revision"
+    public static let tipsTag = "tips"
+    public static let findingDelimiter = " | "
+    public static let findingAdditionPrefix = "add:"
+
     /// Local calls here must not store their prompt in the prefix cache: that would evict the chat's.
     public static let generationOptions = GenerationOptions(maxTokens: 1500, cacheSnapshots: false)
 
@@ -165,7 +173,7 @@ public struct BriefSidecar: Sendable {
     public static func parse(_ raw: String, operation: SidecarOperation, brief: Brief? = nil) -> SidecarResult {
         if operation == .revise || operation == .edit { return parseRevision(raw, brief: brief) }
         if operation == .brainstorm { return SidecarResult(note: "Use brainstorm(brief:) for this operation.") }
-        let tag = operation == .interview ? "questions" : "findings"
+        let tag = operation == .interview ? questionsTag : findingsTag
         var result = SidecarResult()
         if let open = raw.range(of: "<\(tag)>") {
             let rest = raw[open.upperBound...]
@@ -176,11 +184,11 @@ public struct BriefSidecar: Sendable {
                     guard result.questions.count < maxQuestions, !s.isEmpty else { continue }
                     result.questions.append(.init(id: UUID().uuidString, text: s))
                 } else {
-                    let parts = s.components(separatedBy: " | ").map { $0.trimmingCharacters(in: .whitespaces) }
+                    let parts = s.components(separatedBy: findingDelimiter).map { $0.trimmingCharacters(in: .whitespaces) }
                     guard result.findings.count < maxFindings, let issue = parts.first, !issue.isEmpty else { continue }
                     var addition: String?
-                    if parts.count >= 2, parts[1].lowercased().hasPrefix("add:") {
-                        let a = parts[1...].joined(separator: " | ").dropFirst(4).trimmingCharacters(in: .whitespaces)
+                    if parts.count >= 2, parts[1].lowercased().hasPrefix(findingAdditionPrefix) {
+                        let a = parts[1...].joined(separator: findingDelimiter).dropFirst(findingAdditionPrefix.count).trimmingCharacters(in: .whitespaces)
                         addition = a.isEmpty ? nil : a
                     }
                     result.findings.append(.init(id: UUID().uuidString, issue: issue, addition: addition))
@@ -193,9 +201,9 @@ public struct BriefSidecar: Sendable {
 
     private static func parseRevision(_ raw: String, brief: Brief?) -> SidecarResult {
         var result = SidecarResult()
-        if let open = raw.range(of: "<revision>") {
+        if let open = raw.range(of: "<\(revisionTag)>") {
             let rest = raw[open.upperBound...]
-            let body = String(rest.range(of: "</revision>").map { rest[..<$0.lowerBound] } ?? rest)
+            let body = String(rest.range(of: "</\(revisionTag)>").map { rest[..<$0.lowerBound] } ?? rest)
             var text = body.trimmingCharacters(in: .whitespacesAndNewlines)
             let original = brief?.effectiveBody ?? ""
             // Only what the model was shown can be rewritten: not text whose secrets it saw as placeholders

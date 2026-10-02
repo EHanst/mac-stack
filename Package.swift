@@ -196,6 +196,19 @@ let package = Package(
             ]
         ),
 
+        // Automated end-to-end soak and leak test harness.
+        .executableTarget(
+            name: "KokoroSoak",
+            dependencies: [
+                "StackCore",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Sources/KokoroSoak",
+            swiftSettings: [
+                .unsafeFlags(["-strict-concurrency=complete", "-Xcc", git2Include]),
+            ]
+        ),
+
         .testTarget(
             name: "KokoroTests",
             dependencies: [

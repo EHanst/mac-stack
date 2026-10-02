@@ -53,6 +53,23 @@ struct BriefSidecarTests {
         #expect(r.findings[1].addition == nil)
     }
 
+    @Test("schema tags and delimiter invariants are preserved")
+    func schemaInvariants() {
+        #expect(BriefSidecar.questionsTag == "questions")
+        #expect(BriefSidecar.findingsTag == "findings")
+        #expect(BriefSidecar.revisionTag == "revision")
+        #expect(BriefSidecar.tipsTag == "tips")
+        #expect(BriefSidecar.findingDelimiter == " | ")
+        #expect(BriefSidecar.findingAdditionPrefix == "add:")
+
+        // Verify system prompt contains exact tags and delimiter guidance
+        #expect(BriefSidecar.systemPrompt.contains("<\(BriefSidecar.questionsTag)>"))
+        #expect(BriefSidecar.systemPrompt.contains("<\(BriefSidecar.findingsTag)>"))
+        #expect(BriefSidecar.systemPrompt.contains("<\(BriefSidecar.revisionTag)>"))
+        #expect(BriefSidecar.systemPrompt.contains("<\(BriefSidecar.tipsTag)>"))
+        #expect(BriefSidecar.systemPrompt.contains("\(BriefSidecar.findingDelimiter)\(BriefSidecar.findingAdditionPrefix)"))
+    }
+
     @Test("prose or missing tags yield no cards and a note")
     func junkReplies() {
         for raw in ["Sure! Here are some thoughts.", "", "<findings>\n</findings>"] {
