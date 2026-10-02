@@ -406,14 +406,11 @@ public final class AppServices {
         }
     }
 
-    /// Offline embeddings (bge-small) if installed; shares the GPU scheduler. Safe to call twice.
+    /// Offline embeddings via NLEmbedding.
     private func registerEmbedderIfInstalled() async {
-        let embedder = LocalEmbedder(scheduler: gpuScheduler)
+        let embedder = LocalEmbedder()
         guard await embedder.isInstalled, await registry.provider(id: embedder.id) == nil else { return }
         await registry.register(embedder)
-        for provider in await registry.allProviders(with: .textGeneration) {
-            await (provider as? LocalMLXProvider)?.reserveMemory(bytes: LocalEmbedder.residentBytesEstimate)
-        }
     }
 
     // MARK: - First-run setup

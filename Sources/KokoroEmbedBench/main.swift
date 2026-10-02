@@ -183,17 +183,15 @@ func selfTest(sourceDir: URL) async throws -> Bool {
     func check(_ ok: Bool, _ what: String) { print("  \(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
     func dot(_ a: [Float], _ b: [Float]) -> Float { zip(a, b).reduce(0) { $0 + $1.0 * $1.1 } }
 
-    print("[LocalEmbedder self-test] real bge-small through the production provider")
-    let scheduler = InferenceScheduler()
-    let e = LocalEmbedder(scheduler: scheduler)
-    check(await e.isInstalled, "model installed at \(LocalEmbedder.defaultDirectory().path)")
-    check(await e.healthCheck() == .degraded("Embedding model not yet loaded — will load on first use"), "health before load is degraded")
+    print("[LocalEmbedder self-test] NLEmbedding through the production provider")
+    let e = LocalEmbedder()
+    check(await e.isInstalled, "model installed natively")
 
     let docs = try await e.embed([
         "actor InferenceScheduler serialises GPU work with priorities",
         "func drawBackground(in rect: CGRect) fills the view with a gradient",
     ])
-    check(docs.count == 2 && docs.allSatisfy { $0.count == 384 }, "two 384-dimensional vectors")
+    check(docs.count == 2 && docs.allSatisfy { $0.count == 512 }, "two 512-dimensional vectors")
     check(docs.allSatisfy { abs($0.reduce(0) { $0 + $1 * $1 }.squareRoot() - 1) < 1e-3 }, "vectors are unit length")
     check(await e.healthCheck() == .healthy, "health after load is healthy")
 
