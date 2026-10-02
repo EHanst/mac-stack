@@ -143,7 +143,6 @@ let package = Package(
                 "App/NavDestination.swift",
                 "App/PromptStudioModel.swift",
                 "App/QuitPolicy.swift",
-                "App/RevealPacer.swift",
                 "App/RoutingPolicyLabels.swift",
                 "App/SetupModel.swift",
                 "App/StackExports.swift",

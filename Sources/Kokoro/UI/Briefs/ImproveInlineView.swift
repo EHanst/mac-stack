@@ -114,7 +114,7 @@ struct ImproveInlineView: View {
                 if waiting {
                     Text(improve.revision).opacity(0.5)
                 } else {
-                    StreamRevealText(partial, live: true)
+                    Text(partial)
                 }
             }
             .font(.mtBodyMedium)
