@@ -48,42 +48,42 @@ struct RevealPacerTests {
 
     @Test("caught-up text moves at the base rate")
     func baseRate() {
-        var p = RevealPacer()
+        var p = RevealPacer(elapsed: RevealPacer.rampDuration)
         p.advance(dt: 0.1, target: 30, streaming: true)   // backlog 30 -> 100/s, below base
         #expect(abs(p.position - RevealPacer.baseRate * 0.1) < 0.0001)
     }
 
     @Test("a growing backlog is drained faster than the base rate")
     func backlogSpeedsUp() {
-        var p = RevealPacer()
+        var p = RevealPacer(elapsed: RevealPacer.rampDuration)
         p.advance(dt: 0.1, target: 90, streaming: true)   // backlog 90 -> 300/s
         #expect(p.position > RevealPacer.baseRate * 0.1)
     }
 
     @Test("a large backlog is capped at the max rate")
     func maxRate() {
-        var p = RevealPacer()
+        var p = RevealPacer(elapsed: RevealPacer.rampDuration)
         p.advance(dt: 0.1, target: 10_000, streaming: true)
         #expect(abs(p.position - RevealPacer.maxRate * 0.1) < 0.0001)
     }
 
     @Test("never passes the target")
     func neverOvershoots() {
-        var p = RevealPacer()
+        var p = RevealPacer(elapsed: RevealPacer.rampDuration)
         for _ in 0..<100 { p.advance(dt: 0.05, target: 20, streaming: true) }
         #expect(p.position == 20)
     }
 
     @Test("a stalled frame cannot jump the cursor")
     func stalledFrame() {
-        var p = RevealPacer()
+        var p = RevealPacer(elapsed: RevealPacer.rampDuration)
         p.advance(dt: 5, target: 10_000, streaming: true)
         #expect(p.position <= RevealPacer.maxRate * RevealPacer.maxStep + 0.0001)
     }
 
     @Test("after the stream ends the tail settles faster than the base rate")
     func settles() {
-        var live = RevealPacer(), done = RevealPacer()
+        var live = RevealPacer(elapsed: RevealPacer.rampDuration), done = RevealPacer(elapsed: RevealPacer.rampDuration)
         live.advance(dt: 0.05, target: 200, streaming: true)
         done.advance(dt: 0.05, target: 200, streaming: false)
         #expect(done.position > live.position)
@@ -92,19 +92,41 @@ struct RevealPacerTests {
 
     @Test("shorter replacement text pulls the cursor back")
     func shrinks() {
-        var p = RevealPacer(position: 100)
+        var p = RevealPacer(position: 100, elapsed: RevealPacer.rampDuration)
         p.advance(dt: 0.016, target: 40, streaming: true)
         #expect(p.position == 40)
     }
 
     @Test("the fade edge stays within its range and grows with speed")
     func edge() {
-        var slow = RevealPacer(), fast = RevealPacer()
+        var slow = RevealPacer(elapsed: RevealPacer.rampDuration), fast = RevealPacer(elapsed: RevealPacer.rampDuration)
         slow.advance(dt: 0.016, target: 5, streaming: true)
         fast.advance(dt: 0.016, target: 10_000, streaming: true)
         #expect(RevealPacer.edgeRange.contains(slow.edgeWidth))
         #expect(RevealPacer.edgeRange.contains(fast.edgeWidth))
         #expect(fast.edgeWidth > slow.edgeWidth)
+    }
+
+    @Test("each glyph fades in over two seconds")
+    func fadeIsTwoSeconds() {
+        #expect(RevealPacer.fadeDuration == 2.0)
+        var p = RevealPacer(elapsed: RevealPacer.rampDuration)
+        p.advance(dt: 0.016, target: 30, streaming: true)
+        #expect(abs(p.edgeWidth / p.rate - 2.0) < 0.0001)
+    }
+
+    @Test("the cursor starts slow, speeds up, and is capped at the full rate")
+    func slowStartThenSpeedsUp() {
+        var p = RevealPacer()
+        p.advance(dt: 0.016, target: 10_000, streaming: true)
+        #expect(p.rate < 60)
+        var last = p.rate
+        for _ in 0..<40 {
+            p.advance(dt: 0.05, target: 10_000, streaming: true)
+            #expect(p.rate >= last)
+            last = p.rate
+        }
+        #expect(abs(p.rate - RevealPacer.maxRate) < 0.0001)
     }
 }
 

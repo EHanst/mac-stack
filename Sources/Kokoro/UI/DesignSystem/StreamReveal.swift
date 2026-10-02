@@ -19,17 +19,39 @@ struct RevealRenderer: TextRenderer, Animatable {
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         var index = 0.0
+        var shadowed: [(glyph: Text.Layout.RunSlice, strength: Double)] = []
+        var cursor: CGRect?
         for line in layout {
             for run in line {
                 for glyph in run {
                     let alpha = RevealCurve.opacity(position: position, index: index, edge: edge)
+                    if cursor == nil, index >= position.rounded(.down) { cursor = glyph.typographicBounds.rect }
                     index += 1
                     guard alpha > 0 else { continue }
+                    // A glow that is strongest while a glyph is half-faded and gone once it has landed.
+                    let strength = 4 * alpha * (1 - alpha) * 0.5
+                    if strength > 0.02 { shadowed.append((glyph, strength)) }
                     var glyphContext = context
                     glyphContext.opacity = alpha
                     glyphContext.draw(glyph)
                 }
             }
+        }
+        // One blurred layer for every glyph still fading, so the trail costs a single filter.
+        if !shadowed.isEmpty {
+            context.drawLayer { layer in
+                layer.addFilter(.blur(radius: 4))
+                for (glyph, strength) in shadowed {
+                    var g = layer
+                    g.opacity = strength
+                    g.draw(glyph)
+                }
+            }
+        }
+        if let cursor, position < index {
+            let size = max(cursor.height * 1.15, 14)
+            KokoroCursor.draw(in: &context, center: CGPoint(x: cursor.minX - size * 0.35, y: cursor.midY),
+                              size: size, phase: position)
         }
     }
 }

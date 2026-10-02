@@ -11,8 +11,10 @@ public struct RevealPacer: Equatable, Sendable {
     public static let maxRate = 400.0
     public static let maxLag = 0.30         // seconds; time constant for draining a backlog
     public static let settleRate = 700.0    // once the stream has ended
-    public static let fadeDuration = 9.0    // seconds each glyph takes to fade in
-    public static let edgeRange = 240.0...4000.0
+    public static let fadeDuration = 2.0    // seconds each glyph takes to fade in
+    public static let edgeRange = 24.0...800.0
+    public static let startRate = 15.0      // glyphs/second on the first frame: the cursor sets off slowly
+    public static let rampDuration = 1.5    // seconds to ease from startRate up to the full rate
     public static let maxStep = 0.1         // a stalled frame never jumps the cursor further than this
 
     /// Cursor position, in glyphs from the start of the text.
@@ -21,7 +23,19 @@ public struct RevealPacer: Equatable, Sendable {
     /// about `fadeDuration` however fast the text is moving.
     public private(set) var rate: Double = RevealPacer.baseRate
 
-    public init(position: Double = 0) { self.position = position }
+    /// Seconds spent advancing so far; drives the slow start.
+    public private(set) var elapsed: Double
+
+    public init(position: Double = 0, elapsed: Double = 0) {
+        self.position = position
+        self.elapsed = elapsed
+    }
+
+    /// 0 at the start, 1 once the ramp is over, easing in between.
+    public var ramp: Double {
+        let t = min(max(elapsed / Self.rampDuration, 0), 1)
+        return t * t * (3 - 2 * t)
+    }
 
     /// Width of the leading fade, in glyphs.
     public var edgeWidth: Double {
@@ -38,6 +52,8 @@ public struct RevealPacer: Equatable, Sendable {
         }
         var next = min(max(Self.baseRate, backlog / Self.maxLag), Self.maxRate)
         if !streaming { next = max(next, Self.settleRate) }
+        elapsed += step
+        next = Self.startRate + (next - Self.startRate) * ramp
         rate = next
         position = min(target, position + next * step)
     }
