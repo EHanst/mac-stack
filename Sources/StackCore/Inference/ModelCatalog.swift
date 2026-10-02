@@ -102,7 +102,7 @@ public enum ModelCatalog {
         let runnable = chatModels.filter { ($0.minimumRAMBytes ?? 0) <= ramBytes }
         let have = runnable.filter { installed.contains($0.id) }
         let pool = have.isEmpty ? runnable : have
-        let tierDefault = ramBytes >= largeModelRAMBytes ? bonsai27B : qwen35_4b
+        let tierDefault = qwen35_4b
         return pool.first { $0.id == tierDefault.id } ?? pool.first ?? qwen35_4b
     }
 }
