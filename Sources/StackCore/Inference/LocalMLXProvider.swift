@@ -145,7 +145,7 @@ public actor LocalMLXProvider: ModelProvider {
         options: GenerationOptions
     ) -> AsyncThrowingStream<GenerationEvent, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task(priority: .utility) { [weak self] in
+            let task = Task { [weak self] in
                 guard let self else { continuation.finish(); return }
                 do {
                     try await self.runGenerate(

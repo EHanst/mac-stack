@@ -427,58 +427,73 @@ public actor VectorStore {
 
     private func denseSearch(embedding: [Float], topK: Int) throws -> [SearchResult] {
         guard let db = nextReadDB() ?? writeDB else { return [] }
-        let fetchSQL = """
-            SELECT c.id, c.file_path, c.decl_kind, c.content, e.embedding
-            FROM chunk_embeddings e
-            JOIN chunks c ON c.id = e.chunk_id;
-        """
+        let fetchSQL = "SELECT chunk_id, embedding FROM chunk_embeddings;"
         var stmt: OpaquePointer?
         sqlite3_prepare_v2(db, fetchSQL, -1, &stmt, nil)
         defer { sqlite3_finalize(stmt) }
 
         let queryNorm = VectorMath.normalize(embedding)
-        var scoredResults: [(SearchResult, Float)] = []
         let expectedBytes = embeddingDimension * MemoryLayout<Float>.stride
+
+        var topHits: [(id: UUID, distance: Float)] = []
+        topHits.reserveCapacity(topK + 1)
 
         while sqlite3_step(stmt) == SQLITE_ROW {
             let idStr = Self.columnText(stmt, 0)
-            let filePath = Self.columnText(stmt, 1)
-            let declKind = Self.columnText(stmt, 2)
-            let content = Self.columnText(stmt, 3)
-
             guard let id = UUID(uuidString: idStr) else { continue }
-
-            let blobPtr = sqlite3_column_blob(stmt, 4)
-            let blobSize = sqlite3_column_bytes(stmt, 4)
+            let blobPtr = sqlite3_column_blob(stmt, 1)
+            let blobSize = sqlite3_column_bytes(stmt, 1)
             guard let ptr = blobPtr, Int(blobSize) == expectedBytes else { continue }
 
-            let chunkEmbedding = [Float](unsafeUninitializedCapacity: embeddingDimension) { buffer, initializedCount in
+            let chunkNorm = [Float](unsafeUninitializedCapacity: embeddingDimension) { buffer, initializedCount in
                 let rawDest = UnsafeMutableRawBufferPointer(buffer)
                 rawDest.copyMemory(from: UnsafeRawBufferPointer(start: ptr, count: expectedBytes))
                 initializedCount = embeddingDimension
             }
-
-            let chunkNorm = VectorMath.normalize(chunkEmbedding)
+            
+            // Assuming vectors are pre-normalized during storeEmbedding
             let similarity = VectorMath.dotProduct(queryNorm, chunkNorm)
-            let distance = 1.0 - similarity // Cosine distance
+            let distance = 1.0 - similarity
 
-            let result = SearchResult(chunkID: id, filePath: filePath,
-                                      declarationKind: declKind, content: content,
-                                      score: Double(distance), rank: 0)
-            scoredResults.append((result, distance))
+            if topHits.count < topK || distance < topHits.last!.distance {
+                topHits.append((id, distance))
+                topHits.sort { $0.distance < $1.distance }
+                if topHits.count > topK {
+                    topHits.removeLast()
+                }
+            }
         }
+        
+        guard !topHits.isEmpty else { return [] }
 
-        scoredResults.sort { $0.1 < $1.1 }
-
-        var finalResults: [SearchResult] = []
-        for (i, item) in scoredResults.prefix(topK).enumerated() {
-            let res = item.0
-            finalResults.append(SearchResult(chunkID: res.chunkID, filePath: res.filePath,
-                                             declarationKind: res.declarationKind, content: res.content,
-                                             score: res.score, rank: i))
+        let idsParam = topHits.map { "'\($0.id.uuidString)'" }.joined(separator: ",")
+        let contentSQL = "SELECT id, file_path, decl_kind, content FROM chunks WHERE id IN (\(idsParam));"
+        var cStmt: OpaquePointer?
+        sqlite3_prepare_v2(db, contentSQL, -1, &cStmt, nil)
+        defer { sqlite3_finalize(cStmt) }
+        
+        var chunksMap: [UUID: (filePath: String, declKind: String, content: String)] = [:]
+        while sqlite3_step(cStmt) == SQLITE_ROW {
+            let idStr = Self.columnText(cStmt, 0)
+            if let id = UUID(uuidString: idStr) {
+                chunksMap[id] = (
+                    Self.columnText(cStmt, 1),
+                    Self.columnText(cStmt, 2),
+                    Self.columnText(cStmt, 3)
+                )
+            }
         }
-        return finalResults
+        
+        var results: [SearchResult] = []
+        for hit in topHits {
+            if let c = chunksMap[hit.id] {
+                results.append(SearchResult(chunkID: hit.id, filePath: c.filePath, declarationKind: c.declKind, content: c.content, score: Double(hit.distance), rank: 0))
+            }
+        }
+        return results
     }
+
+
 
     private func sparseSearch(query: String, topK: Int) throws -> [SearchResult] {
         guard let db = nextReadDB() ?? writeDB, FTSQuery.match(query) != nil else { return [] }

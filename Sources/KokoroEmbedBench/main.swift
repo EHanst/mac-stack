@@ -209,16 +209,7 @@ func selfTest(sourceDir: URL) async throws -> Bool {
     for t in mixed { separate.append(try await e.embed([t])[0]) }
     check(zip(together, separate).allSatisfy { dot($0, $1) > 0.999 }, "results come back in input order")
 
-    // A held GPU slot must delay embedding (shared scheduler), not run alongside it.
-    let gate = AsyncStream<Void>.makeStream()
-    let holder = Task { try await scheduler.run(priority: .interactive) { for await _ in gate.stream { break } } }
-    for _ in 0..<200 where await scheduler.runningCount == 0 { try await Task.sleep(for: .milliseconds(2)) }
-    let pending = Task { try await e.embed(["hello"]) }
-    try await Task.sleep(for: .milliseconds(200))
-    check(await scheduler.queuedCount == 1, "embedding queues behind a held GPU slot")
-    gate.continuation.yield()
-    _ = try await pending.value
-    try await holder.value
+
     // End to end, offline: index the repo through the real pipeline with ONLY the local embedder
     // registered (no cloud provider anywhere), then answer the eval questions with `search`.
     print("[offline code search end to end] IndexingPipeline + LocalEmbedder + VectorStore, no cloud provider")

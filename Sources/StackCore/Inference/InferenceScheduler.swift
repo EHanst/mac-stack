@@ -34,14 +34,21 @@ public actor InferenceScheduler {
         self.maxQueued = max(1, maxQueued)
         
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .global(qos: .utility))
-        source.setEventHandler {
-            let event = source.data
-            if event.contains(.warning) || event.contains(.critical) {
-                MLX.Memory.clearCache()
-            }
+        self.memoryPressureSource = source
+        
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            Task { await self.handleMemoryPressure() }
         }
         source.resume()
-        self.memoryPressureSource = source
+    }
+
+    deinit {
+        memoryPressureSource?.cancel()
+    }
+
+    private func handleMemoryPressure() {
+        MLX.Memory.clearCache()
     }
 
     public var queuedCount: Int { waiters.count }

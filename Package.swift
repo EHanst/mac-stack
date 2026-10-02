@@ -21,6 +21,8 @@ let package = Package(
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
         .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.31.0"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "3.31.3"),
+        .package(url: "https://github.com/huggingface/swift-transformers.git", from: "0.1.17"),
         // HTTP server for the opt-in OpenAI-compatible API.
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.27.0"),
     ],
@@ -55,6 +57,8 @@ let package = Package(
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Transformers", package: "swift-transformers"),
             ],
             path: "Sources/StackCore",
             swiftSettings: [
@@ -179,7 +183,10 @@ let package = Package(
             name: "KokoroEmbedBench",
             dependencies: [
                 "StackCore",
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "Transformers", package: "swift-transformers"),
             ],
             path: "Sources/KokoroEmbedBench",
             swiftSettings: [
