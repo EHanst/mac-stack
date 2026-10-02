@@ -209,4 +209,12 @@ struct PromptLintTests {
         #expect(PromptLint.conflicts("Keep it short. Explain in great detail.").count == 1)
         #expect(PromptLint.conflicts("Keep it short. Name the file.").isEmpty)
     }
+
+    @Test("already-clear gate: specific drafts with a done-condition pass, vague or unverifiable ones don't")
+    func gateSamples() {
+        #expect(PromptLint.isAlreadyClear("In `Task.swift`, make `Task` conform to `Equatable` by comparing only `id`; `XCTAssertEqual(task1, task2)` in TaskTests.swift passes when ids match."))
+        #expect(PromptLint.isAlreadyClear("Update `Dockerfile` to set `NODE_ENV=production` and replace `npm install` with `npm ci --omit=dev`; `docker build .` completes under 300 MB."))
+        #expect(!PromptLint.isAlreadyClear("Refactor the `calculateTotal` function in `BillingService.swift` so it's cleaner."))
+        #expect(!PromptLint.isAlreadyClear("Add a new endpoint `GET /v1/users/:id/orders` in `server.ts` that returns orders for that user."))
+    }
 }

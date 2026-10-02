@@ -43,11 +43,11 @@ public enum PromptLiterals {
     ]
 
     /// Plain words from `original` the rewrite should still carry: the requirements a short prose request is made of
-    /// ("speed", "size"), which the literal check can't see. Matches on a 5-letter stem so "faster"/"fast" and
+    /// ("speed", "size"), which the literal check can't see. Matches on a 4-letter stem so "faster"/"fast" and
     /// "optimizing"/"optimize" don't count as dropped. Short drafts must keep every term; long ones may reword
     /// up to a quarter of theirs.
     public static func missingTerms(from original: String, in rewritten: String) -> [String] {
-        func stem(_ w: String) -> String { String(w.prefix(w.count > 5 ? 5 : w.count)) }
+        func stem(_ w: String) -> String { String(w.prefix(4)) }
         let words = original.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
         var seen = Set<String>()
         let terms = words.filter { $0.count >= 4 && !stopwords.contains($0) && seen.insert(stem($0)).inserted }
@@ -64,7 +64,7 @@ public enum PromptLiterals {
         let parts = clauses(in: original, maxWords: maxWords)
         var out: [String] = []
         for term in terms {
-            let stem = String(term.lowercased().prefix(5))
+            let stem = String(term.lowercased().prefix(4))
             if let hit = parts.first(where: { $0.lowercased().contains(stem) }), !out.contains(hit) { out.append(hit) }
         }
         return out

@@ -93,7 +93,7 @@ public enum PromptLint {
         let words = lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         guard (12...80).contains(words.count), check(trimmed).isEmpty,
               PromptLiterals.extract(from: trimmed).count >= 2,
-              containsAny(lower, ["must", "should", "done when", "passes", "verify", "expect"])
+              containsAny(lower, ["must", "should", "done when", "passes", "verify", "expect", "succeeds", "exits", "completes", "compiles"])
         else { return false }
         let vague: Set<String> = ["better", "faster", "nicer", "improve", "optimize", "good", "properly", "somehow", "stuff", "etc"]
         return vague.isDisjoint(with: words)
