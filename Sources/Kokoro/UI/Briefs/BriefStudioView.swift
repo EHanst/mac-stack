@@ -110,7 +110,7 @@ struct BriefStudioView: View {
                 }
                 Button { showBrainstorm = true } label: {
                     Label { Text(brainstormLabel) } icon: {
-                        Image(systemName: "lightbulb").symbolEffect(.bounce, value: brainstormCount)
+                        Image(systemName: "lightbulb")
                     }
                 }
                 .popover(isPresented: $showBrainstorm, arrowEdge: .bottom) {

@@ -66,8 +66,7 @@ struct ModelManagerView: View {
                     isRefreshing = false
                 }
             } label: {
-                Image(systemName: isRefreshing ? "arrow.clockwise" : "arrow.clockwise")
-                    .symbolEffect(.rotate, isActive: isRefreshing)
+                Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(MTIconButtonStyle(variant: .standard))
             .help("Refresh provider health")
