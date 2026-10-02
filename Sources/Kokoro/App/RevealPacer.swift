@@ -4,15 +4,16 @@ import Foundation
 ///
 /// Tokens arrive in bursts; showing them as they land looks choppy. The pacer keeps a cursor
 /// (in glyphs) that chases the amount of text available: steady at `baseRate`, faster as the
-/// backlog grows (draining it with a `maxLag` time constant, up to `maxRate`), and quicker again
+/// backlog grows (draining it with a `maxLag` time constant, with no upper limit), and quicker again
 /// once the stream has ended so the tail finishes promptly. Pure, so every rule is unit-tested.
 public struct RevealPacer: Equatable, Sendable {
     public static let baseRate = 110.0      // glyphs/second when caught up: snappy, still visible
-    public static let maxRate = 400.0
     public static let maxLag = 0.30         // seconds; time constant for draining a backlog
     public static let settleRate = 700.0    // once the stream has ended
     public static let fadeDuration = 2.0    // seconds each glyph takes to fade in
     public static let edgeRange = 24.0...800.0
+    public static let idleReset = 0.25      // seconds caught up before the next block restarts the slow start
+    public static let idleSettle = 6.0      // how fast the fade edge tightens while waiting for more text
     public static let startRate = 15.0      // glyphs/second on the first frame: the cursor sets off slowly
     public static let rampDuration = 1.5    // seconds to ease from startRate up to the full rate
     public static let maxStep = 0.1         // a stalled frame never jumps the cursor further than this
@@ -25,6 +26,8 @@ public struct RevealPacer: Equatable, Sendable {
 
     /// Seconds spent advancing so far; drives the slow start.
     public private(set) var elapsed: Double
+    /// Seconds spent caught up with the text, waiting for more.
+    public private(set) var idle: Double = 0
 
     public init(position: Double = 0, elapsed: Double = 0) {
         self.position = position
@@ -48,9 +51,13 @@ public struct RevealPacer: Equatable, Sendable {
         let backlog = target - position
         guard backlog > 0 else {
             if backlog < 0 { position = target }    // text got shorter (replaced): never overshoot
+            idle += step
+            rate = Self.startRate + (rate - Self.startRate) * exp(-Self.idleSettle * step)   // tighten the edge
             return
         }
-        var next = min(max(Self.baseRate, backlog / Self.maxLag), Self.maxRate)
+        if idle >= Self.idleReset { elapsed = 0 }   // a new block after a pause: set off slowly again
+        idle = 0
+        var next = max(Self.baseRate, backlog / Self.maxLag)
         if !streaming { next = max(next, Self.settleRate) }
         elapsed += step
         next = Self.startRate + (next - Self.startRate) * ramp
@@ -64,12 +71,15 @@ public struct RevealPacer: Equatable, Sendable {
 }
 
 /// Per-glyph opacity for a cursor position: a wide, soft leading edge on a smooth ease-in-out.
-/// Glyphs reveal from the surface they sit on (opacity 0) to their text color (opacity 1),
+/// Glyphs reveal from the surface they sit on (opacity `startOpacity`) to their text color (opacity 1),
 /// so it reads the same in light and dark themes.
 public enum RevealCurve {
+    /// Opacity a glyph has the moment the cursor reaches it.
+    public static let startOpacity = 0.2
     public static func opacity(position: Double, index: Double, edge: Double) -> Double {
         guard edge > 0 else { return position > index ? 1 : 0 }
         let t = min(max((position - index) / edge, 0), 1)
-        return t * t * (3 - 2 * t)      // smoothstep: gentle start and finish, so the fade is visible
+        guard t > 0 else { return 0 }
+        return startOpacity + (1 - startOpacity) * t * t * (3 - 2 * t)    // smoothstep from `startOpacity`: gentle start and finish
     }
 }

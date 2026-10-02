@@ -11,6 +11,9 @@ import SwiftUI
 struct RevealRenderer: TextRenderer, Animatable {
     var position: Double
     var edge: Double
+    /// True while the cursor has caught up and the model is still producing text: it bounces at the end.
+    var waiting = false
+    var time = 0.0
 
     var animatableData: Double {
         get { position }
@@ -21,11 +24,13 @@ struct RevealRenderer: TextRenderer, Animatable {
         var index = 0.0
         var shadowed: [(glyph: Text.Layout.RunSlice, strength: Double)] = []
         var cursor: CGRect?
+        var last: CGRect?
         for line in layout {
             for run in line {
                 for glyph in run {
                     let alpha = RevealCurve.opacity(position: position, index: index, edge: edge)
                     if cursor == nil, index >= position.rounded(.down) { cursor = glyph.typographicBounds.rect }
+                    last = glyph.typographicBounds.rect
                     index += 1
                     guard alpha > 0 else { continue }
                     // A glow that is strongest while a glyph is half-faded and gone once it has landed.
@@ -48,10 +53,13 @@ struct RevealRenderer: TextRenderer, Animatable {
                 }
             }
         }
-        if let cursor, position < index {
-            let size = max(cursor.height * 1.6, 20)
-            KokoroCursor.draw(in: &context, center: CGPoint(x: cursor.minX - size * 0.35, y: cursor.midY),
-                              size: size, phase: position)
+        if let rect = position < index ? cursor : (waiting ? last : nil) {
+            let size = max(rect.height * 1.6, 20)
+            // Waiting: hop on the spot at the end of the text, landing on the beat.
+            let hop = waiting && position >= index ? -abs(sin(time * 2 * .pi * 1.4)) * size * 0.4 : 0
+            let x = position < index ? rect.minX : rect.maxX
+            KokoroCursor.draw(in: &context, center: CGPoint(x: x - size * 0.35, y: rect.midY + hop),
+                              size: size, phase: waiting ? time * 20 : position)
         }
     }
 }
@@ -61,6 +69,7 @@ struct RevealRenderer: TextRenderer, Animatable {
 final class RevealDriver {
     private(set) var position: Double
     private(set) var edge: Double = RevealPacer.edgeRange.lowerBound
+    private(set) var time = 0.0
     var count: Int
     var live: Bool
     private var pacer: RevealPacer
@@ -76,6 +85,8 @@ final class RevealDriver {
     }
 
     private var target: Double { live ? Double(count) : pacer.finishTarget(count: count) }
+    /// Caught up with the text so far while more is coming.
+    var waiting: Bool { live && !showAll && pacer.position >= Double(count) }
     var isSettled: Bool { !live && (showAll || pacer.position >= target) }
 
     func run() async {
@@ -91,6 +102,7 @@ final class RevealDriver {
             pacer.advance(dt: dt, target: target, streaming: live)
             position = pacer.position
             edge = pacer.edgeWidth
+            time += max(dt, 0)
         }
     }
 }
@@ -115,7 +127,8 @@ struct StreamRevealText: View {
             if reduceMotion || driver.isSettled {
                 Text(text)
             } else {
-                Text(text).textRenderer(RevealRenderer(position: driver.position, edge: driver.edge))
+                Text(text).textRenderer(RevealRenderer(position: driver.position, edge: driver.edge,
+                                                         waiting: driver.waiting, time: driver.time))
             }
         }
         .onChange(of: text) { driver.count = text.count }
