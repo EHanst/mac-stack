@@ -4,13 +4,10 @@
 /// model in one multi-token pass; only tokens matching the model's own greedy picks are kept.
 enum PromptLookup {
 
-    /// Longest and shortest trailing n-gram tried, longest first. One token alone matches too often.
-    static let ngram: ClosedRange<Int> = 2...3
-
     /// The tokens (at most `maxDraft`) that followed the most recent earlier occurrence of the
     /// context's trailing n-gram, trying the longest n first; empty when nothing matches.
-    static func draft(_ context: [Int32], maxDraft: Int) -> [Int32] {
-        guard maxDraft > 0 else { return [] }
+    static func draft(_ context: [Int32], maxDraft: Int, ngram: ClosedRange<Int> = 2...3) -> [Int32] {
+        guard maxDraft > 0, ngram.lowerBound > 0 else { return [] }
         let count = context.count
         return context.withUnsafeBufferPointer { c -> [Int32] in
             for n in ngram.reversed() where count > n {

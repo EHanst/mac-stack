@@ -44,7 +44,9 @@ struct Options {
     var noMTP = false
     var draftVocab: Int?
     var noLookup = false
+    var mtpFirst = false
     var lookupK: Int?
+    var lookupNgram: ClosedRange<Int>?
     var sidecarTest = false
     var compactionTest = false
     var longChatTest = false
@@ -80,7 +82,13 @@ struct Options {
             case "--no-mtp": noMTP = true
             case "--draft-vocab": if let v = it.next(), let n = Int(v) { draftVocab = n }
             case "--no-lookup": noLookup = true
+            case "--mtp-first": mtpFirst = true
             case "--lookup-k": if let v = it.next(), let n = Int(v) { lookupK = n }
+            case "--lookup-ngram":
+                if let v = it.next() {
+                    let p = v.split(separator: "-").compactMap { Int($0) }
+                    if let lo = p.first, let hi = p.last, lo <= hi { lookupNgram = lo...hi }
+                }
             case "--no-repair": evalRepair = false
             case "--profile": if let v = it.next() { evalProfile = v }
             case "--sampling": if let v = it.next() { evalSampling = v }
@@ -308,11 +316,13 @@ func run() async throws {
         // Measure beyond the pre-flight limit (the sweep stops itself if the working set is exceeded).
         await provider.setBudget(ContextBudget(model: .init(fixedOverheadBytes: 0, bytesPerToken: 1), safetyFraction: 1, contextWindow: 262_144, minimumUsefulTokens: 0))
     }
-    if opts.noMTP || opts.draftVocab != nil || opts.noLookup || opts.lookupK != nil {
+    if opts.noMTP || opts.draftVocab != nil || opts.noLookup || opts.mtpFirst || opts.lookupK != nil || opts.lookupNgram != nil {
         var t = await provider.tuning
         if opts.noMTP { t.speculative = false }
         if opts.noLookup { t.promptLookup = false }
+        if opts.mtpFirst { t.lookupBeforeMTP = false }
         if let k = opts.lookupK { t.lookupDraftTokens = k }
+        if let n = opts.lookupNgram { t.lookupNgram = n }
         if let n = opts.draftVocab { t.draftVocabulary = n }
         await provider.setTuning(t)
     }
@@ -369,6 +379,26 @@ func run() async throws {
         let dPre = maxDiff(sPre, stepped), dyPre = maxDiff(yPre, concatenated(ySteps, axis: 1))
         print("  prefix replay vs stepping: max |Δy| \(dyPre)  max |Δstate| \(dPre)   \(dPre == 0 && dyPre == 0 ? "PASS" : "FAIL")")
 
+        // Multi-token verify rows vs one-token steps (speculative exactness), short and >1024-key contexts.
+        let sample = OptimizerEval.drafts.map(\.1).joined(separator: "\n")
+        for (label, text) in [("short", String(sample.prefix(400))), ("long", String(repeating: sample + "\n", count: 3)), ("longer", String(repeating: sample + "\n", count: 10))] {
+            for w in [2, 6] {
+                let d = try await provider.debugVerifyRowDiff(after: text, width: w)
+                print("  verify rows vs steps (\(label) \(text.count) chars, width \(w)): max |Δlogit| per row \(d)")
+            }
+        }
+
+        for (width, wrongAt) in [(2, 0), (2, 9), (4, 1), (6, 3), (6, 9)] {
+            let m = try await provider.debugRollbackMismatch(after: String(sample.prefix(1500)), count: 60, width: width, wrongAt: wrongAt)
+            print("  verify+rollback vs steps (width \(width), wrong draft at \(wrongAt)): \(m.map { "DIFFERENT at token \($0)" } ?? "identical")")
+        }
+
+        var passTimes: [String] = []
+        for w in 1...8 {
+            passTimes.append("\(w): \(fmt(try await provider.debugPassSeconds(after: String(sample.prefix(3000)), width: w) * 1000, 1)) ms")
+        }
+        print("  decode pass time by width: " + passTimes.joined(separator: "  "))
+
         // 2. Does the real model predict sensible next tokens?
         for prompt in ["The capital of France is", "The quick brown fox jumps over the lazy", "1, 2, 3, 4, 5,"] {
             let top = try await provider.debugTopTokens(after: prompt, count: 5)
@@ -407,7 +437,7 @@ func run() async throws {
         print("[mtp check] greedy decode, plain vs MTP / prompt lookup / both (must match), 160 tokens")
         let saved = await provider.tuning
         let configs: [(name: String, mtp: Bool, lookup: Bool)] =
-            [("plain", false, false), ("mtp", true, false), ("lookup", false, true), ("mtp+lookup", true, true)]
+            [("plain", false, false), ("plain again", false, false), ("mtp", true, false), ("lookup", false, true), ("mtp+lookup", true, true)]
         var secs = [Double](repeating: 0, count: configs.count)
         var tokens = 0, same = [Int](repeating: 0, count: configs.count), cases = 0
         var mtpStats = (cycles: 0, accepted: 0), lookupStats = (passes: 0, proposed: 0, accepted: 0)

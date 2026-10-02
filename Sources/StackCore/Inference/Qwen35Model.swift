@@ -121,7 +121,7 @@ final class Qwen35Attention: Module, @unchecked Sendable {
 
     func callAsFunction(
         _ x: MLXArray, mask: MLXFast.ScaledDotProductAttentionMaskMode,
-        cache: Qwen35LayerCache
+        cache: Qwen35LayerCache, rowwise: Bool = false
     ) -> MLXArray {
         let B = x.shape[0]
         let L = x.shape[1]
@@ -158,8 +158,20 @@ final class Qwen35Attention: Module, @unchecked Sendable {
         // NOT be tiled up to nHeads (that materialised a copy of the whole KV history per
         // layer per token).
         let scale = 1.0 / Float(headDim).squareRoot()
-        let attn = MLXFast.scaledDotProductAttention(
-            queries: q, keys: kAll, values: vAll, scale: scale, mask: mask)
+        let attn: MLXArray
+        if rowwise && L > 1 {
+            // Speculative verify: attend one query at a time over exactly the keys a one-token decode step
+            // would see. SDPA picks its kernel and key partitioning from the query count and key length, so
+            // a batched masked call can round differently (≥1024 keys) from plain decoding; this cannot.
+            attn = concatenated((0 ..< L).map { i in
+                MLXFast.scaledDotProductAttention(
+                    queries: q[0..., 0..., i ..< (i + 1)], keys: kAll[0..., 0..., ..<(offset + i + 1)],
+                    values: vAll[0..., 0..., ..<(offset + i + 1)], scale: scale, mask: .none)
+            }, axis: 2)
+        } else {
+            attn = MLXFast.scaledDotProductAttention(
+                queries: q, keys: kAll, values: vAll, scale: scale, mask: mask)
+        }
         var out = attn.transposed(0, 2, 1, 3).reshaped([B, L, qDim])
         if let g = gate { out = out * MLXNN.sigmoid(g) }   // Qwen3.5 reference: sigmoid gate
         return oProj(out)
@@ -258,8 +270,15 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let proj = inProjQKVZ(xf)                                   // one fused matmul: qkv, z
         var qkv = proj[0].reshaped([B, L, convDim])
         let z   = proj[1].reshaped([B, L, nV, headV])
-        let b   = MLX.matmul(xf, inProjB.transposed()).reshaped([B, L, nV])
-        let a   = MLX.matmul(xf, inProjA.transposed()).reshaped([B, L, nV])
+        // A verify pass multiplies one row at a time: a several-row matmul accumulates in a different order
+        // than the one-row product of a plain decode step, and these feed the float32 recurrent state.
+        func dense(_ w: MLXArray) -> MLXArray {
+            let wt = w.transposed()
+            guard captureVerify && B * L > 1 else { return MLX.matmul(xf, wt) }
+            return concatenated((0 ..< B * L).map { MLX.matmul(xf[$0 ..< ($0 + 1)], wt) }, axis: 0)
+        }
+        let b   = dense(inProjB).reshaped([B, L, nV])
+        let a   = dense(inProjA).reshaped([B, L, nV])
 
         let (convOut, padded) = bonsaiCausalConv(qkv, w: conv1dW, cache: cache)
         qkv = MLXNN.silu(convOut)
@@ -352,7 +371,7 @@ final class Qwen35DecoderLayer: Module, @unchecked Sendable {
         let normed = inputLayerNorm(x)
         let attnOut: MLXArray
         if let attn = selfAttn {
-            attnOut = attn(normed, mask: mask, cache: cache)
+            attnOut = attn(normed, mask: mask, cache: cache, rowwise: captureVerify)
         } else if let attn = linearAttn {
             attnOut = attn(normed, cache: cache, captureVerify: captureVerify)
         } else {
