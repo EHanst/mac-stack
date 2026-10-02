@@ -15,7 +15,6 @@ struct ImproveInlineView: View {
     @State private var tab = Tab.result
     @State private var acceptedChanges: Set<Int> = []
     @State private var cachedChanges: [WordDiff.Change] = []
-    @State private var showFullText = false
     @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
 
     private enum Tab: String, CaseIterable {
@@ -222,9 +221,6 @@ struct ImproveInlineView: View {
                     Text("Untick any you don't want, then apply.")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     Spacer()
-                    Toggle(isOn: $showFullText) { Text("Full text") }
-                        .toggleStyle(.button).controlSize(.small)
-                    .help("Show the whole text with every change marked in place")
                     Button { acceptedChanges = Set(list.map(\.id)) } label: { Text("Keep all") }
                         .buttonStyle(MTTextButtonStyle())
                     Button { acceptedChanges = [] } label: { Text("Drop all") }
@@ -234,23 +230,40 @@ struct ImproveInlineView: View {
                         .disabled(acceptedChanges.count == list.count)
                         .help("Rewrite the result to keep only the ticked changes")
                 }
-                ScrollView {
-                    if showFullText {
-                        Text(fullTextDiff)
-                            .font(.mtBodyMedium).lineSpacing(3)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(Array(list.enumerated()), id: \.element.id) { index, change in
-                                if let section = change.section, index == 0 || list[index - 1].section != section {
-                                    Text(section.uppercased()).font(.mtLabelLarge)
-                                        .padding(.top, index == 0 ? 0 : 6)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Changes")
+                            .font(.mtLabelSmall)
+                            .foregroundStyle(Color.mtOnSurfaceVariant)
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(list.enumerated()), id: \.element.id) { index, change in
+                                    if let section = change.section, index == 0 || list[index - 1].section != section {
+                                        Text(section.uppercased()).font(.mtLabelLarge)
+                                            .padding(.top, index == 0 ? 0 : 6)
+                                    }
+                                    changeCard(change)
                                 }
-                                changeCard(change)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(maxWidth: .infinity)
+
+                    MTVerticalDivider()
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Whole brief")
+                            .font(.mtLabelSmall)
+                            .foregroundStyle(Color.mtOnSurfaceVariant)
+                        ScrollView {
+                            Text(fullTextDiff)
+                                .font(.mtBodyMedium).lineSpacing(3)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
         }

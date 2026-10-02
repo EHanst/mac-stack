@@ -371,6 +371,14 @@ struct MTDivider: View {
     }
 }
 
+struct MTVerticalDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.mtOutlineVariant)
+            .frame(width: 1)
+    }
+}
+
 // MARK: - Badge
 
 struct MTStatusBadge: View {
