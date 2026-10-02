@@ -322,6 +322,9 @@ public struct PromptOptimizer: Sendable {
         }
         lines.append("")
         lines.append(context.profile.rewriterGuidance)
+        if context.profile == .localSmall || context.profile.family == "local" {
+            lines.append("Preserve verbatim: code fences and their contents, backtick spans, numbers, identifiers, quoted strings, headings, and list markers.")
+        }
         var facts: [String] = []
         if let workspace = context.workspaceName { facts.append("The project is called \(workspace).") }
         if let intent = context.intent, intent != "general" { facts.append("The request looks like a \(intent) task.") }

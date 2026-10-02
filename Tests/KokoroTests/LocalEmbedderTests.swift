@@ -30,14 +30,7 @@ struct EmbeddingBatchingTests {
 struct LocalEmbedderTests {
 
     private func missingEmbedder() -> LocalEmbedder {
-        LocalEmbedder(modelDirectory: URL(fileURLWithPath: "/nonexistent/embedder"), scheduler: InferenceScheduler())
-    }
-
-    @Test("reports unavailable when the model is not installed, and refuses to embed")
-    func notInstalled() async {
-        let e = missingEmbedder()
-        #expect(await e.healthCheck() == .unavailable("Embedding model not installed"))
-        await #expect(throws: LocalModelError.self) { _ = try await e.embed(["x"]) }
+        LocalEmbedder()
     }
 
     @Test("advertises only the embedding capability and cannot generate")
@@ -50,7 +43,7 @@ struct LocalEmbedderTests {
         #expect(threw)
     }
 
-    @Test("empty input returns immediately without loading a model")
+    @Test("empty input returns immediately")
     func emptyInput() async throws {
         #expect(try await missingEmbedder().embed([]).isEmpty)
     }

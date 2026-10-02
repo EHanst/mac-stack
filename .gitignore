@@ -40,3 +40,6 @@ Vendor/
 # Coverage
 *.profraw
 *.profdata
+
+# Local bench/eval output
+*.log

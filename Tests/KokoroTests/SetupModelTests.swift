@@ -167,7 +167,7 @@ struct OnboardingGateTests {
     @Test("a registry holding only the embedder still needs onboarding: nothing to chat with")
     func embedderAloneIsNotEnough() async {
         let registry = ModelRegistry()
-        await registry.register(LocalEmbedder(modelDirectory: URL(fileURLWithPath: "/nowhere"), scheduler: InferenceScheduler()))
+        await registry.register(LocalEmbedder())
         #expect(await registry.isEmpty == false)                                         // the old check would skip onboarding
         #expect(await registry.allProviders(with: .textGeneration).isEmpty)              // the new check asks for onboarding
     }

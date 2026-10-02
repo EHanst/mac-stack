@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 
 /// Serialises access to the GPU. Every client (UI, API, MCP, indexing) submits work here;
 /// higher priorities run first, ties run FIFO, and cancelling the caller frees its slot
@@ -25,10 +26,29 @@ public actor InferenceScheduler {
     private var waiters: [Waiter] = []          // insertion order == FIFO
     private var nextID: UInt64 = 0
     private var cancelledEarly: Set<UInt64> = []
+    
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
 
     public init(maxConcurrent: Int = 1, maxQueued: Int = 128) {
         self.maxConcurrent = max(1, maxConcurrent)
         self.maxQueued = max(1, maxQueued)
+        
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .global(qos: .utility))
+        self.memoryPressureSource = source
+        
+        source.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            Task { await self.handleMemoryPressure() }
+        }
+        source.resume()
+    }
+
+    deinit {
+        memoryPressureSource?.cancel()
+    }
+
+    private func handleMemoryPressure() {
+        MLX.Memory.clearCache()
     }
 
     public var queuedCount: Int { waiters.count }

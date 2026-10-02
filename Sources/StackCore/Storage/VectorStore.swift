@@ -1,5 +1,4 @@
 import Foundation
-import CSQLiteVec
 import os
 import SQLite3
 import Accelerate
@@ -114,7 +113,7 @@ public actor VectorStore {
         }
     }
 
-    public init(dbURL: URL, embeddingDimension: Int = 384) {
+    public init(dbURL: URL, embeddingDimension: Int = 512) {
         self.dbURL = dbURL
         self.embeddingDimension = embeddingDimension
     }
@@ -144,11 +143,6 @@ public actor VectorStore {
     private func setUp(db: OpaquePointer) throws {
         sqlite3_busy_timeout(db, 3000)
 
-        // Load sqlite-vec extension
-        guard sqlite3_vec_init(db, nil, nil) == SQLITE_OK else {
-            throw StoreError.setupFailed("Failed to initialize sqlite-vec extension")
-        }
-
         try exec(db: db, sql: "PRAGMA journal_mode=WAL;")
         try exec(db: db, sql: "PRAGMA synchronous=NORMAL;")
         try exec(db: db, sql: "PRAGMA foreign_keys=ON;")
@@ -163,11 +157,7 @@ public actor VectorStore {
             if sqlite3_open_v2(dbURL.path, &rdb, rflags, nil) == SQLITE_OK, let rdb {
                 sqlite3_busy_timeout(rdb, 3000)
                 sqlite3_exec(rdb, "PRAGMA mmap_size=268435456;", nil, nil, nil)
-                if sqlite3_vec_init(rdb, nil, nil) == SQLITE_OK {
-                    readPool.append(rdb)
-                } else {
-                    sqlite3_close_v2(rdb)
-                }
+                readPool.append(rdb)
             }
         }
         logger.info("VectorStore opened at \(self.dbURL.lastPathComponent, privacy: .public)")
@@ -437,23 +427,73 @@ public actor VectorStore {
 
     private func denseSearch(embedding: [Float], topK: Int) throws -> [SearchResult] {
         guard let db = nextReadDB() ?? writeDB else { return [] }
-        let vecSQL = """
-            SELECT c.id, c.file_path, c.decl_kind, c.content,
-                   vec_distance_cosine(e.embedding, ?) AS distance
-            FROM chunk_embeddings e
-            JOIN chunks c ON c.id = e.chunk_id
-            ORDER BY distance ASC
-            LIMIT ?;
-        """
+        let fetchSQL = "SELECT chunk_id, embedding FROM chunk_embeddings;"
         var stmt: OpaquePointer?
-        sqlite3_prepare_v2(db, vecSQL, -1, &stmt, nil)
+        sqlite3_prepare_v2(db, fetchSQL, -1, &stmt, nil)
         defer { sqlite3_finalize(stmt) }
-        embedding.withUnsafeBytes { ptr in
-            sqlite3_bind_blob(stmt, 1, ptr.baseAddress, Int32(MemoryLayout<Float>.stride * embedding.count), SQLITE_TRANSIENT)
+
+        let queryNorm = VectorMath.normalize(embedding)
+        let expectedBytes = embeddingDimension * MemoryLayout<Float>.stride
+
+        var topHits: [(id: UUID, distance: Float)] = []
+        topHits.reserveCapacity(topK + 1)
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let idStr = Self.columnText(stmt, 0)
+            guard let id = UUID(uuidString: idStr) else { continue }
+            let blobPtr = sqlite3_column_blob(stmt, 1)
+            let blobSize = sqlite3_column_bytes(stmt, 1)
+            guard let ptr = blobPtr, Int(blobSize) == expectedBytes else { continue }
+
+            let chunkNorm = [Float](unsafeUninitializedCapacity: embeddingDimension) { buffer, initializedCount in
+                let rawDest = UnsafeMutableRawBufferPointer(buffer)
+                rawDest.copyMemory(from: UnsafeRawBufferPointer(start: ptr, count: expectedBytes))
+                initializedCount = embeddingDimension
+            }
+            
+            // Assuming vectors are pre-normalized during storeEmbedding
+            let similarity = VectorMath.dotProduct(queryNorm, chunkNorm)
+            let distance = 1.0 - similarity
+
+            if topHits.count < topK || distance < topHits.last!.distance {
+                topHits.append((id, distance))
+                topHits.sort { $0.distance < $1.distance }
+                if topHits.count > topK {
+                    topHits.removeLast()
+                }
+            }
         }
-        sqlite3_bind_int(stmt, 2, Int32(topK))
-        return rows(from: stmt)
+        
+        guard !topHits.isEmpty else { return [] }
+
+        let idsParam = topHits.map { "'\($0.id.uuidString)'" }.joined(separator: ",")
+        let contentSQL = "SELECT id, file_path, decl_kind, content FROM chunks WHERE id IN (\(idsParam));"
+        var cStmt: OpaquePointer?
+        sqlite3_prepare_v2(db, contentSQL, -1, &cStmt, nil)
+        defer { sqlite3_finalize(cStmt) }
+        
+        var chunksMap: [UUID: (filePath: String, declKind: String, content: String)] = [:]
+        while sqlite3_step(cStmt) == SQLITE_ROW {
+            let idStr = Self.columnText(cStmt, 0)
+            if let id = UUID(uuidString: idStr) {
+                chunksMap[id] = (
+                    Self.columnText(cStmt, 1),
+                    Self.columnText(cStmt, 2),
+                    Self.columnText(cStmt, 3)
+                )
+            }
+        }
+        
+        var results: [SearchResult] = []
+        for hit in topHits {
+            if let c = chunksMap[hit.id] {
+                results.append(SearchResult(chunkID: hit.id, filePath: c.filePath, declarationKind: c.declKind, content: c.content, score: Double(hit.distance), rank: 0))
+            }
+        }
+        return results
     }
+
+
 
     private func sparseSearch(query: String, topK: Int) throws -> [SearchResult] {
         guard let db = nextReadDB() ?? writeDB, FTSQuery.match(query) != nil else { return [] }
@@ -527,9 +567,9 @@ public actor VectorStore {
             CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
                 chunk_id UNINDEXED, content, content='chunks', content_rowid='rowid'
             );
-            CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
+            CREATE TABLE IF NOT EXISTS chunk_embeddings(
                 chunk_id TEXT PRIMARY KEY,
-                embedding FLOAT[\(embeddingDimension)]
+                embedding BLOB NOT NULL
             );
             CREATE TABLE IF NOT EXISTS embedding_cache(
                 content_hash BLOB PRIMARY KEY,

@@ -18,7 +18,7 @@ private actor StubEmbeddingProvider: ModelProvider {
 
     func embed(_ texts: [String]) async throws -> [[Float]] {
         embedCallCount += 1
-        return texts.map { _ in [Float](repeating: 0, count: 384) }
+        return texts.map { _ in [Float](repeating: 0, count: 512) }
     }
 
     func healthCheck() async -> ProviderHealth { .healthy }

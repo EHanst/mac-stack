@@ -340,12 +340,11 @@ struct ModelCatalogTests {
         }
     }
 
-    @Test("install locations match what discovery and LocalEmbedder already scan")
+    @Test("install locations match what discovery already scans")
     func layout() {
         #expect(ModelCatalog.bonsai27B.installSubpath == "Models/Bonsai-27B")
         #expect(ModelCatalog.qwen35_4b.installSubpath == "Models/Qwen3.5-4B-OptiQ-4bit")
         #expect(ModelCatalog.bgeSmall.installSubpath == "Models/Embedders/BAAI--bge-small-en-v1.5")
-        #expect(LocalEmbedder.defaultDirectory().path.hasSuffix(ModelCatalog.bgeSmall.installSubpath))
     }
 
     @Test("the 4B is offered from 8 GB, fetches its MTP head, and never the vision tower")
