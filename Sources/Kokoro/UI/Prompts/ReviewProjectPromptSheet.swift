@@ -24,19 +24,19 @@ struct ReviewProjectPromptSheet: View {
             }
             .frame(minHeight: 120, maxHeight: 260).padding(10)
             .background(Color.mtSurfaceContainerHighest).clipShape(RoundedRectangle(cornerRadius: 8))
-            HStack {
-                Button("Not now", action: onCancel).buttonStyle(MTTextButtonStyle())
-                Spacer()
-                Button(entry.approved ? "Use" : "Approve and use") {
+            MTSheetFooter(
+                cancelTitle: "Not now",
+                primaryTitle: entry.approved ? "Use" : "Approve and use",
+                onCancel: onCancel,
+                onPrimary: {
                     Task {
                         if !entry.approved { await studio.approve(entry) }
                         onApproved(entry.prompt)
                     }
                 }
-                .buttonStyle(MTFilledButtonStyle()).keyboardShortcut(.defaultAction)
-            }
+            )
         }
-        .padding(20)
+        .padding(Spacing.xxl)
         .frame(width: 500)
     }
 }

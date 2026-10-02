@@ -79,12 +79,21 @@ extension Font {
     static var mtLabelSmall: Font { AppTypography.font(size: 11, weight: .medium) }
 }
 
-// MARK: - Shape & motion
+// MARK: - Spacing & Shape & motion
+
+public enum Spacing {
+    public static let xs: CGFloat = 4
+    public static let sm: CGFloat = 8
+    public static let md: CGFloat = 12
+    public static let lg: CGFloat = 16
+    public static let xl: CGFloat = 20
+    public static let xxl: CGFloat = 24
+}
 
 /// Flat 2.0: two radii, no shadows. Depth is a tonal surface step plus a hairline.
-enum Radius {
-    static let control: CGFloat = 8
-    static let card: CGFloat = 12
+public enum Radius {
+    public static let control: CGFloat = 8
+    public static let card: CGFloat = 12
 }
 
 enum Motion {
@@ -477,6 +486,118 @@ struct MTProgressChip: View {
         .background(Color.mtSurfaceContainerHighest)
         .clipShape(Capsule())
         .foregroundStyle(Color.mtOnSurface)
+    }
+}
+
+// MARK: - Text fields
+
+public struct MTTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    public init(_ placeholder: String, text: Binding<String>) {
+        self.placeholder = placeholder
+        self._text = text
+    }
+    public var body: some View {
+        TextField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .padding(10)
+            .background(Color.mtSurfaceContainerHighest)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.control))
+            .overlay(RoundedRectangle(cornerRadius: Radius.control).stroke(Color.mtOutline, lineWidth: 1))
+    }
+}
+
+public struct MTSecureField: View {
+    let placeholder: String
+    @Binding var text: String
+    public init(_ placeholder: String, text: Binding<String>) {
+        self.placeholder = placeholder
+        self._text = text
+    }
+    public var body: some View {
+        SecureField(placeholder, text: $text)
+            .textFieldStyle(.plain)
+            .padding(10)
+            .background(Color.mtSurfaceContainerHighest)
+            .clipShape(RoundedRectangle(cornerRadius: Radius.control))
+            .overlay(RoundedRectangle(cornerRadius: Radius.control).stroke(Color.mtOutline, lineWidth: 1))
+    }
+}
+
+// MARK: - Page header & Sheet footer
+
+public struct MTPageHeader<Trailing: View>: View {
+    let title: String
+    let subtitle: String?
+    @ViewBuilder let trailing: () -> Trailing
+
+    public init(title: String, subtitle: String? = nil, @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
+        self.title = title
+        self.subtitle = subtitle
+        self.trailing = trailing
+    }
+
+    public var body: some View {
+        HStack(alignment: .center, spacing: Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.mtTitleLarge)
+                    .foregroundStyle(Color.mtOnSurface)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.mtBodySmall)
+                        .foregroundStyle(Color.mtOnSurfaceVariant)
+                }
+            }
+            Spacer()
+            trailing()
+        }
+        .padding(.horizontal, Spacing.xl)
+        .padding(.vertical, Spacing.md)
+        .background(Color.mtSurface)
+    }
+}
+
+public struct MTSheetFooter<Secondary: View>: View {
+    let cancelTitle: String
+    let primaryTitle: String
+    let isPrimaryDisabled: Bool
+    let onCancel: () -> Void
+    let onPrimary: () -> Void
+    @ViewBuilder let secondary: () -> Secondary
+
+    public init(
+        cancelTitle: String = "Cancel",
+        primaryTitle: String = "Save",
+        isPrimaryDisabled: Bool = false,
+        onCancel: @escaping () -> Void,
+        onPrimary: @escaping () -> Void,
+        @ViewBuilder secondary: @escaping () -> Secondary = { EmptyView() }
+    ) {
+        self.cancelTitle = cancelTitle
+        self.primaryTitle = primaryTitle
+        self.isPrimaryDisabled = isPrimaryDisabled
+        self.onCancel = onCancel
+        self.onPrimary = onPrimary
+        self.secondary = secondary
+    }
+
+    public var body: some View {
+        HStack(spacing: Spacing.md) {
+            Button(cancelTitle, action: onCancel)
+                .buttonStyle(MTTextButtonStyle())
+                .keyboardShortcut(.cancelAction)
+
+            secondary()
+
+            Spacer()
+
+            Button(primaryTitle, action: onPrimary)
+                .buttonStyle(MTFilledButtonStyle())
+                .keyboardShortcut(.defaultAction)
+                .disabled(isPrimaryDisabled)
+        }
     }
 }
 #endif

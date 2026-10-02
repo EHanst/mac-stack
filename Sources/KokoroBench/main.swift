@@ -441,7 +441,7 @@ func run() async throws {
     }
 
     if opts.optimizerEval {
-        await OptimizerEval.run(provider: provider, modes: opts.evalModes, repeats: opts.evalRepeats, json: opts.evalJSON, sampling: opts.evalSampling, repair: opts.evalRepair, profile: opts.evalProfile)
+        await OptimizerEval.run(provider: provider, modes: opts.evalModes, repeats: opts.evalRepeats, json: opts.evalJSON, sampling: opts.evalSampling, repair: opts.evalRepair, profile: opts.evalProfile, modelName: opts.model.lastPathComponent)
         print("")
     }
 

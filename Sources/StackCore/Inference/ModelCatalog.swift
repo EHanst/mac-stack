@@ -70,6 +70,29 @@ public enum ModelCatalog {
         residentWeightBytes: Int(3.3 * Double(1 << 30)),
         contextBudget: .qwen35_4b)
 
+    /// Qwen3.5-9B, OptiQ mixed 4/8-bit, with its multi-token-prediction head. Same architecture and template as
+    /// the 4B: about 1.9× slower on the optimizer eval, and fewer rewrites need a literal restored.
+    public static let qwen35_9b = ModelCatalogEntry(
+        id: "qwen3.5-9b-optiq",
+        displayName: "Qwen3.5 9B",
+        kind: .chat,
+        repository: "mlx-community/Qwen3.5-9B-OptiQ-4bit",
+        installSubpath: "Models/Qwen3.5-9B-OptiQ-4bit",
+        include: [
+            "config.json", "generation_config.json", "model.safetensors.index.json",
+            "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors",
+            "tokenizer.json", "tokenizer_config.json", "optiq/mtp.safetensors",
+        ],
+        requiredFiles: ["config.json", "model.safetensors.index.json",
+                        "model-00001-of-00002.safetensors", "model-00002-of-00002.safetensors", "tokenizer.json"],
+        approximateBytes: 7_290_000_000,
+        minimumRAMBytes: 16 << 30,
+        licenseName: "Apache License 2.0",
+        licenseURL: URL(string: "https://www.apache.org/licenses/LICENSE-2.0")!,
+        attribution: "Qwen3.5 by Qwen (Alibaba Cloud), Apache 2.0. Quantized by mlx-optiq.",
+        residentWeightBytes: Int(6.7 * Double(1 << 30)),
+        contextBudget: .qwen35_9b)
+
     public static let bgeSmall = ModelCatalogEntry(
         id: "bge-small-en-v1.5",
         displayName: "bge-small (code search)",
@@ -88,10 +111,10 @@ public enum ModelCatalog {
         licenseURL: URL(string: "https://opensource.org/licenses/MIT")!,
         attribution: nil)
 
-    public static let all: [ModelCatalogEntry] = [bonsai27B, qwen35_4b, bgeSmall]
+    public static let all: [ModelCatalogEntry] = [bonsai27B, qwen35_9b, qwen35_4b, bgeSmall]
 
     /// Chat models, most capable first.
-    public static let chatModels: [ModelCatalogEntry] = [bonsai27B, qwen35_4b]
+    public static let chatModels: [ModelCatalogEntry] = [bonsai27B, qwen35_9b, qwen35_4b]
 
     /// Macs with at least this much memory get the 27B by default; below it, the 4B.
     public static let largeModelRAMBytes: UInt64 = 24 << 30

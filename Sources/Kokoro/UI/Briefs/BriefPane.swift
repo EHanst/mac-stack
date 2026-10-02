@@ -75,7 +75,7 @@ struct BriefPane: View {
         let button = Button { improve.open(brief, studio: services.promptStudio) } label: { HotkeyLabel(title: "Improve", hotkey: .improve) }
             .disabled(empty)
             .hotkey(.improve)
-        if brief.isEdited { button } else { button.buttonStyle(MTFilledButtonStyle()) }
+        if brief.isEdited { button.buttonStyle(MTOutlinedButtonStyle()) } else { button.buttonStyle(MTFilledButtonStyle()) }
     }
 
     /// The first thing typed, kept in view for reference once the brief has been rewritten.
@@ -139,6 +139,7 @@ struct BriefPane: View {
                 }
                 Spacer()
                 Button { model.restoreVersion(brief.versions.count - 1) } label: { Text("Revert") }
+                    .buttonStyle(MTTextButtonStyle())
                     .disabled(!brief.isEdited || brief.versions.isEmpty)
                     .help("Put back the previous version. What you have now is saved first, so this can be undone.")
                 improveButton(brief, empty: empty)
@@ -258,6 +259,7 @@ struct BriefPane: View {
             .disabled(empty)
             .onHover { if $0 { Task { exportRoots = await model.exportRoots() } } }
             Button { showVersions = true } label: { Text("Versions") }
+                .buttonStyle(MTOutlinedButtonStyle())
                 .disabled(model.selected?.versions.isEmpty ?? true)
         }
     }
@@ -274,7 +276,7 @@ struct BriefPane: View {
         .help(help)
         .disabled(empty)
         .background { if let hotkey { Button("") { copy(kind) }.hotkey(hotkey).hidden().disabled(empty) } }
-        if primary == kind { button.buttonStyle(MTFilledButtonStyle()) } else { button }
+        if primary == kind { button.buttonStyle(MTFilledButtonStyle()) } else { button.buttonStyle(MTOutlinedButtonStyle()) }
     }
 
     /// Adds a folder as a project, then saves the brief into it.

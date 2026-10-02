@@ -43,3 +43,4 @@ Vendor/
 
 # Local bench/eval output
 *.log
+logs/

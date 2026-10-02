@@ -23,15 +23,18 @@ struct ReplySheet: View {
                 .padding(8)
                 .background(Color.mtSurfaceContainerHighest)
                 .clipShape(RoundedRectangle(cornerRadius: Radius.card))
-            HStack {
-                Spacer()
-                Button("Cancel", action: onClose)
-                Button(action) { onSubmit(text); onClose() }
-                    .buttonStyle(MTFilledButtonStyle())
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+            MTSheetFooter(
+                cancelTitle: "Cancel",
+                primaryTitle: action,
+                isPrimaryDisabled: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                onCancel: onClose,
+                onPrimary: {
+                    onSubmit(text)
+                    onClose()
+                }
+            )
         }
-        .padding(16)
+        .padding(Spacing.xxl)
         .frame(width: 560, height: 380)
     }
 }
