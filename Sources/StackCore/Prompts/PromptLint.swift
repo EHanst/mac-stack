@@ -73,6 +73,20 @@ public enum PromptLint {
         return out
     }
 
+    /// True when a rewrite has nothing to add: a real-length draft with no lint findings, at least two
+    /// literals to anchor it, a stated success check, and none of the vague words a rewrite would pin down.
+    public static func isAlreadyClear(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let words = lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        guard (12...80).contains(words.count), check(trimmed).isEmpty,
+              PromptLiterals.extract(from: trimmed).count >= 2,
+              containsAny(lower, ["must", "should", "done when", "passes", "verify", "expect"])
+        else { return false }
+        let vague: Set<String> = ["better", "faster", "nicer", "improve", "optimize", "good", "properly", "somehow", "stuff", "etc"]
+        return vague.isDisjoint(with: words)
+    }
+
     // MARK: Helpers
 
     private static func containsAny(_ text: String, _ needles: [String]) -> Bool {

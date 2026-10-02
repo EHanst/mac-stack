@@ -193,4 +193,15 @@ struct PromptLintTests {
             ![.unbalancedXML, .chainOfThought, .goalNotFirst].contains($0.rule)
         })
     }
+
+    @Test("isAlreadyClear needs length, literals, a success check and no vague words")
+    func alreadyClear() {
+        let clear = "Rename the property `title` to `heading` on `Note` in Sources/Model/Note.swift and update every call site. Do not change behaviour. Build must pass."
+        #expect(PromptLint.isAlreadyClear(clear))
+        #expect(!PromptLint.isAlreadyClear("make the app faster"))
+        #expect(!PromptLint.isAlreadyClear("fix the crash in `loadItems()` in Sources/App/Loader.swift when the list is empty"))
+        #expect(!PromptLint.isAlreadyClear(clear.replacingOccurrences(of: "Build must pass.", with: "")))
+        #expect(!PromptLint.isAlreadyClear(clear + " Make it better."))
+    }
 }
+

@@ -324,9 +324,9 @@ struct PromptOptimizerTests {
     @Test("repair pass emits repairing event and suppresses partial streaming to freeze previous draft")
     func repairPassFreezesDraft() async throws {
         let cap = Captured()
-        // First reply drops `load()`
-        let firstReply = ["<improved>Fix the crash in the loader and explain why.</improved>"]
-        // Second reply restores `load()`
+        // First reply rewords "crash", a plain word that can't be restored by program
+        let firstReply = ["<improved>Fix the failure in `load()` and explain why.</improved>"]
+        // Second reply restores it
         let secondReply = ["<improved>Fix the crash in `load()` and explain why.</improved>"]
         let svc = await service([ReplyProvider(id: "local:test", replies: [firstReply, secondReply], captured: cap)])
         let ctx = OptimizeContext(workspaceName: "Demo", intent: "debug", profile: .localSmall)
@@ -342,7 +342,7 @@ struct PromptOptimizerTests {
                 partials.append(text)
             case .repairing(let missing):
                 repairingReceived = true
-                #expect(missing.contains("`load()`"))
+                #expect(missing.contains("crash"))
             case .finished(let opt):
                 finalOptimization = opt
             }
@@ -354,7 +354,59 @@ struct PromptOptimizerTests {
         #expect(done.rejection == nil)
         // Partials should only reflect the first pass, NOT the second pass
         #expect(!partials.contains("Fix the crash in `load()` and explain why."))
-        #expect(partials.contains("Fix the crash in the loader and explain why."))
+        #expect(partials.contains("Fix the failure in `load()` and explain why."))
+    }
+
+    @Test("dropped literals are restored by program, with no second generation")
+    func restoresLiteralsWithoutRepair() async throws {
+        let cap = Captured()
+        let svc = await service([ReplyProvider(id: "local:test", reply: ["<improved>Fix the crash in the loader and explain why.</improved>", "<changes>- asked why</changes>"], captured: cap)])
+        let ctx = OptimizeContext(workspaceName: "Demo", intent: "debug", profile: .localSmall)
+        var repairing = false
+        var done: Optimization?
+        for try await e in PromptOptimizer(inference: svc).optimize(draft: "fix crash in `load()`", context: ctx) {
+            if case .repairing = e { repairing = true }
+            if case .finished(let o) = e { done = o }
+        }
+        let o = try #require(done)
+        #expect(!repairing)
+        #expect(await cap.calls == 1)
+        #expect(o.rejection == nil)
+        #expect(o.improved.contains("`load()`") && o.improved.hasPrefix("Fix the crash in the loader and explain why."))
+        #expect(o.changes.contains { $0.contains("Added back exactly as written") && $0.contains("`load()`") })
+    }
+
+    @Test("restoringLiterals keeps changes and questions, and leaves a complete reply alone")
+    func restoringLiteralsParts() {
+        let raw = "<improved>Do it.</improved><changes>- a</changes><questions>- which file?</questions>"
+        let patched = PromptOptimizer.restoringLiterals(raw: raw, original: "do it in Sources/A.swift")
+        let parsed = PromptOptimizer.parse(patched)
+        #expect(parsed.improved.contains("Sources/A.swift"))
+        #expect(parsed.changes.first == "a" && parsed.changes.count == 2)
+        #expect(parsed.questions == ["which file?"])
+        let whole = "<improved>Do it in Sources/A.swift.</improved>"
+        #expect(PromptOptimizer.restoringLiterals(raw: whole, original: "do it in Sources/A.swift") == whole)
+    }
+
+    @Test("a fenced block dropped by the rewrite is restored whole")
+    func restoresFence() {
+        let original = "why?\n```swift\nlet a = 1\n```"
+        let patched = PromptOptimizer.restoringLiterals(raw: "<improved>Explain why.</improved>", original: original)
+        #expect(PromptLiterals.missing(from: original, in: PromptOptimizer.parse(patched).improved).isEmpty)
+    }
+
+    @Test("an already-clear draft in improve mode returns unchanged without calling the model")
+    func clearDraftShortCircuits() async throws {
+        let cap = Captured()
+        let svc = await service([ReplyProvider(id: "local:test", reply: ["<improved>x</improved>"], captured: cap)])
+        let draft = "Rename the property `title` to `heading` on `Note` in Sources/Model/Note.swift and update every call site. Do not change behaviour. Build must pass."
+        var done: Optimization?
+        for try await e in PromptOptimizer(inference: svc).optimize(draft: draft, context: OptimizeContext(profile: .localSmall), mode: .improve) {
+            if case .finished(let o) = e { done = o }
+        }
+        let o = try #require(done)
+        #expect(await cap.calls == 0)
+        #expect(o.rejection == nil && !o.didChange && o.improved == draft)
     }
 
     @Test("a draft can't close its own fence")

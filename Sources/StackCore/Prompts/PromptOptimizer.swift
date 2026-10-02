@@ -139,6 +139,13 @@ public struct PromptOptimizer: Sendable {
                     continuation.finish()
                     return
                 }
+                // A draft that already names its target, literals and success check needs no model call.
+                if mode == .improve, PromptLint.isAlreadyClear(trimmed) {
+                    continuation.yield(.finished(Optimization(
+                        original: draft, improved: draft, changes: [], questions: [], model: nil, rejection: nil)))
+                    continuation.finish()
+                    return
+                }
                 let target = await inference.plannedModel()
                 let servedLocally = (context.pin ?? target)?.hasPrefix("local:") == true
                 var messages = Self.requestMessages(draft: trimmed, context: context, mode: mode,
@@ -187,11 +194,21 @@ public struct PromptOptimizer: Sendable {
                         }
                         return raw
                     }
-                    let raw = try await pass(messages, budget: budget)
+                    var raw = try await pass(messages, budget: budget)
                     var result = Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)
 
-                    // Dropped literals are systematic and easy to name, so give the model one chance to put
-                    // them back before giving up on the rewrite.
+                    // Dropped literals are exact strings, so put them back by program; only plain words the
+                    // model reworded still need a second generation.
+                    if let missing = result.rejection?.missing, !missing.isEmpty {
+                        let restored = Self.restoringLiterals(raw: raw, original: trimmed)
+                        if restored != raw {
+                            raw = restored
+                            result = Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)
+                        }
+                    }
+
+                    // What's left is easy to name, so give the model one chance to put it back before
+                    // giving up on the rewrite.
                     if let missing = result.rejection?.missing, !missing.isEmpty, !Task.isCancelled {
                         continuation.yield(.repairing(missing: missing))
                         let repair = Self.repairMessages(messages, reply: raw, missing: missing)
@@ -216,6 +233,20 @@ public struct PromptOptimizer: Sendable {
     }
 
     // MARK: Prompt
+
+    /// `raw` with every literal of `original` it dropped appended verbatim under a label, so the
+    /// acceptance check passes without a second generation. Returns `raw` when nothing was dropped.
+    public static func restoringLiterals(raw: String, original: String) -> String {
+        let parsed = parse(raw)
+        guard !parsed.improved.isEmpty else { return raw }
+        let lost = PromptLiterals.missing(from: original, in: parsed.improved)
+        guard !lost.isEmpty else { return raw }
+        func list(_ items: [String]) -> String { items.map { "- \($0)" }.joined(separator: "\n") }
+        let note = "Added back exactly as written: " + lost.map { $0.hasPrefix("```") ? "a code block" : $0 }.joined(separator: ", ")
+        return "<improved>\n\(parsed.improved)\n\nKeep exactly as written:\n\(lost.joined(separator: "\n"))\n</improved>\n"
+            + "<changes>\n\(list(parsed.changes + [note]))\n</changes>\n"
+            + (parsed.questions.isEmpty ? "" : "<questions>\n\(list(parsed.questions))\n</questions>")
+    }
 
     /// Follow-up asking the model to restore parts of the original that its rewrite dropped.
     public static func repairMessages(_ messages: [Message], reply: String, missing: [String]) -> [Message] {
