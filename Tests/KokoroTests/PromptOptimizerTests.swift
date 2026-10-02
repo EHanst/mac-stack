@@ -229,6 +229,17 @@ struct PromptOptimizerTests {
         #expect(claude.contains(ModelPromptProfile.claude.guidance) && !claude.contains("think step by step"))
     }
 
+    @Test("the meta-prompt for localSmall includes the verbatim-literal directive")
+    func localSmallVerbatimLiteralDirective() {
+        let directive = "Preserve verbatim: code fences and their contents, backtick spans, numbers, identifiers, quoted strings, headings, and list markers."
+        for mode in [OptimizeMode.improve, .expand, .adapt] {
+            let local = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall), mode: mode)
+            #expect(local.contains(directive))
+        }
+        let cloud = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .claude), mode: .improve)
+        #expect(!cloud.contains(directive))
+    }
+
     @Test("expand depth follows the target unless overridden")
     func expandDepth() {
         let small = PromptOptimizer.metaPrompt(context: OptimizeContext(profile: .localSmall), mode: .expand)
