@@ -36,7 +36,7 @@ public struct OptimizeContext: Sendable {
     public var priority: InferenceScheduler.Priority
     /// The conversation so far, system message included. When a model on this Mac does the rewriting,
     /// the request continues this conversation instead of starting a new one, so the model's cached
-    /// prefix survives (a separate prompt would evict it; see docs/plans/2026-09-29-prompt-studio-plan.md).
+    /// prefix survives (a separate prompt would evict it).
     /// Never sent to a cloud model.
     public var sharedPrefix: [Message]
     /// Marks a follow-up finer-grained pass: split steps one level finer, do not repeat.
