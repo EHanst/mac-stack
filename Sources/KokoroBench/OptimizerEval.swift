@@ -61,6 +61,13 @@ enum OptimizerEval {
         let context = OptimizeContext(profile: target, tuning: tuning)
         var rows: [[String: Any]] = []
         var specCycles = 0, specAccepted = 0, novelTotal = 0
+        var lookupPasses = 0, lookupProposed = 0, lookupAccepted = 0
+        defer {
+            if lookupPasses > 0 {
+                print("  prompt lookup: \(lookupPasses) verify passes, \(lookupAccepted)/\(lookupProposed) drafted tokens accepted (" +
+                      String(format: "%.2f", Double(lookupAccepted) / Double(lookupPasses)) + " per pass)")
+            }
+        }
         defer { print("  novel literals in accepted rewrites: \(novelTotal)") }
         defer { if specCycles > 0 { print("  draft acceptance: \(specAccepted * 100 / specCycles)% over \(specCycles) cycles") } }
         var tally: [String: [String: Int]] = [:]
@@ -107,6 +114,9 @@ enum OptimizerEval {
                     let secs = Date().timeIntervalSince(start)
                     if let spec = await provider.lastSpeculationForBench(), spec.cycles > 0 {
                         specCycles += spec.cycles; specAccepted += spec.accepted
+                    }
+                    if let lk = await provider.lastLookupForBench() {
+                        lookupPasses += lk.passes; lookupProposed += lk.proposed; lookupAccepted += lk.accepted
                     }
                     if ProcessInfo.processInfo.environment["EVAL_MEM"] != nil {
                         let b = await provider.budgetInputs()

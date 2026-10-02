@@ -28,6 +28,9 @@ public actor LocalMLXProvider: ModelProvider {
     /// Drafts made and accepted by the most recent request that used speculative decoding.
     public private(set) var lastSpeculation: (cycles: Int, accepted: Int)?
     public func lastSpeculationForBench() -> (cycles: Int, accepted: Int)? { lastSpeculation }
+    /// Prompt-lookup verify passes, tokens proposed and tokens accepted by the most recent greedy request.
+    public private(set) var lastLookup: (passes: Int, proposed: Int, accepted: Int)?
+    public func lastLookupForBench() -> (passes: Int, proposed: Int, accepted: Int)? { lastLookup }
     private var tokenizer: (any Tokenizer)?
     private var _runtime: ModelRuntime?
 
@@ -48,6 +51,16 @@ public actor LocalMLXProvider: ModelProvider {
         public var bufferCacheLimit = 1 << 30
         /// Draft with the model's MTP head when the pack ships one (greedy-ish requests only).
         public var speculative = true
+        /// Off by default: it measured about 1% faster than MTP alone on the 4B. Greedy-ish requests can also draft by prompt lookup: the tokens that followed the last generated
+        /// n-gram earlier in the context, checked in one multi-token pass (`PromptLookup`).
+        public var promptLookup = false
+        /// Most tokens one prompt-lookup draft proposes.
+        public var lookupDraftTokens = 3
+        /// With the MTP head too: try a lookup draft first (true) or always draft the first token with the
+        /// head and extend it by lookup (false).
+        public var lookupBeforeMTP = true
+        /// Trailing n-gram lengths a lookup match may use, longest tried first.
+        public var lookupNgram: ClosedRange<Int> = 2...3
         /// Draft only from the first N vocabulary entries (0 = all).
         public var draftVocabulary = 65_536
         public init() {}
@@ -181,6 +194,108 @@ public actor LocalMLXProvider: ModelProvider {
         return order.asArray(Int32.self).map { id in
             (tok.decode(tokens: [Int(id)]), probs[Int(id)].item(Float.self))
         }
+    }
+
+    /// Diagnostics: largest logit difference between a one-token decode step and the same position fed
+    /// as the first row of a `width`-token verify pass, after `text`. Zero means multi-token verification
+    /// reproduces plain decoding exactly.
+    public func debugVerifyRowDiff(after text: String, width: Int) async throws -> [Float] {
+        let (mdl, tok) = try await ensureLoaded()
+        let ids = tok.encode(text: text, addSpecialTokens: false).map { Int32($0) }
+        let base = mdl.makeCache()
+        mdl.prefill(MLXArray(Array(ids.dropLast(width)))[.newAxis], cache: base)
+        MLX.eval(base.stateArrays)
+        let tail = Array(ids.suffix(width))
+        // Plain: one token at a time.
+        let plain = base.fork()
+        var rows: [MLXArray] = []
+        for t in tail {
+            rows.append(mdl.decodeStep(MLXArray([t])[.newAxis], cache: plain).logits)
+        }
+        let batched = base.fork()
+        let together = mdl.decodeStep(MLXArray(tail)[.newAxis], cache: batched, captureVerify: true).logits
+        for (i, (x, y)) in zip(plain.layers, batched.layers).enumerated() {
+            func d(_ a: MLXArray?, _ b: MLXArray?) -> Float {
+                guard let a, let b else { return -1 }
+                return abs(a.asType(.float32) - b.asType(.float32)).max().item(Float.self)
+            }
+            let kx = x.keys.map { $0[.ellipsis, ..<x.offset, 0...] }, ky = y.keys.map { $0[.ellipsis, ..<y.offset, 0...] }
+            let vx = x.values.map { $0[.ellipsis, ..<x.offset, 0...] }, vy = y.values.map { $0[.ellipsis, ..<y.offset, 0...] }
+            let line = "layer \(i): ssm \(d(x.ssmState, y.ssmState)) conv \(d(x.convState, y.convState)) k \(d(kx, ky)) v \(d(vx, vy))"
+            if line.contains("e-") || line.range(of: #" [1-9]"#) != nil || line.contains("0.0 ") == false { print("  state diff \(line)") }
+        }
+        return (0..<width).map { i in
+            abs(rows[i][0].asType(.float32) - together[i].asType(.float32)).max().item(Float.self)
+        }
+    }
+
+    /// Diagnostics: greedy-decode `count` tokens after `text` one step at a time, then again with verify
+    /// passes of `width` tokens whose drafts are the true continuation except a wrong token at draft
+    /// index `wrongAt` (forcing a partial accept and rollback). Returns the first index where the two
+    /// token streams differ, or nil when they match.
+    public func debugRollbackMismatch(after text: String, count: Int, width: Int, wrongAt: Int) async throws -> Int? {
+        let (mdl, tok) = try await ensureLoaded()
+        let ids = tok.encode(text: text, addSpecialTokens: false).map { Int32($0) }
+        let base = mdl.makeCache()
+        mdl.prefill(MLXArray(Array(ids.dropLast()))[.newAxis], cache: base)
+        MLX.eval(base.stateArrays)
+        var plain: [Int32] = []
+        let c1 = base.fork()
+        var cur = ids.last!
+        for _ in 0..<count {
+            let next = Self.greedyPicks(mdl.decodeStep(MLXArray([cur])[.newAxis], cache: c1).logits)
+            MLX.eval([next] + c1.stateArrays)
+            cur = next.asArray(Int32.self)[0]
+            plain.append(cur)
+        }
+        let c2 = base.fork()
+        var out: [Int32] = []
+        cur = ids.last!
+        while out.count < count {
+            var drafts = Array(plain[out.count ..< min(out.count + width - 1, plain.count)])
+            if wrongAt < drafts.count { drafts[wrongAt] = drafts[wrongAt] == 0 ? 1 : 0 }
+            let input = [cur] + drafts
+            let v = mdl.decodeStep(MLXArray(input)[.newAxis], cache: c2, captureVerify: true)
+            let picks = Self.greedyPicks(v.logits)
+            MLX.eval([picks] + c2.stateArrays + c2.verifyArrays)
+            let p = picks.asArray(Int32.self)
+            let a = PromptLookup.acceptedCount(drafts: drafts, picks: p)
+            mdl.rollBack(cache: c2, keeping: a + 1, of: input.count)
+            out += Array(drafts[0..<a]) + [p[a]]
+            cur = p[a]
+        }
+        let first = zip(plain, out).enumerated().first { $0.element.0 != $0.element.1 }?.offset
+        if let f = first { logger.notice("rollback mismatch at \(f) after \(ids.count) prompt tokens: plain \(plain[f]) verify \(out[f])") }
+        return first.map { $0 * 100_000 + ids.count }
+    }
+
+    /// The greedy pick for each row of `[L, vocab]` logits, computed row by row exactly as plain decoding
+    /// computes its single row. A batched arg-max can break exact ties (common in bf16 logits) differently,
+    /// which would let speculative decoding drift from plain greedy output.
+    static func greedyPicks(_ logits: MLXArray) -> MLXArray {
+        let rows = logits.dim(0)
+        if rows == 1 { return TokenSampler.sample(logits, .greedy, seen: nil) }
+        return concatenated((0 ..< rows).map { TokenSampler.sample(logits[$0 ..< ($0 + 1)], .greedy, seen: nil) }, axis: 0)
+    }
+
+    /// Diagnostics: seconds per decode pass of `width` tokens after `text` (verify capture on when width > 1).
+    public func debugPassSeconds(after text: String, width: Int, repeats: Int = 20) async throws -> Double {
+        let (mdl, tok) = try await ensureLoaded()
+        let ids = tok.encode(text: text, addSpecialTokens: false).map { Int32($0) }
+        let base = mdl.makeCache()
+        mdl.prefill(MLXArray(ids)[.newAxis], cache: base)
+        MLX.eval(base.stateArrays)
+        let input = MLXArray(Array(repeating: Int32(11), count: width))[.newAxis]
+        var total = 0.0
+        for r in 0 ..< repeats + 2 {
+            let start = Date()
+            let out = mdl.decodeStep(input, cache: base, captureVerify: width > 1)
+            let picks = Self.greedyPicks(out.logits)
+            MLX.eval([picks, out.hidden] + base.stateArrays + base.verifyArrays)
+            if width > 1 { mdl.rollBack(cache: base, keeping: 1, of: width) }
+            if r >= 2 { total += Date().timeIntervalSince(start) }
+        }
+        return total / Double(repeats)
     }
 
     public func warmUp() async throws {
@@ -344,21 +459,118 @@ public actor LocalMLXProvider: ModelProvider {
             return r.stopped
         }
 
-        // Speculative decoding drafts one token ahead with the MTP head and checks it with a two-token
-        // pass, which is only exact for greedy choice; near-greedy rewrite settings are treated as greedy.
+        // Speculative decoding. Greedy choice (near-greedy rewrite settings count as greedy) drafts with the
+        // MTP head and/or by prompt lookup and keeps a draft token only where it equals the model's own
+        // pick, so the output is what plain greedy decoding gives.
         let greedyLike = sampling.temperature <= 0.25 && sampling.presencePenalty == 0
         // Other settings use rejection sampling against the model's own (top-k) distribution, which keeps
         // the output distribution exactly what plain sampling would give.
         let sampledSpec = !greedyLike && sampling.temperature > 0 && sampling.topK > 0
-        let speculate = tuning.speculative && mtp != nil && cache.mtp != nil && (greedyLike || sampledSpec)
+        let useMTP = tuning.speculative && mtp != nil && cache.mtp != nil
+        let lookup = greedyLike && tuning.promptLookup && tuning.lookupDraftTokens > 0
         lastSpeculation = nil
+        lastLookup = nil
 
-        if speculate, let mtp, let mtpCache = cache.mtp {
+        if greedyLike && (useMTP || lookup) {
+            var cycles = 0, accepted = 0                       // MTP drafts
+            var passes = 0, proposed = 0, taken = 0            // prompt-lookup drafts
+            var history = promptIds                            // prompt + every emitted token, for lookup
+            let first = mdl.decodeStep(MLXArray([promptIds[lastIndex]])[.newAxis], cache: cache)
+            let firstToken = Self.greedyPicks(first.logits)
+            MLX.eval([firstToken, first.hidden] + cache.stateArrays)
+            var curId = firstToken.item(Int.self)
+            // MTP bookkeeping: the hidden state of each position the head hasn't seen yet, and the token
+            // that follows each of them (the last is `curId`).
+            var pendingHidden = first.hidden
+            var pendingTokens: [Int32] = [Int32(curId)]
+
+            /// Count and stream one token; false when generation must end.
+            func accept(_ id: Int) -> Bool {
+                generated += 1
+                history.append(Int32(id))
+                if eosIds.contains(id) { finish = .stop; stopped = true; return false }
+                let text = detok.append(id)
+                if !text.isEmpty, emit(text) { finish = .stop; stopped = true; return false }
+                return generated < maxTokens
+            }
+
+            decoding: while true {
+                if Task.isCancelled { finish = .stop; stopped = true; break }
+                guard accept(curId) else { break }
+
+                let room = maxTokens - generated
+                var drafts: [Int32] = []
+                var lazyDraft: MLXArray?            // an MTP draft not read back yet (MTP without lookup)
+                var mtpDrafted = false
+                if lookup && (!useMTP || tuning.lookupBeforeMTP) {
+                    drafts = PromptLookup.draft(history, maxDraft: min(tuning.lookupDraftTokens, room),
+                                                ngram: tuning.lookupNgram)
+                }
+                if let mtp, let mtpCache = cache.mtp, useMTP {
+                    let n = pendingTokens.count
+                    let drafted = mtp(embeds: mdl.embed(MLXArray(pendingTokens)[.newAxis]), hidden: pendingHidden,
+                                      embeddingFirst: true, cache: mtpCache)
+                    if drafts.isEmpty {
+                        // Draft the token after `curId` with the MTP head; with lookup on, extend it by the
+                        // tokens that followed the same n-gram earlier in the context.
+                        let draft = argMax(mdl.draftLogits(fromNormed: drafted[0, n - 1].expandedDimensions(axis: 0),
+                                                           limit: tuning.draftVocabulary), axis: -1)
+                        mtpDrafted = true
+                        if lookup {
+                            let d = Int32(draft.item(Int.self))
+                            history.append(d)
+                            drafts = [d] + PromptLookup.draft(history, maxDraft: min(tuning.lookupDraftTokens, room - 1),
+                                                              ngram: tuning.lookupNgram)
+                            history.removeLast()
+                        } else {
+                            lazyDraft = draft
+                        }
+                    }
+                    // Otherwise the head only takes in the pending positions; its cache is evaluated below.
+                }
+                if drafts.isEmpty && lazyDraft == nil {
+                    // No draft: a plain greedy step.
+                    let out = mdl.decodeStep(MLXArray([Int32(curId)])[.newAxis], cache: cache)
+                    let next = Self.greedyPicks(out.logits)
+                    MLX.eval([next] + cache.stateArrays)
+                    curId = next.item(Int.self)
+                    continue
+                }
+
+                // Verify [curId, drafts…] in one pass; keep drafts up to the first that differs from the
+                // model's own pick, then take its pick there.
+                let width = 1 + (lazyDraft == nil ? drafts.count : 1)
+                let verifyInput = lazyDraft.map {
+                    concatenated([MLXArray([Int32(curId)]), $0.asType(.int32)], axis: 0)[.newAxis]
+                } ?? MLXArray([Int32(curId)] + drafts)[.newAxis]
+                let verified = mdl.decodeStep(verifyInput, cache: cache, captureVerify: true)
+                let chosen = Self.greedyPicks(verified.logits)
+                MLX.eval([chosen, verified.hidden] + (lazyDraft.map { [$0] } ?? [])
+                         + cache.stateArrays + cache.verifyArrays)
+                if let lazyDraft { drafts = [Int32(lazyDraft.item(Int.self))] }
+                let picks = chosen.asArray(Int32.self)
+                let a = PromptLookup.acceptedCount(drafts: drafts, picks: picks)
+                mdl.rollBack(cache: cache, keeping: a + 1, of: width)
+                if mtpDrafted {
+                    cycles += 1
+                    if a > 0 { accepted += 1 }
+                    if drafts.count > 1 { passes += 1; proposed += drafts.count - 1; taken += max(0, a - 1) }
+                } else {
+                    passes += 1; proposed += drafts.count; taken += a
+                }
+                for id in drafts[0 ..< a] {
+                    guard accept(Int(id)) else { break decoding }
+                }
+                curId = Int(picks[a])
+                pendingHidden = verified.hidden[0..., 0 ..< (a + 1)]
+                pendingTokens = Array(drafts[0 ..< a]) + [Int32(curId)]
+            }
+            if useMTP { lastSpeculation = (cycles, accepted) }
+            if lookup { lastLookup = (passes, proposed, taken) }
+        } else if useMTP && sampledSpec, let mtp, let mtpCache = cache.mtp {
             var cycles = 0, accepted = 0
             let first = mdl.decodeStep(MLXArray([promptIds[lastIndex]])[.newAxis], cache: cache)
-            let firstToken = greedyLike
-                ? argMax(first.logits, axis: -1)
-                : TokenSampler.sample(first.logits, sampling, seen: seen)
+            let firstToken = TokenSampler.sample(first.logits, sampling, seen: seen)
             if let current = seen { seen = maximum(current, TokenSampler.oneHot(firstToken, vocab: mdl.config.vocabSize)) }
             MLX.eval([firstToken, first.hidden] + cache.stateArrays)
             var curId = firstToken.item(Int.self)
@@ -380,53 +592,38 @@ public actor LocalMLXProvider: ModelProvider {
                 let draft = argMax(mdl.draftLogits(fromNormed: drafted[0, n - 1].expandedDimensions(axis: 0),
                                                    limit: tuning.draftVocabulary), axis: -1)
                 let verifyInput = concatenated([MLXArray([Int32(curId)]), draft.asType(.int32)], axis: 0)[.newAxis]
-                let verified = mdl.decodeStep(verifyInput, cache: cache, captureMid: true)
-                let draftId: Int
-                var picks: [Int32] = []
-                var dist0: (candidates: [Int32], probs: [Float])?
-                var dist1: (candidates: [Int32], probs: [Float])?
-                var seen1: MLXArray?
-                if greedyLike {
-                    let chosen = argMax(verified.logits, axis: -1)          // model's own pick after each of the two
-                    MLX.eval([chosen, draft, verified.hidden] + cache.stateArrays + cache.midArrays)
-                    draftId = draft.item(Int.self)
-                    picks = chosen.asArray(Int32.self)
-                } else {
-                    // `seen` already holds `curId`; the second row also sees the draft.
-                    seen1 = seen.map { maximum($0, TokenSampler.oneHot(draft, vocab: mdl.config.vocabSize)) }
-                    let rows = TokenSampler.distribution(
-                        verified.logits, sampling,
-                        seen: seen.map { concatenated([$0, seen1!], axis: 0) })          // one pass for both rows
-                    MLX.eval([rows.candidates, rows.probs, draft, verified.hidden]
-                             + cache.stateArrays + cache.midArrays)
-                    draftId = draft.item(Int.self)
-                    let ids = rows.candidates.asArray(Int32.self), ps = rows.probs.asArray(Float.self)
-                    let k = ids.count / 2
-                    dist0 = (Array(ids[0 ..< k]), Array(ps[0 ..< k]))
-                    dist1 = (Array(ids[k...]), Array(ps[k...]))
-                }
+                let verified = mdl.decodeStep(verifyInput, cache: cache, captureVerify: true)
+                // `seen` already holds `curId`; the second row also sees the draft.
+                let seen1 = seen.map { maximum($0, TokenSampler.oneHot(draft, vocab: mdl.config.vocabSize)) }
+                let rows = TokenSampler.distribution(
+                    verified.logits, sampling,
+                    seen: seen.map { concatenated([$0, seen1!], axis: 0) })          // one pass for both rows
+                MLX.eval([rows.candidates, rows.probs, draft, verified.hidden]
+                         + cache.stateArrays + cache.verifyArrays)
+                let draftId = draft.item(Int.self)
+                let ids = rows.candidates.asArray(Int32.self), ps = rows.probs.asArray(Float.self)
+                let k = ids.count / 2
+                let dist0 = (Array(ids[0 ..< k]), Array(ps[0 ..< k]))
+                let dist1 = (Array(ids[k...]), Array(ps[k...]))
 
-                let accept: Bool
-                if greedyLike { accept = Int(picks[0]) == draftId }
-                else {
-                    accept = Float.random(in: 0 ..< 1) < SpeculativeRule.acceptanceProbability(draft: draftId, in: dist0!)
-                }
+                let accept = Float.random(in: 0 ..< 1) < SpeculativeRule.acceptanceProbability(draft: draftId, in: dist0)
 
                 cycles += 1
                 if accept {
                     accepted += 1
+                    mdl.rollBack(cache: cache, keeping: 2, of: 2)
                     generated += 1
                     if eosIds.contains(draftId) { finish = .stop; stopped = true; break }
                     let t = detok.append(draftId)
                     if !t.isEmpty, emit(t) { finish = .stop; stopped = true; break }
                     if generated >= maxTokens { break }
-                    curId = greedyLike ? Int(picks[1]) : SpeculativeRule.draw(dist1!, u: Float.random(in: 0 ..< 1))
+                    curId = SpeculativeRule.draw(dist1, u: Float.random(in: 0 ..< 1))
                     if let s1 = seen1 { seen = maximum(s1, TokenSampler.oneHot(MLXArray([Int32(curId)]), vocab: mdl.config.vocabSize)) }
                     pendingHidden = verified.hidden
                     pendingTokens = [Int32(draftId), Int32(curId)]
                 } else {
-                    mdl.rollBackLast(cache: cache)
-                    curId = greedyLike ? Int(picks[0]) : SpeculativeRule.draw(dist0!, excluding: draftId, u: Float.random(in: 0 ..< 1))
+                    mdl.rollBack(cache: cache, keeping: 1, of: 2)
+                    curId = SpeculativeRule.draw(dist0, excluding: draftId, u: Float.random(in: 0 ..< 1))
                     if let s = seen { seen = maximum(s, TokenSampler.oneHot(MLXArray([Int32(curId)]), vocab: mdl.config.vocabSize)) }
                     pendingHidden = verified.hidden[0..., 0..<1]
                     pendingTokens = [Int32(curId)]

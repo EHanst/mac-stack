@@ -121,7 +121,7 @@ final class Qwen35Attention: Module, @unchecked Sendable {
 
     func callAsFunction(
         _ x: MLXArray, mask: MLXFast.ScaledDotProductAttentionMaskMode,
-        cache: Qwen35LayerCache
+        cache: Qwen35LayerCache, rowwise: Bool = false
     ) -> MLXArray {
         let B = x.shape[0]
         let L = x.shape[1]
@@ -158,8 +158,20 @@ final class Qwen35Attention: Module, @unchecked Sendable {
         // NOT be tiled up to nHeads (that materialised a copy of the whole KV history per
         // layer per token).
         let scale = 1.0 / Float(headDim).squareRoot()
-        let attn = MLXFast.scaledDotProductAttention(
-            queries: q, keys: kAll, values: vAll, scale: scale, mask: mask)
+        let attn: MLXArray
+        if rowwise && L > 1 {
+            // Speculative verify: attend one query at a time over exactly the keys a one-token decode step
+            // would see. SDPA picks its kernel and key partitioning from the query count and key length, so
+            // a batched masked call can round differently (≥1024 keys) from plain decoding; this cannot.
+            attn = concatenated((0 ..< L).map { i in
+                MLXFast.scaledDotProductAttention(
+                    queries: q[0..., 0..., i ..< (i + 1)], keys: kAll[0..., 0..., ..<(offset + i + 1)],
+                    values: vAll[0..., 0..., ..<(offset + i + 1)], scale: scale, mask: .none)
+            }, axis: 2)
+        } else {
+            attn = MLXFast.scaledDotProductAttention(
+                queries: q, keys: kAll, values: vAll, scale: scale, mask: mask)
+        }
         var out = attn.transposed(0, 2, 1, 3).reshaped([B, L, qDim])
         if let g = gate { out = out * MLXNN.sigmoid(g) }   // Qwen3.5 reference: sigmoid gate
         return oProj(out)
@@ -249,7 +261,7 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         super.init()
     }
 
-    func callAsFunction(_ x: MLXArray, cache: Qwen35LayerCache, captureMid: Bool = false) -> MLXArray {
+    func callAsFunction(_ x: MLXArray, cache: Qwen35LayerCache, captureVerify: Bool = false) -> MLXArray {
         let B  = x.shape[0]
         let L  = x.shape[1]
         let Dm = x.shape[2]
@@ -258,10 +270,18 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let proj = inProjQKVZ(xf)                                   // one fused matmul: qkv, z
         var qkv = proj[0].reshaped([B, L, convDim])
         let z   = proj[1].reshaped([B, L, nV, headV])
-        let b   = MLX.matmul(xf, inProjB.transposed()).reshaped([B, L, nV])
-        let a   = MLX.matmul(xf, inProjA.transposed()).reshaped([B, L, nV])
+        // A verify pass multiplies one row at a time: a several-row matmul accumulates in a different order
+        // than the one-row product of a plain decode step, and these feed the float32 recurrent state.
+        func dense(_ w: MLXArray) -> MLXArray {
+            let wt = w.transposed()
+            guard captureVerify && B * L > 1 else { return MLX.matmul(xf, wt) }
+            return concatenated((0 ..< B * L).map { MLX.matmul(xf[$0 ..< ($0 + 1)], wt) }, axis: 0)
+        }
+        let b   = dense(inProjB).reshaped([B, L, nV])
+        let a   = dense(inProjA).reshaped([B, L, nV])
 
-        qkv = MLXNN.silu(bonsaiCausalConv(qkv, w: conv1dW, cache: cache, captureMid: captureMid))
+        let (convOut, padded) = bonsaiCausalConv(qkv, w: conv1dW, cache: cache)
+        qkv = MLXNN.silu(convOut)
 
         // Layout is [q (keyDim) | k (keyDim) | v (valueDim)].
         let q = qkv[0..., 0..., 0..<keyDim].reshaped([B, L, nK, headK])
@@ -277,23 +297,11 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let beta = MLXNN.sigmoid(b.asType(.float32))
         let state = cache.ssmState
             ?? MLXArray.zeros([B, nV, headV, headK], dtype: Self.stateDType)
-        let y: MLXArray
-        if captureMid && L == 2 {
-            // Two tokens fed for speculative verification: step them one at a time so the state
-            // after the first is available if the second turns out to be a wrong guess.
-            func slice(_ a: MLXArray, _ i: Int) -> MLXArray { a[0..., i..<(i + 1)] }
-            let (y0, s1) = GatedDelta.update(q: slice(qN, 0), k: slice(kN, 0), v: slice(v, 0),
-                                             g: slice(g, 0), beta: slice(beta, 0), state: state)
-            let (y1, s2) = GatedDelta.update(q: slice(qN, 1), k: slice(kN, 1), v: slice(v, 1),
-                                             g: slice(g, 1), beta: slice(beta, 1), state: s1)
-            y = concatenated([y0, y1], axis: 1)
-            cache.ssmStateMid = s1
-            cache.ssmState = s2
-        } else {
-            let (y1, newState) = GatedDelta.update(q: qN, k: kN, v: v, g: g, beta: beta, state: state)
-            y = y1
-            cache.ssmState = newState
+        if captureVerify {
+            cache.verify = .init(ssmBefore: state, convPadded: padded, q: qN, k: kN, v: v, g: g, beta: beta)
         }
+        let (y, newState) = GatedDelta.update(q: qN, k: kN, v: v, g: g, beta: beta, state: state)
+        cache.ssmState = newState
 
         let gated = headNorm(y) * MLXNN.silu(z)                     // per-head RMSNorm, gated by silu(z)
         return outProj(gated.reshaped([B * L, valueDim])).reshaped([B, L, Dm])
@@ -301,8 +309,9 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
 
     /// Depthwise causal conv (kernel K) that continues from the K-1 inputs cached from the
     /// previous chunk / decode step instead of restarting from zero padding every call.
-    private func bonsaiCausalConv(_ x: MLXArray, w: MLXArray, cache: Qwen35LayerCache,
-                                  captureMid: Bool = false) -> MLXArray {
+    /// Also returns the padded input `[B, K-1+L, C]`, whose rows `i..<i+K-1` are the conv state after `i` tokens.
+    private func bonsaiCausalConv(_ x: MLXArray, w: MLXArray, cache: Qwen35LayerCache)
+        -> (out: MLXArray, padded: MLXArray) {
         // x: [B, L, C]; w: [C, K, 1]
         let B = x.shape[0], L = x.shape[1], C = x.shape[2]
         let K = w.shape[1]
@@ -311,12 +320,11 @@ final class BonsaiLinearAttn: Module, @unchecked Sendable {
         let padded = concatenated([history, x], axis: 1)  // [B, L+K-1, C]
         // Last K-1 rows; contiguous() so the state doesn't pin the whole padded chunk.
         cache.convState = contiguous(padded[0..., L..., 0...])
-        if captureMid && L == 2 { cache.convStateMid = contiguous(padded[0..., 1..<K, 0...]) }
         var out = padded[0..., 0..<L, 0...] * wk[0..., 0]
         for i in 1..<K {
             out = out + padded[0..., i..<(i + L), 0...] * wk[0..., i]
         }
-        return out
+        return (out, padded)
     }
 }
 
@@ -358,14 +366,14 @@ final class Qwen35DecoderLayer: Module, @unchecked Sendable {
         _ x: MLXArray,
         mask: MLXFast.ScaledDotProductAttentionMaskMode,
         cache: Qwen35LayerCache,
-        captureMid: Bool = false
+        captureVerify: Bool = false
     ) -> MLXArray {
         let normed = inputLayerNorm(x)
         let attnOut: MLXArray
         if let attn = selfAttn {
-            attnOut = attn(normed, mask: mask, cache: cache)
+            attnOut = attn(normed, mask: mask, cache: cache, rowwise: captureVerify)
         } else if let attn = linearAttn {
-            attnOut = attn(normed, cache: cache, captureMid: captureMid)
+            attnOut = attn(normed, cache: cache, captureVerify: captureVerify)
         } else {
             attnOut = MLXArray.zeros(x.shape).asType(x.dtype)
         }
@@ -434,12 +442,12 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
     }
 
     /// Run all decoder layers, updating `cache`. Returns hidden states `[B, L, hidden]`.
-    private func hidden(_ tokens: MLXArray, cache: Qwen35Cache, captureMid: Bool = false) -> MLXArray {
+    private func hidden(_ tokens: MLXArray, cache: Qwen35Cache, captureVerify: Bool = false) -> MLXArray {
         let L = tokens.shape[1]
         var h = embedTokens(tokens)
         let mask = Self.attentionMask(length: L, offset: cache.tokenCount)
         for (i, layer) in layers.enumerated() {
-            h = layer(h, mask: mask, cache: cache.layers[i], captureMid: captureMid)
+            h = layer(h, mask: mask, cache: cache.layers[i], captureVerify: captureVerify)
         }
         cache.advance(by: L)
         return h
@@ -475,29 +483,43 @@ final class Qwen35ForCausalLM: Module, @unchecked Sendable {
         return lmHeadEmbed!.asLMHead(h)
     }
 
-    /// A decode step for one or two tokens (`[1, L]`, L ≤ 2) that also returns the final-normed hidden
-    /// state of every position. With two tokens and `captureMid`, the state after the first is kept so
-    /// `rollBackLast` can undo the second.
-    func decodeStep(_ tokens: MLXArray, cache: Qwen35Cache, captureMid: Bool = false)
+    /// A decode step (`[1, L]`) that also returns the final-normed hidden state of every position. With
+    /// `captureVerify`, each linear-attention layer records its inputs so `rollBack` can keep any prefix.
+    func decodeStep(_ tokens: MLXArray, cache: Qwen35Cache, captureVerify: Bool = false)
         -> (logits: MLXArray, hidden: MLXArray)
     {
-        let h = norm(hidden(tokens, cache: cache, captureMid: captureMid))     // [1, L, H]
+        let h = norm(hidden(tokens, cache: cache, captureVerify: captureVerify))     // [1, L, H]
         return (logits(fromNormed: h[0]), h)                                    // logits [L, vocab]
     }
 
-    /// Undo the last of two tokens fed with `captureMid`: recurrent layers return to the state after the
-    /// first token, full-attention layers drop the last cached key/value row.
-    func rollBackLast(cache: Qwen35Cache) {
+    /// After a `captureVerify` step of `fed` tokens, keep only the first `kept` of them. Full-attention
+    /// layers drop the trailing key/value rows. Linear-attention layers rebuild their recurrent state by
+    /// re-running the delta rule over the kept tokens' recorded inputs from the state before the step
+    /// (the same per-token arithmetic as the step itself, so the result is bit-identical), and take the
+    /// conv state from the recorded padded input. Clears the records either way.
+    func rollBack(cache: Qwen35Cache, keeping kept: Int, of fed: Int) {
+        precondition(kept >= 0 && kept <= fed)
         for (i, layer) in cache.layers.enumerated() {
             let isLinear = config.layerTypes.count > i && config.layerTypes[i] == "linear_attention"
-            if isLinear {
-                layer.ssmState = layer.ssmStateMid
-                layer.convState = layer.convStateMid
+            guard isLinear else {
+                if kept < fed { layer.trimKV(by: fed - kept) }
+                continue
+            }
+            let record = layer.verify
+            layer.verify = nil
+            guard kept < fed else { continue }
+            guard let r = record else { preconditionFailure("rollBack without a captureVerify step") }
+            let window = r.convPadded.dim(1) - fed                 // K - 1
+            layer.convState = contiguous(r.convPadded[0..., kept ..< (kept + window), 0...])
+            if kept == 0 {
+                layer.ssmState = r.ssmBefore
             } else {
-                layer.trimKV(by: 1)
+                func head(_ a: MLXArray) -> MLXArray { a[0..., 0 ..< kept] }
+                layer.ssmState = GatedDelta.update(q: head(r.q), k: head(r.k), v: head(r.v),
+                                                   g: head(r.g), beta: head(r.beta), state: r.ssmBefore).state
             }
         }
-        cache.rewind(by: 1)
+        if kept < fed { cache.rewind(by: fed - kept) }
     }
 
     /// Feed tokens through the model only to populate `cache` (no final norm / LM head).
