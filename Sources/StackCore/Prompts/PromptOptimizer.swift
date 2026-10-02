@@ -493,6 +493,12 @@ public struct PromptOptimizer: Sendable {
         if !parsed.changes.contains(where: { $0.lowercased().hasPrefix("conflict:") }), let (a, b) = PromptLint.conflicts(original).first {
             changes.append("Conflict: \"\(a)\" and \"\(b)\" ask for opposite things. The rewrite picked one; check it picked the right one.")
         }
+        // Not a reason to refuse either: a name or figure the draft never gave may be made up.
+        let invented = PromptLiterals.invented(in: parsed.improved, from: original)
+        if !invented.isEmpty {
+            let shown = invented.prefix(4).joined(separator: ", ")
+            changes.append("Added \(shown)\(invented.count > 4 ? " and \(invented.count - 4) more" : "") that your draft didn't give. Check \(invented.count == 1 ? "it's" : "they're") right.")
+        }
         // The reply stopped at the output limit (or the model gave up) before closing the rewrite.
         if raw.contains("<improved>"), !raw.contains("</improved>") {
             changes.append("The rewrite may have been cut off at the length limit. Check the end before using it.")

@@ -87,6 +87,22 @@ public enum PromptLiterals {
             .filter { !$0.isEmpty && $0.split(whereSeparator: \.isWhitespace).count <= maxWords }
     }
 
+    /// Names, paths, code and figures in `rewritten` that `original` never mentioned: what a rewrite made up. Wrapping
+    /// a draft literal in backticks or quotes, outline numbers (`1.2`) and wording changes are not inventions.
+    public static func invented(in rewritten: String, from original: String) -> [String] {
+        func bare(_ s: String) -> String {
+            s.trimmingCharacters(in: CharacterSet(charactersIn: "`\"'.,;:)")).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let known = original.lowercased()
+        return extract(from: rewritten).filter { lit in
+            // A fenced block counts by its contents; anything else by what is left once wrapping is stripped.
+            let b = lit.hasPrefix("```") ? bare(String(lit.dropFirst(3).dropLast(3))) : bare(lit)
+            if b.count < 2 { return false }
+            if b.range(of: "^\\d+\\.\\d+$", options: .regularExpression) != nil { return false }   // outline number
+            return !known.contains(b.lowercased())
+        }
+    }
+
     /// Literals from `original` that don't appear in `rewritten`.
     public static func missing(from original: String, in rewritten: String) -> [String] {
         extract(from: original).filter { !isPresent($0, in: rewritten) }

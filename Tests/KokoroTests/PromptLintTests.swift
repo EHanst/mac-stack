@@ -218,3 +218,25 @@ struct PromptLintTests {
         #expect(!PromptLint.isAlreadyClear("Add a new endpoint `GET /v1/users/:id/orders` in `server.ts` that returns orders for that user."))
     }
 }
+
+@Suite("PromptLiterals.invented")
+struct InventedLiteralTests {
+    @Test("a name the draft never gave is reported; a literal only re-wrapped in backticks or quotes is not")
+    func basics() {
+        let draft = "split Sources/App/Store.swift into Store+Load.swift, keep fetchAll_v2, and never hold a lock longer than 2s"
+        let rewrite = "Split `Sources/App/Store.swift` into `Store+Load.swift`. Keep `fetchAll_v2`. Write `001_add_index.sql` and set `statement_timeout`."
+        #expect(PromptLiterals.invented(in: rewrite, from: draft) == ["`001_add_index.sql`", "`statement_timeout`"])
+    }
+
+    @Test("outline numbers and step numbers are not inventions, but a new figure is")
+    func numbers() {
+        let draft = "backfill in batches of 5000 rows"
+        let rewrite = "1.1 Backfill 5000 rows per batch.\n2.3 Stop after 10 batches and wait 250 ms."
+        #expect(PromptLiterals.invented(in: rewrite, from: draft) == ["10", "250"])
+    }
+
+    @Test("a rewrite that adds nothing reports nothing")
+    func clean() {
+        #expect(PromptLiterals.invented(in: "Fix `load()` in `Loader.swift`.", from: "fix load() in Loader.swift").isEmpty)
+    }
+}
