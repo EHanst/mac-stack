@@ -234,6 +234,13 @@ public struct PromptOptimizer: Sendable {
 
     // MARK: Prompt
 
+    /// `original` without the clauses that contradict each other: the rewrite must settle those, so their
+    /// words are not required back.
+    static func termSource(_ original: String) -> String {
+        guard let (a, b) = PromptLint.conflicts(original).first else { return original }
+        return original.replacingOccurrences(of: a, with: "").replacingOccurrences(of: b, with: "")
+    }
+
     /// `raw` with what it dropped from `original` appended verbatim under a label, so the acceptance check
     /// passes without a second generation: every lost literal, plus the short clause of the draft behind each
     /// lost plain word. Returns `raw` when nothing was dropped or nothing short enough could be restored.
@@ -241,7 +248,7 @@ public struct PromptOptimizer: Sendable {
         let parsed = parse(raw)
         guard !parsed.improved.isEmpty else { return raw }
         let lost = PromptLiterals.missing(from: original, in: parsed.improved)
-        let terms = PromptLiterals.missingTerms(from: original, in: parsed.improved + "\n" + lost.joined(separator: "\n"))
+        let terms = PromptLiterals.missingTerms(from: termSource(original), in: parsed.improved + "\n" + lost.joined(separator: "\n"))
         let kept = PromptLiterals.clauses(containing: terms, in: original).filter { clause in !lost.contains { $0.contains(clause) } }
         let items = lost + kept
         guard !items.isEmpty else { return raw }
@@ -458,7 +465,7 @@ public struct PromptOptimizer: Sendable {
             return reject("The model didn't send back a rewrite, so I kept your version.")
         }
         let missing = PromptLiterals.missing(from: original, in: parsed.improved)
-            + PromptLiterals.missingTerms(from: original, in: parsed.improved)
+            + PromptLiterals.missingTerms(from: termSource(original), in: parsed.improved)
         if !missing.isEmpty {
             return reject("The rewrite dropped something you wrote, so I kept your version.", missing: missing)
         }
@@ -467,6 +474,9 @@ public struct PromptOptimizer: Sendable {
             return reject("The rewrite is too big for what the model can hold right now, so I kept your version.")
         }
         var changes = parsed.changes
+        if !parsed.changes.contains(where: { $0.lowercased().hasPrefix("conflict:") }), let (a, b) = PromptLint.conflicts(original).first {
+            changes.append("Conflict: \"\(a)\" and \"\(b)\" ask for opposite things. The rewrite picked one; check it picked the right one.")
+        }
         // The reply stopped at the output limit (or the model gave up) before closing the rewrite.
         if raw.contains("<improved>"), !raw.contains("</improved>") {
             changes.append("The rewrite may have been cut off at the length limit. Check the end before using it.")

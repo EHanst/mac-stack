@@ -203,5 +203,10 @@ struct PromptLintTests {
         #expect(!PromptLint.isAlreadyClear(clear.replacingOccurrences(of: "Build must pass.", with: "")))
         #expect(!PromptLint.isAlreadyClear(clear + " Make it better."))
     }
-}
 
+    @Test("conflicts finds a brief clause against a detailed one")
+    func conflicts() {
+        #expect(PromptLint.conflicts("Keep it short. Explain in great detail.").count == 1)
+        #expect(PromptLint.conflicts("Keep it short. Name the file.").isEmpty)
+    }
+}

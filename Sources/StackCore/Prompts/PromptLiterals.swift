@@ -61,9 +61,20 @@ public enum PromptLiterals {
     /// The short clauses of `original` (split at sentence marks and commas) that carry `terms`, verbatim, so a
     /// dropped requirement can be put back without asking the model. Clauses over `maxWords` are skipped.
     public static func clauses(containing terms: [String], in original: String, maxWords: Int = 15) -> [String] {
+        let parts = clauses(in: original, maxWords: maxWords)
+        var out: [String] = []
+        for term in terms {
+            let stem = String(term.lowercased().prefix(5))
+            if let hit = parts.first(where: { $0.lowercased().contains(stem) }), !out.contains(hit) { out.append(hit) }
+        }
+        return out
+    }
+
+    /// The short clauses of `text` (at most `maxWords` words), split at sentence marks and commas.
+    public static func clauses(in text: String, maxWords: Int = 15) -> [String] {
         // A mark ends a clause only before whitespace or the end, so URLs and `a.b` identifiers stay whole.
         var parts: [String] = [], current = ""
-        let chars = Array(original)
+        let chars = Array(text)
         for (i, c) in chars.enumerated() {
             let next = i + 1 < chars.count ? chars[i + 1] : nil
             if c == "\n" || (".;,!?".contains(c) && (next == nil || next!.isWhitespace)) {
@@ -71,15 +82,9 @@ public enum PromptLiterals {
             } else { current.append(c) }
         }
         parts.append(current)
-        parts = parts.map { $0.trimmingCharacters(in: .whitespaces) }
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }
             .map { $0.lowercased().hasPrefix("and ") ? String($0.dropFirst(4)) : $0 }
             .filter { !$0.isEmpty && $0.split(whereSeparator: \.isWhitespace).count <= maxWords }
-        var out: [String] = []
-        for term in terms {
-            let stem = String(term.lowercased().prefix(5))
-            if let hit = parts.first(where: { $0.lowercased().contains(stem) }), !out.contains(hit) { out.append(hit) }
-        }
-        return out
     }
 
     /// Literals from `original` that don't appear in `rewritten`.

@@ -24,6 +24,18 @@ public enum PromptLint {
         }
     }
 
+    /// Pairs of clauses in `text` that ask for opposite things (brief against detailed), verbatim. The
+    /// rewriter has to pick one, so the validator must not demand both back.
+    public static func conflicts(_ text: String) -> [(String, String)] {
+        let brief = ["short", "brief", "concise", "terse", "one line", "one sentence"]
+        let deep = ["great detail", "in detail", "in depth", "thorough", "comprehensive", "exhaustive", "everything"]
+        let clauses = PromptLiterals.clauses(in: text)
+        guard let a = clauses.first(where: { c in brief.contains { c.lowercased().contains($0) } }),
+              let b = clauses.first(where: { c in c != a && deep.contains { c.lowercased().contains($0) } })
+        else { return [] }
+        return [(a, b)]
+    }
+
     public static func check(_ text: String, context: Context = Context()) -> [Finding] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }

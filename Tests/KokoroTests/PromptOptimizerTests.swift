@@ -397,6 +397,16 @@ struct PromptOptimizerTests {
         #expect(out == ["see https://github.com/apple/swift-nio/releases and fix what breaks", "never wait"])
     }
 
+    @Test("a draft that asks for short and for detailed is not forced to keep both; the user is told")
+    func conflictNotRestored() {
+        let original = "Keep the answer short. Explain everything in great detail with lots of examples. Don't use any code."
+        let raw = "<improved>Give a concise explanation. Do not use code.</improved>\n<changes>\n- Tightened.\n</changes>"
+        #expect(PromptOptimizer.restoringLiterals(raw: raw, original: original) == raw)
+        let o = PromptOptimizer.result(raw: raw, original: original, mode: .improve, model: nil)
+        #expect(o.rejection == nil)
+        #expect(o.conflicts.count == 1)
+    }
+
     @Test("a lost word whose clause is too long is left for the model to repair")
     func longClauseNotRestored() {
         let original = "make the build faster by caching every dependency download between runs on the continuous integration machines overnight"
