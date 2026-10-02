@@ -43,11 +43,11 @@ public enum PromptLiterals {
     ]
 
     /// Plain words from `original` the rewrite should still carry: the requirements a short prose request is made of
-    /// ("speed", "size"), which the literal check can't see. Matches on a 5-letter stem so "faster"/"fast" and
+    /// ("speed", "size"), which the literal check can't see. Matches on a 4-letter stem so "faster"/"fast" and
     /// "optimizing"/"optimize" don't count as dropped. Short drafts must keep every term; long ones may reword
     /// up to a quarter of theirs.
     public static func missingTerms(from original: String, in rewritten: String) -> [String] {
-        func stem(_ w: String) -> String { String(w.prefix(w.count > 5 ? 5 : w.count)) }
+        func stem(_ w: String) -> String { String(w.prefix(4)) }
         let words = original.lowercased().split(whereSeparator: { !$0.isLetter }).map(String.init)
         var seen = Set<String>()
         let terms = words.filter { $0.count >= 4 && !stopwords.contains($0) && seen.insert(stem($0)).inserted }
@@ -56,6 +56,35 @@ public enum PromptLiterals {
         let missing = terms.filter { !haystack.contains(stem($0)) }
         let allowed = words.count <= 60 ? 0 : terms.count / 4
         return missing.count > allowed ? missing : []
+    }
+
+    /// The short clauses of `original` (split at sentence marks and commas) that carry `terms`, verbatim, so a
+    /// dropped requirement can be put back without asking the model. Clauses over `maxWords` are skipped.
+    public static func clauses(containing terms: [String], in original: String, maxWords: Int = 15) -> [String] {
+        let parts = clauses(in: original, maxWords: maxWords)
+        var out: [String] = []
+        for term in terms {
+            let stem = String(term.lowercased().prefix(4))
+            if let hit = parts.first(where: { $0.lowercased().contains(stem) }), !out.contains(hit) { out.append(hit) }
+        }
+        return out
+    }
+
+    /// The short clauses of `text` (at most `maxWords` words), split at sentence marks and commas.
+    public static func clauses(in text: String, maxWords: Int = 15) -> [String] {
+        // A mark ends a clause only before whitespace or the end, so URLs and `a.b` identifiers stay whole.
+        var parts: [String] = [], current = ""
+        let chars = Array(text)
+        for (i, c) in chars.enumerated() {
+            let next = i + 1 < chars.count ? chars[i + 1] : nil
+            if c == "\n" || (".;,!?".contains(c) && (next == nil || next!.isWhitespace)) {
+                parts.append(current); current = ""
+            } else { current.append(c) }
+        }
+        parts.append(current)
+        return parts.map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.lowercased().hasPrefix("and ") ? String($0.dropFirst(4)) : $0 }
+            .filter { !$0.isEmpty && $0.split(whereSeparator: \.isWhitespace).count <= maxWords }
     }
 
     /// Literals from `original` that don't appear in `rewritten`.

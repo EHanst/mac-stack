@@ -193,4 +193,28 @@ struct PromptLintTests {
             ![.unbalancedXML, .chainOfThought, .goalNotFirst].contains($0.rule)
         })
     }
+
+    @Test("isAlreadyClear needs length, literals, a success check and no vague words")
+    func alreadyClear() {
+        let clear = "Rename the property `title` to `heading` on `Note` in Sources/Model/Note.swift and update every call site. Do not change behaviour. Build must pass."
+        #expect(PromptLint.isAlreadyClear(clear))
+        #expect(!PromptLint.isAlreadyClear("make the app faster"))
+        #expect(!PromptLint.isAlreadyClear("fix the crash in `loadItems()` in Sources/App/Loader.swift when the list is empty"))
+        #expect(!PromptLint.isAlreadyClear(clear.replacingOccurrences(of: "Build must pass.", with: "")))
+        #expect(!PromptLint.isAlreadyClear(clear + " Make it better."))
+    }
+
+    @Test("conflicts finds a brief clause against a detailed one")
+    func conflicts() {
+        #expect(PromptLint.conflicts("Keep it short. Explain in great detail.").count == 1)
+        #expect(PromptLint.conflicts("Keep it short. Name the file.").isEmpty)
+    }
+
+    @Test("already-clear gate: specific drafts with a done-condition pass, vague or unverifiable ones don't")
+    func gateSamples() {
+        #expect(PromptLint.isAlreadyClear("In `Task.swift`, make `Task` conform to `Equatable` by comparing only `id`; `XCTAssertEqual(task1, task2)` in TaskTests.swift passes when ids match."))
+        #expect(PromptLint.isAlreadyClear("Update `Dockerfile` to set `NODE_ENV=production` and replace `npm install` with `npm ci --omit=dev`; `docker build .` completes under 300 MB."))
+        #expect(!PromptLint.isAlreadyClear("Refactor the `calculateTotal` function in `BillingService.swift` so it's cleaner."))
+        #expect(!PromptLint.isAlreadyClear("Add a new endpoint `GET /v1/users/:id/orders` in `server.ts` that returns orders for that user."))
+    }
 }

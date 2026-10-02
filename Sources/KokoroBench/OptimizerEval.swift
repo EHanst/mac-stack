@@ -65,8 +65,20 @@ enum OptimizerEval {
                         } catch { print("    generation error: \(error)"); raw = "" }
                         return raw
                     }
-                    var raw = await pass(messages)
-                    var r = PromptOptimizer.result(raw: raw, original: text, mode: m, model: "local:eval", ceiling: 8_000)
+                    // Same shortcuts as `PromptOptimizer.optimize`: no generation for an already-clear draft.
+                    let skipped = m == .improve && PromptLint.isAlreadyClear(text)
+                    var raw = skipped ? "" : await pass(messages)
+                    var r = PromptOptimizer.result(raw: skipped ? "<improved>\(text)</improved>" : raw, original: text, mode: m,
+                                                   model: "local:eval", ceiling: 8_000)
+                    var restored = false
+                    if r.rejection?.missing.isEmpty == false {
+                        let patched = PromptOptimizer.restoringLiterals(raw: raw, original: text)
+                        if patched != raw {
+                            raw = patched
+                            r = PromptOptimizer.result(raw: raw, original: text, mode: m, model: "local:eval", ceiling: 8_000)
+                            restored = r.rejection == nil
+                        }
+                    }
                     var repaired = false
                     if repair, let missing = r.rejection?.missing, !missing.isEmpty {
                         let second = await pass(PromptOptimizer.repairMessages(messages, reply: raw, missing: missing))
@@ -86,7 +98,8 @@ enum OptimizerEval {
                     if let rej = r.rejection {
                         outcome = rej.missing.isEmpty ? "rejected:\(rej.reason.prefix(40))" : "rejected:dropped-literal"
                     } else if !r.questions.isEmpty && r.improved == r.original { outcome = "questions-only" }
-                    else if r.didChange { outcome = repaired ? "accepted-after-repair" : "accepted" } else { outcome = "unchanged" }
+                    else if r.didChange { outcome = repaired ? "accepted-after-repair" : restored ? "accepted-after-restore" : "accepted" }
+                    else { outcome = skipped ? "skipped-clear" : "unchanged" }
                     tally[modeName, default: [:]][outcome, default: 0] += 1
                     let cut = raw.contains("<improved>") && !raw.contains("</improved>")
                     if cut { tally[modeName, default: [:]]["cut-off", default: 0] += 1 }

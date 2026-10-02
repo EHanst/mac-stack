@@ -157,12 +157,12 @@ struct MCPPromptTests {
         await client.disconnect(); await server.stop()
     }
 
-    @Test("optimize_prompt hands back the original, with the reason, when the rewrite drops something")
+    @Test("optimize_prompt hands back the original, with the reason, when the rewrite drops a word it can't restore")
     func optimizeRejects() async throws {
-        let h = await host([], reply: "<improved>Fix the crash.</improved>")
+        let h = await host([], reply: "<improved>Fix the failure in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time.</improved>")
         let (client, server) = try await connect(h, scopes: ScopeBox([.chat]))
-        let r = try await client.callTool(name: "optimize_prompt", arguments: ["prompt": "fix crash in `load()`"])
-        #expect(text(r.content).hasPrefix("fix crash in `load()`"))
+        let r = try await client.callTool(name: "optimize_prompt", arguments: ["prompt": "fix the crash in `load()` that happens whenever the user opens the settings screen after the app has been idle for a long time"])
+        #expect(text(r.content).hasPrefix("fix the crash in `load()`"))
         #expect(text(r.content).contains("not changed"))
         await client.disconnect(); await server.stop()
     }

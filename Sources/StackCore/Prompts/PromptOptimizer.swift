@@ -139,6 +139,13 @@ public struct PromptOptimizer: Sendable {
                     continuation.finish()
                     return
                 }
+                // A draft that already names its target, literals and success check needs no model call.
+                if mode == .improve, PromptLint.isAlreadyClear(trimmed) {
+                    continuation.yield(.finished(Optimization(
+                        original: draft, improved: draft, changes: [], questions: [], model: nil, rejection: nil)))
+                    continuation.finish()
+                    return
+                }
                 let target = await inference.plannedModel()
                 let servedLocally = (context.pin ?? target)?.hasPrefix("local:") == true
                 var messages = Self.requestMessages(draft: trimmed, context: context, mode: mode,
@@ -187,11 +194,21 @@ public struct PromptOptimizer: Sendable {
                         }
                         return raw
                     }
-                    let raw = try await pass(messages, budget: budget)
+                    var raw = try await pass(messages, budget: budget)
                     var result = Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)
 
-                    // Dropped literals are systematic and easy to name, so give the model one chance to put
-                    // them back before giving up on the rewrite.
+                    // Dropped literals are exact strings, so put them back by program; only plain words the
+                    // model reworded still need a second generation.
+                    if let missing = result.rejection?.missing, !missing.isEmpty {
+                        let restored = Self.restoringLiterals(raw: raw, original: trimmed)
+                        if restored != raw {
+                            raw = restored
+                            result = Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)
+                        }
+                    }
+
+                    // What's left is easy to name, so give the model one chance to put it back before
+                    // giving up on the rewrite.
                     if let missing = result.rejection?.missing, !missing.isEmpty, !Task.isCancelled {
                         continuation.yield(.repairing(missing: missing))
                         let repair = Self.repairMessages(messages, reply: raw, missing: missing)
@@ -216,6 +233,31 @@ public struct PromptOptimizer: Sendable {
     }
 
     // MARK: Prompt
+
+    /// `original` without the clauses that contradict each other: the rewrite must settle those, so their
+    /// words are not required back.
+    static func termSource(_ original: String) -> String {
+        guard let (a, b) = PromptLint.conflicts(original).first else { return original }
+        return original.replacingOccurrences(of: a, with: "").replacingOccurrences(of: b, with: "")
+    }
+
+    /// `raw` with what it dropped from `original` appended verbatim under a label, so the acceptance check
+    /// passes without a second generation: every lost literal, plus the short clause of the draft behind each
+    /// lost plain word. Returns `raw` when nothing was dropped or nothing short enough could be restored.
+    public static func restoringLiterals(raw: String, original: String) -> String {
+        let parsed = parse(raw)
+        guard !parsed.improved.isEmpty else { return raw }
+        let lost = PromptLiterals.missing(from: original, in: parsed.improved)
+        let terms = PromptLiterals.missingTerms(from: termSource(original), in: parsed.improved + "\n" + lost.joined(separator: "\n"))
+        let kept = PromptLiterals.clauses(containing: terms, in: original).filter { clause in !lost.contains { $0.contains(clause) } }
+        let items = lost + kept
+        guard !items.isEmpty else { return raw }
+        func list(_ items: [String]) -> String { items.map { "- \($0)" }.joined(separator: "\n") }
+        let note = "Added back exactly as written: " + items.map { $0.hasPrefix("```") ? "a code block" : $0 }.joined(separator: ", ")
+        return "<improved>\n\(parsed.improved)\n\nKeep exactly as written:\n\(items.joined(separator: "\n"))\n</improved>\n"
+            + "<changes>\n\(list(parsed.changes + [note]))\n</changes>\n"
+            + (parsed.questions.isEmpty ? "" : "<questions>\n\(list(parsed.questions))\n</questions>")
+    }
 
     /// Follow-up asking the model to restore parts of the original that its rewrite dropped.
     public static func repairMessages(_ messages: [Message], reply: String, missing: [String]) -> [Message] {
@@ -423,7 +465,7 @@ public struct PromptOptimizer: Sendable {
             return reject("The model didn't send back a rewrite, so I kept your version.")
         }
         let missing = PromptLiterals.missing(from: original, in: parsed.improved)
-            + PromptLiterals.missingTerms(from: original, in: parsed.improved)
+            + PromptLiterals.missingTerms(from: termSource(original), in: parsed.improved)
         if !missing.isEmpty {
             return reject("The rewrite dropped something you wrote, so I kept your version.", missing: missing)
         }
@@ -432,6 +474,9 @@ public struct PromptOptimizer: Sendable {
             return reject("The rewrite is too big for what the model can hold right now, so I kept your version.")
         }
         var changes = parsed.changes
+        if !parsed.changes.contains(where: { $0.lowercased().hasPrefix("conflict:") }), let (a, b) = PromptLint.conflicts(original).first {
+            changes.append("Conflict: \"\(a)\" and \"\(b)\" ask for opposite things. The rewrite picked one; check it picked the right one.")
+        }
         // The reply stopped at the output limit (or the model gave up) before closing the rewrite.
         if raw.contains("<improved>"), !raw.contains("</improved>") {
             changes.append("The rewrite may have been cut off at the length limit. Check the end before using it.")
