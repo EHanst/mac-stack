@@ -176,7 +176,7 @@ public struct PromptOptimizer: Sendable {
                     return
                 }
                 // The only limit on the reply is what the hardware and model can hold.
-                let budget = room
+                let budget = min(room, context.tuning?.replyCap[mode] ?? room)
                 let route = RouteBox()
                 do {
                     // One pass: stream a reply for `messages` and return it whole.
@@ -201,6 +201,14 @@ public struct PromptOptimizer: Sendable {
                         return raw
                     }
                     var raw = try await pass(messages, budget: budget)
+                    // A reply that used up a model's own reply cap without closing is a runaway, not a long answer.
+                    if budget < room, !raw.contains("</improved>"), !raw.contains("<questions>") {
+                        continuation.yield(.finished(Optimization(
+                            original: draft, improved: draft, changes: [], questions: [], model: route.value,
+                            rejection: .init(reason: "The model ran on without finishing, so I kept your version.", missing: []))))
+                        continuation.finish()
+                        return
+                    }
                     var result = Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)
 
                     // Dropped literals are exact strings, so put them back by program; only plain words the
@@ -484,6 +492,12 @@ public struct PromptOptimizer: Sendable {
         var changes = parsed.changes
         if !parsed.changes.contains(where: { $0.lowercased().hasPrefix("conflict:") }), let (a, b) = PromptLint.conflicts(original).first {
             changes.append("Conflict: \"\(a)\" and \"\(b)\" ask for opposite things. The rewrite picked one; check it picked the right one.")
+        }
+        // Not a reason to refuse either: a name or figure the draft never gave may be made up.
+        let invented = PromptLiterals.invented(in: parsed.improved, from: original)
+        if !invented.isEmpty {
+            let shown = invented.prefix(4).joined(separator: ", ")
+            changes.append("Added \(shown)\(invented.count > 4 ? " and \(invented.count - 4) more" : "") that your draft didn't give. Check \(invented.count == 1 ? "it's" : "they're") right.")
         }
         // The reply stopped at the output limit (or the model gave up) before closing the rewrite.
         if raw.contains("<improved>"), !raw.contains("</improved>") {

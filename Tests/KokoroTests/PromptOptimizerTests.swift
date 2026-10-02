@@ -593,3 +593,21 @@ private actor LimitedProvider: ModelProvider {
     func healthCheck() async -> ProviderHealth { .healthy }
     func maxContextTokens() async -> Int? { limit }
 }
+
+@Suite("PromptOptimizer invented names")
+struct InventedNoteTests {
+    @Test("an accepted rewrite that added a name the draft never gave carries a check-it note, and is still accepted")
+    func noteAdded() {
+        let r = PromptOptimizer.result(
+            raw: "<improved>Fix `load()` and write `001_fix.sql`.</improved>", original: "fix `load()`", mode: .improve, model: nil)
+        #expect(r.rejection == nil)
+        #expect(r.changes.contains { $0.contains("`001_fix.sql`") && $0.contains("didn't give") })
+    }
+
+    @Test("no note when the rewrite only restates the draft")
+    func noNote() {
+        let r = PromptOptimizer.result(
+            raw: "<improved>Fix the crash in `load()`.</improved>", original: "fix the crash in load()", mode: .improve, model: nil)
+        #expect(!r.changes.contains { $0.contains("didn't give") })
+    }
+}

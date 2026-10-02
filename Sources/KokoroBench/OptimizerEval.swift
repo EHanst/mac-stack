@@ -18,6 +18,21 @@ enum OptimizerEval {
         ("short", "add dark mode"),
         ("versions-url", "upgrade swift-nio to 2.65.0 in Package.swift, see https://github.com/apple/swift-nio/releases and fix what breaks"),
         ("already-clear", "Rename the property `title` to `heading` on `Note` in Sources/Model/Note.swift and update every call site. Do not change behaviour. Build must pass."),
+        // Added to widen the set: prose-only, code-heavy, numeric, multi-step and error-log drafts.
+        ("flaky-test", "the test `testSyncRetries` in Tests/SyncTests.swift fails about one run in ten on CI, find out why and make it stable without adding sleeps"),
+        ("sql-index", "queries on orders filtered by customer_id and created_at take 4s on 20M rows, add the right index in db/migrations and show the EXPLAIN before and after"),
+        ("python-cli", "write a CLI in scripts/prune_logs.py that deletes *.log files older than 14 days under /var/log/myapp, dry run by default, --apply to delete, exit 1 if anything fails"),
+        ("css-layout", "the sidebar in src/components/Sidebar.tsx overlaps the main content below 768px, fix it with CSS only, no new dependencies"),
+        ("error-log", "app crashes on launch with `Fatal error: Unexpectedly found nil while unwrapping an Optional value` at AppDelegate.swift:42 after the 3.2.0 update, find the cause"),
+        ("api-design", "add pagination to GET /v1/orders: cursor based, default page size 50, max 200, return next_cursor, keep the response shape otherwise identical"),
+        ("perf", "the image grid in GalleryView scrolls at 20 fps on an iPhone 12, get it to 60 fps without lowering image quality"),
+        ("docs", "write a README section for contributors: how to run `swift test`, how to run the benchmark, and where the architecture notes are in ARCHITECTURE.md"),
+        ("regex", "write a regex that matches ISO 8601 dates like 2024-03-09 but rejects 2024-13-40, and explain each part"),
+        ("review", "review the diff in PR 482 for race conditions in `TokenCache` and call out anything that is not Sendable"),
+        ("rename-sweep", "rename the module `Core` to `StackCore` in Package.swift, every import Core line and the test target, then make sure `swift build` still passes"),
+        ("tone", "reply to the customer who says the export button lost their data, apologise once, ask for the file name and time, do not promise a fix date"),
+        ("shell", "write a zsh one-liner that finds the 10 largest files under ~/Downloads modified in the last 30 days and prints size in MB and path"),
+        ("terse", "tests failing"),
     ]
 
     static func mode(_ name: String) -> OptimizeMode? {
@@ -46,6 +61,13 @@ enum OptimizerEval {
         let context = OptimizeContext(profile: target, tuning: tuning)
         var rows: [[String: Any]] = []
         var specCycles = 0, specAccepted = 0, novelTotal = 0
+        var lookupPasses = 0, lookupProposed = 0, lookupAccepted = 0
+        defer {
+            if lookupPasses > 0 {
+                print("  prompt lookup: \(lookupPasses) verify passes, \(lookupAccepted)/\(lookupProposed) drafted tokens accepted (" +
+                      String(format: "%.2f", Double(lookupAccepted) / Double(lookupPasses)) + " per pass)")
+            }
+        }
         defer { print("  novel literals in accepted rewrites: \(novelTotal)") }
         defer { if specCycles > 0 { print("  draft acceptance: \(specAccepted * 100 / specCycles)% over \(specCycles) cycles") } }
         var tally: [String: [String: Int]] = [:]
@@ -63,7 +85,7 @@ enum OptimizerEval {
                         do {
                             for try await e in await provider.generate(
                                 messages: messages, tools: [],
-                                options: GenerationOptions(maxTokens: 8_000, sampling: params, cacheSnapshots: false)) {
+                                options: GenerationOptions(maxTokens: min(8_000, tuning.replyCap[m] ?? 8_000), sampling: params, cacheSnapshots: false)) {
                                 if case .token(let t) = e { raw += t; tokens += 1 }
                             }
                         } catch { print("    generation error: \(error)"); raw = "" }
@@ -93,13 +115,16 @@ enum OptimizerEval {
                     if let spec = await provider.lastSpeculationForBench(), spec.cycles > 0 {
                         specCycles += spec.cycles; specAccepted += spec.accepted
                     }
+                    if let lk = await provider.lastLookupForBench() {
+                        lookupPasses += lk.passes; lookupProposed += lk.proposed; lookupAccepted += lk.accepted
+                    }
                     if ProcessInfo.processInfo.environment["EVAL_MEM"] != nil {
                         let b = await provider.budgetInputs()
                         func g(_ x: Int) -> String { String(format: "%.2f", Double(x) / 1_073_741_824) }
                         print("    mem: ws \(g(b.workingSet)) weights \(g(b.weights)) active \(g(b.active)) cache \(g(b.cache)) avail \(g(b.available)) → \(await provider.contextVerdict())")
                     }
                     // Literals the rewrite introduced that the draft never had: a count of invention, not a gate.
-                    let novel = r.rejection == nil ? PromptLiterals.extract(from: r.improved).filter { !text.localizedCaseInsensitiveContains($0) } : []
+                    let novel = r.rejection == nil ? PromptLiterals.invented(in: r.improved, from: text) : []
                     novelTotal += novel.count
                     let outcome: String
                     if let rej = r.rejection {
