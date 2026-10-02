@@ -43,6 +43,8 @@ struct Options {
     var mtpCheck = false
     var noMTP = false
     var draftVocab: Int?
+    var noLookup = false
+    var lookupK: Int?
     var sidecarTest = false
     var compactionTest = false
     var longChatTest = false
@@ -77,6 +79,8 @@ struct Options {
             case "--mtp-check": mtpCheck = true
             case "--no-mtp": noMTP = true
             case "--draft-vocab": if let v = it.next(), let n = Int(v) { draftVocab = n }
+            case "--no-lookup": noLookup = true
+            case "--lookup-k": if let v = it.next(), let n = Int(v) { lookupK = n }
             case "--no-repair": evalRepair = false
             case "--profile": if let v = it.next() { evalProfile = v }
             case "--sampling": if let v = it.next() { evalSampling = v }
@@ -304,9 +308,11 @@ func run() async throws {
         // Measure beyond the pre-flight limit (the sweep stops itself if the working set is exceeded).
         await provider.setBudget(ContextBudget(model: .init(fixedOverheadBytes: 0, bytesPerToken: 1), safetyFraction: 1, contextWindow: 262_144, minimumUsefulTokens: 0))
     }
-    if opts.noMTP || opts.draftVocab != nil {
+    if opts.noMTP || opts.draftVocab != nil || opts.noLookup || opts.lookupK != nil {
         var t = await provider.tuning
         if opts.noMTP { t.speculative = false }
+        if opts.noLookup { t.promptLookup = false }
+        if let k = opts.lookupK { t.lookupDraftTokens = k }
         if let n = opts.draftVocab { t.draftVocabulary = n }
         await provider.setTuning(t)
     }
@@ -351,6 +357,17 @@ func run() async throws {
         print("  delta kernel vs ops:      max |Δy| \(dy)  max |Δstate| \(ds)   \(dy < 2e-2 && ds < 1e-3 ? "PASS" : "FAIL")")
         print("  chunked vs single call:   max |Δy| \(dc)  max |Δstate| \(dcs)   \(dc < 1e-3 && dcs < 1e-4 ? "PASS" : "FAIL")")
         print("  state dtype: \(sK.dtype)")
+        // Speculative rollback rebuilds the state after a prefix with one call; it must equal per-token steps bit for bit.
+        var stepped = s0
+        var ySteps: [MLXArray] = []
+        for t in 0..<5 {
+            let (yt, st) = GatedDelta.update(q: q[0..., t..<(t + 1)], k: k[0..., t..<(t + 1)], v: v[0..., t..<(t + 1)],
+                                             g: g[0..., t..<(t + 1)], beta: beta[0..., t..<(t + 1)], state: stepped)
+            stepped = st; ySteps.append(yt)
+        }
+        let (yPre, sPre) = GatedDelta.update(q: q[0..., 0..<5], k: k[0..., 0..<5], v: v[0..., 0..<5], g: g[0..., 0..<5], beta: beta[0..., 0..<5], state: s0)
+        let dPre = maxDiff(sPre, stepped), dyPre = maxDiff(yPre, concatenated(ySteps, axis: 1))
+        print("  prefix replay vs stepping: max |Δy| \(dyPre)  max |Δstate| \(dPre)   \(dPre == 0 && dyPre == 0 ? "PASS" : "FAIL")")
 
         // 2. Does the real model predict sensible next tokens?
         for prompt in ["The capital of France is", "The quick brown fox jumps over the lazy", "1, 2, 3, 4, 5,"] {
@@ -387,37 +404,51 @@ func run() async throws {
     }
 
     if opts.mtpCheck {
-        print("[mtp check] greedy decode with speculation on vs off (must match), 160 tokens")
-        var totals = (onSecs: 0.0, offSecs: 0.0, tokens: 0, cycles: 0, accepted: 0, same: 0, cases: 0)
-        for mode in [OptimizeMode.improve] {
-            for (name, draft) in OptimizerEval.drafts.prefix(5) {
-                let messages = PromptOptimizer.requestMessages(draft: draft, context: OptimizeContext(profile: .localSmall), mode: mode, useSharedPrefix: false)
-                var texts: [String] = []
-                for on in [true, false] {
-                    var t = await provider.tuning
-                    t.speculative = on
-                    await provider.setTuning(t)
-                    await provider.clearPromptCache()
-                    let m = await measure(provider, messages, gen: 160, timeout: opts.timeout, cacheSnapshots: false)
-                    texts.append(m.text)
-                    if on, let sp = await provider.lastSpeculationForBench() { totals.cycles += sp.cycles; totals.accepted += sp.accepted }
-                    if let st = m.stats {
-                        if on { totals.onSecs += st.decodeSeconds; totals.tokens += st.generatedTokens }
-                        else { totals.offSecs += st.decodeSeconds }
+        print("[mtp check] greedy decode, plain vs MTP / prompt lookup / both (must match), 160 tokens")
+        let saved = await provider.tuning
+        let configs: [(name: String, mtp: Bool, lookup: Bool)] =
+            [("plain", false, false), ("mtp", true, false), ("lookup", false, true), ("mtp+lookup", true, true)]
+        var secs = [Double](repeating: 0, count: configs.count)
+        var tokens = 0, same = [Int](repeating: 0, count: configs.count), cases = 0
+        var mtpStats = (cycles: 0, accepted: 0), lookupStats = (passes: 0, proposed: 0, accepted: 0)
+        for (name, draft) in OptimizerEval.drafts.prefix(5) {
+            let messages = PromptOptimizer.requestMessages(draft: draft, context: OptimizeContext(profile: .localSmall), mode: .improve, useSharedPrefix: false)
+            var texts: [String] = []
+            for (i, c) in configs.enumerated() {
+                var t = saved
+                t.speculative = c.mtp
+                t.promptLookup = c.lookup
+                await provider.setTuning(t)
+                await provider.clearPromptCache()
+                let m = await measure(provider, messages, gen: 160, timeout: opts.timeout, cacheSnapshots: false)
+                texts.append(m.text)
+                if let st = m.stats { secs[i] += st.decodeSeconds; if i == 0 { tokens += st.generatedTokens } }
+                if c.mtp && c.lookup {
+                    if let sp = await provider.lastSpeculationForBench() { mtpStats.cycles += sp.cycles; mtpStats.accepted += sp.accepted }
+                    if let lk = await provider.lastLookupForBench() {
+                        lookupStats.passes += lk.passes; lookupStats.proposed += lk.proposed; lookupStats.accepted += lk.accepted
                     }
                 }
-                let same = texts[0] == texts[1]
-                totals.same += same ? 1 : 0; totals.cases += 1
-                print("  improve · \(name): \(same ? "identical" : "DIFFERENT")")
-                if !same {
-                    let a = Array(texts[0]), b = Array(texts[1])
-                    let i = zip(a, b).enumerated().first { $0.element.0 != $0.element.1 }?.offset ?? min(a.count, b.count)
-                    print("    first difference at char \(i): on «\(String(a[i...].prefix(40)))» off «\(String(b[i...].prefix(40)))»")
+            }
+            cases += 1
+            var line = "  improve · \(name):"
+            for i in configs.indices.dropFirst() {
+                let ok = texts[i] == texts[0]
+                same[i] += ok ? 1 : 0
+                line += " \(configs[i].name) \(ok ? "identical" : "DIFFERENT")"
+                if !ok {
+                    let a = Array(texts[i]), b = Array(texts[0])
+                    let at = zip(a, b).enumerated().first { $0.element.0 != $0.element.1 }?.offset ?? min(a.count, b.count)
+                    line += " (char \(at): «\(String(a[at...].prefix(30)))» vs plain «\(String(b[at...].prefix(30)))»)"
                 }
             }
+            print(line)
         }
-        print("  drafts accepted \(totals.accepted)/\(totals.cycles)")
-        print("  identical \(totals.same)/\(totals.cases); decode \(fmt(Double(totals.tokens) / max(totals.onSecs, 1e-6))) tok/s with MTP vs \(fmt(Double(totals.tokens) / max(totals.offSecs, 1e-6))) tok/s without (off counted at the same token totals)")
+        await provider.setTuning(saved)
+        print("  mtp+lookup: MTP drafts accepted \(mtpStats.accepted)/\(mtpStats.cycles); lookup \(lookupStats.accepted)/\(lookupStats.proposed) over \(lookupStats.passes) passes")
+        for i in configs.indices {
+            print("  \(configs[i].name): \(i == 0 ? "" : "identical \(same[i])/\(cases); ")decode \(fmt(Double(tokens) / max(secs[i], 1e-6))) tok/s (\(fmt(secs[i], 2)) s)")
+        }
         print("")
     }
 

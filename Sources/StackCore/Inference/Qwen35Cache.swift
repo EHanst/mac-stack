@@ -22,15 +22,20 @@ final class Qwen35LayerCache: @unchecked Sendable {
     // Linear attention
     var ssmState: MLXArray?
     var convState: MLXArray?
-    /// Recurrent and conv state after the *first* of two tokens fed together (speculative verify), so a
-    /// rejected second token can be undone. Transient: not part of `stateArrays` or `fork()`.
-    var ssmStateMid: MLXArray?
-    var convStateMid: MLXArray?
+    /// What a speculative verify pass fed a linear-attention layer: the recurrent state before it, the
+    /// conv input rows (history + new) and the per-token delta-rule inputs. Enough to rebuild the state
+    /// after any prefix of the pass without running the model again (`Qwen35ForCausalLM.rollBack`).
+    /// Transient: not part of `stateArrays` or `fork()`.
+    struct Verify {
+        let ssmBefore: MLXArray
+        let convPadded: MLXArray                 // [B, K-1+L, C]
+        let q, k, v, g, beta: MLXArray           // [B, L, ...]
+        var arrays: [MLXArray] { [ssmBefore, convPadded, q, k, v, g, beta] }
+    }
+    var verify: Verify?
 
     /// Drop the last `n` cached key/value rows (full-attention layers); later writes overwrite them.
     func trimKV(by n: Int) { offset -= n }
-
-    var midArrays: [MLXArray] { [ssmStateMid, convStateMid].compactMap { $0 } }
 
     /// Append `k`/`v` (shape `[B, nKV, L, D]`) and return views over everything cached so far.
     func updateKV(keys k: MLXArray, values v: MLXArray) -> (keys: MLXArray, values: MLXArray) {
@@ -107,7 +112,7 @@ final class Qwen35Cache: @unchecked Sendable {
     func rewind(by n: Int) { tokenCount -= n }
 
     var stateArrays: [MLXArray] { layers.flatMap(\.stateArrays) + (mtp?.stateArrays ?? []) }
-    var midArrays: [MLXArray] { layers.flatMap(\.midArrays) }
+    var verifyArrays: [MLXArray] { layers.flatMap { $0.verify?.arrays ?? [] } }
 
     func fork() -> Qwen35Cache {
         Qwen35Cache(layers: layers.map { $0.fork() }, tokenCount: tokenCount, mtp: mtp?.fork())
