@@ -153,7 +153,7 @@ struct ImproveInlineView: View {
                 case .running(let partial), .repairing(let partial, _):
                     // Until the first words arrive, keep showing the text being improved so nothing blanks out.
                     if partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        streamingText(improve.revision).opacity(0.5)
+                        streamingText(improve.revision)
                     } else {
                         streamingText(partial)
                     }
