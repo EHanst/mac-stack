@@ -11,13 +11,17 @@ private actor Captured {
 private actor ReplyProvider: ModelProvider {
     nonisolated let id: ProviderID
     nonisolated let capabilities: ProviderCapabilities
-    let reply: [String]
+    var replies: [[String]]
     let captured: Captured
     init(id: String, reply: [String], captured: Captured, capabilities: ProviderCapabilities = [.textGeneration, .streaming]) {
-        self.id = id; self.reply = reply; self.captured = captured; self.capabilities = capabilities
+        self.id = id; self.replies = [reply]; self.captured = captured; self.capabilities = capabilities
+    }
+    init(id: String, replies: [[String]], captured: Captured, capabilities: ProviderCapabilities = [.textGeneration, .streaming]) {
+        self.id = id; self.replies = replies; self.captured = captured; self.capabilities = capabilities
     }
     func generate(messages: [Message], tools: [ToolDefinition], options: GenerationOptions) -> AsyncThrowingStream<GenerationEvent, Error> {
-        let reply = self.reply, captured = self.captured
+        let reply = replies.isEmpty ? [] : replies.removeFirst()
+        let captured = self.captured
         return AsyncThrowingStream { c in
             Task {
                 await captured.record(messages)
@@ -284,6 +288,7 @@ struct PromptOptimizerTests {
         for try await e in stream {
             switch e {
             case .partial(let p): partials.append(p)
+            case .repairing: break
             case .finished(let o): done = o
             }
         }
@@ -303,6 +308,42 @@ struct PromptOptimizerTests {
         #expect(sent.first?.role == .system && sent.first?.content.contains("small local model") == true)
         #expect(sent.first?.content.contains("Demo") == true)
         #expect(sent.last?.content == "<draft>\nfix crash in `load()`\n</draft>")
+    }
+
+    @Test("repair pass emits repairing event and suppresses partial streaming to freeze previous draft")
+    func repairPassFreezesDraft() async throws {
+        let cap = Captured()
+        // First reply drops `load()`
+        let firstReply = ["<improved>Fix the crash in the loader and explain why.</improved>"]
+        // Second reply restores `load()`
+        let secondReply = ["<improved>Fix the crash in `load()` and explain why.</improved>"]
+        let svc = await service([ReplyProvider(id: "local:test", replies: [firstReply, secondReply], captured: cap)])
+        let ctx = OptimizeContext(workspaceName: "Demo", intent: "debug", profile: .localSmall)
+
+        var repairingReceived = false
+        var partials: [String] = []
+        var finalOptimization: Optimization?
+
+        let stream = PromptOptimizer(inference: svc).optimize(draft: "fix crash in `load()`", context: ctx)
+        for try await event in stream {
+            switch event {
+            case .partial(let text):
+                partials.append(text)
+            case .repairing(let missing):
+                repairingReceived = true
+                #expect(missing.contains("`load()`"))
+            case .finished(let opt):
+                finalOptimization = opt
+            }
+        }
+
+        #expect(repairingReceived)
+        let done = try #require(finalOptimization)
+        #expect(done.improved == "Fix the crash in `load()` and explain why.")
+        #expect(done.rejection == nil)
+        // Partials should only reflect the first pass, NOT the second pass
+        #expect(!partials.contains("Fix the crash in `load()` and explain why."))
+        #expect(partials.contains("Fix the crash in the loader and explain why."))
     }
 
     @Test("a draft can't close its own fence")

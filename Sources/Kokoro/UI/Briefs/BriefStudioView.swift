@@ -177,7 +177,12 @@ struct BriefInputBar: View {
     private var improve: BriefImproveModel { services.improve }
     /// While Improve is open on this brief, the bar edits Improve's working revision instead.
     private var improving: Bool { improve.presentedBriefID != nil && improve.presentedBriefID == model.selected?.id }
-    private var optimizerRunning: Bool { if case .running = improve.optimizerPhase { return true }; return false }
+    private var optimizerRunning: Bool {
+        switch improve.optimizerPhase {
+        case .running, .repairing: return true
+        default: return false
+        }
+    }
     private var editing: Bool {
         improving ? improve.chatEditPhase == .editing || optimizerRunning : !fresh && feedback.phase == .editing
     }

@@ -117,7 +117,10 @@ public final class BriefImproveModel {
         guard let brief = currentBrief(), let id = briefID else { return }
 
         if chatEditPhase == .editing { return }
-        if case .running = optimizerPhase { return }
+        switch optimizerPhase {
+        case .running, .repairing: return
+        default: break
+        }
 
         chatTask?.cancel()
         chatGeneration += 1
@@ -199,7 +202,7 @@ public final class BriefImproveModel {
                 revision = originalText
                 persistDraft()
             }
-        case .running:
+        case .running, .repairing:
             break
         case .failed:
             if revision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

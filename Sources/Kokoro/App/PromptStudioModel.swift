@@ -17,6 +17,8 @@ public final class PromptStudioModel {
         case idle
         /// Streaming a rewrite; `partial` is the text so far.
         case running(partial: String)
+        /// A repair pass is running in the background to restore missing terms; `partial` keeps the completed first-pass text frozen.
+        case repairing(partial: String, missing: [String])
         /// A finished rewrite (or a refusal / questions) waiting for the user's decision.
         case review(Optimization)
         case failed(String)
@@ -203,7 +205,12 @@ public final class PromptStudioModel {
         }
     }
 
-    public var isRunning: Bool { if case .running = phase { true } else { false } }
+    public var isRunning: Bool {
+        switch phase {
+        case .running, .repairing: return true
+        default: return false
+        }
+    }
 
     /// Starts a rewrite of `draft`. Nothing is sent to the chat; the result waits in `.review`.
     public func startOptimize(draft: String, mode: OptimizeMode, intent: String?, depth: OptimizeDepth? = nil, finer: Bool = false) {
@@ -221,11 +228,21 @@ public final class PromptStudioModel {
                 for try await event in self.optimizer.optimize(draft: draft, context: context, mode: mode) {
                     if Task.isCancelled { return }
                     switch event {
-                    case .partial(let text): self.phase = .running(partial: text)
-                    case .finished(let result): self.phase = .review(result)
+                    case .partial(let text):
+                        self.phase = .running(partial: text)
+                    case .repairing(let missing):
+                        let currentText: String
+                        if case .running(let text) = self.phase {
+                            currentText = text
+                        } else {
+                            currentText = draft
+                        }
+                        self.phase = .repairing(partial: currentText, missing: missing)
+                    case .finished(let result):
+                        self.phase = .review(result)
                     }
                 }
-                if case .running = self.phase { self.phase = .idle }
+                if self.isRunning { self.phase = .idle }
             } catch is CancellationError {
                 self.phase = .idle
             } catch {

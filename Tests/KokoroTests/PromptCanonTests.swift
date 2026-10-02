@@ -9,6 +9,35 @@ struct PromptCanonTests {
     func rulesWithinLimit() {
         let words = PromptPrinciples.rules.split(whereSeparator: \.isWhitespace).count
         #expect(words <= PromptPrinciples.wordLimit)
+        #expect(PromptPrinciples.wordLimit == PromptPrinciples.defaultWordLimit)
+    }
+
+    @Test("word limit scales dynamically with model profile and context")
+    func dynamicWordLimitScaling() {
+        #expect(PromptPrinciples.wordLimit(for: .localSmall) == 120)
+        #expect(PromptPrinciples.wordLimit(for: .claude) == 250)
+        #expect(PromptPrinciples.wordLimit(for: .gpt) == 180)
+        #expect(PromptPrinciples.wordLimit(for: nil, contextLimit: 2_000) > 80)
+
+        // Custom override
+        PromptPrinciples.setCustomWordLimit(150)
+        #expect(PromptPrinciples.wordLimit == 150)
+        #expect(PromptPrinciples.wordLimit(for: .claude) == 150)
+        PromptPrinciples.setCustomWordLimit(nil)
+        #expect(PromptPrinciples.wordLimit == PromptPrinciples.defaultWordLimit)
+    }
+
+    @Test("tiered rules selection serves canonical rules to local models and expanded to cloud")
+    func tieredRulesSelection() {
+        #expect(PromptPrinciples.rules(for: .localSmall) == PromptPrinciples.rules)
+        #expect(PromptPrinciples.rules(for: nil) == PromptPrinciples.rules)
+        let claudeRules = PromptPrinciples.rules(for: .claude)
+        #expect(claudeRules.contains(PromptPrinciples.rules))
+        #expect(claudeRules.contains("9. Specify edge cases"))
+        #expect(claudeRules.contains("10. Preserve schema delimiters"))
+
+        let gptRules = PromptPrinciples.rules(for: .gpt)
+        #expect(gptRules.contains("10. Preserve schema delimiters"))
     }
 
     @Test("every fence neutralises every tag of ours, in any case", arguments: UntrustedContent.ownTags)

@@ -33,13 +33,16 @@ public enum GitDiffReader {
         init(maxBytes: Int) { self.maxBytes = maxBytes }
     }
 
+    private static let _ensureLibGit2Initialized: Void = {
+        _ = git_libgit2_init()
+    }()
+
     private static func lastError() -> String {
         giterr_last().map { String(cString: $0.pointee.message) } ?? "unknown error"
     }
 
     private static func read(root: URL, maxBytes: Int) throws -> String {
-        git_libgit2_init()
-        defer { git_libgit2_shutdown() }
+        _ = _ensureLibGit2Initialized
 
         var repo: OpaquePointer?
         let opened = git_repository_open_ext(&repo, root.path, 0, nil)
@@ -70,11 +73,14 @@ public enum GitDiffReader {
             let rc = git_diff_print(diff, GIT_DIFF_FORMAT_PATCH, { _, _, line, payload in
                 guard let line, let payload else { return 0 }
                 let sink = Unmanaged<Sink>.fromOpaque(payload).takeUnretainedValue()
-                let origin = UInt8(truncatingIfNeeded: Int(line.pointee.origin))
-                if origin == UInt8(ascii: "+") || origin == UInt8(ascii: "-") || origin == UInt8(ascii: " ") {
-                    sink.data.append(origin)
+                let origin = line.pointee.origin
+                if origin == CChar(UInt8(ascii: "+")) || origin == CChar(UInt8(ascii: "-")) || origin == CChar(UInt8(ascii: " ")) {
+                    sink.data.append(UInt8(origin))
                 }
-                sink.data.append(Data(bytes: line.pointee.content, count: line.pointee.content_len))
+                if line.pointee.content_len > 0, let content = line.pointee.content {
+                    let buffer = UnsafeRawBufferPointer(start: content, count: line.pointee.content_len)
+                    sink.data.append(contentsOf: buffer)
+                }
                 if sink.data.count > sink.maxBytes { sink.truncated = true; return 1 }
                 return 0
             }, Unmanaged.passUnretained(sink).toOpaque())
@@ -93,7 +99,7 @@ public enum GitDiffReader {
                 try diffAndPrint(&opts)
             }
         }
-        return cut(String(decoding: sink.data, as: UTF8.self), maxBytes: maxBytes, truncated: sink.truncated)
+        return cut(sink.data, maxBytes: maxBytes, truncated: sink.truncated)
     }
 
     /// `root` relative to the repository's working directory ("" at the top).
@@ -105,10 +111,17 @@ public enum GitDiffReader {
         return String(path.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
-    private static func cut(_ text: String, maxBytes: Int, truncated: Bool) -> String {
-        guard truncated || text.utf8.count > maxBytes else { return text }
-        var kept = String(decoding: Array(text.utf8.prefix(maxBytes)), as: UTF8.self)
-        if let newline = kept.lastIndex(of: "\n") { kept = String(kept[..<newline]) }
-        return kept + "\n" + cutMarker
+    private static func cut(_ data: Data, maxBytes: Int, truncated: Bool) -> String {
+        guard truncated || data.count > maxBytes else {
+            return String(decoding: data, as: UTF8.self)
+        }
+        var end = min(maxBytes, data.count)
+        if let newline = data[..<end].lastIndex(of: UInt8(ascii: "\n")) {
+            end = newline
+        }
+        var sliced = data[..<end]
+        sliced.append(UInt8(ascii: "\n"))
+        sliced.append(contentsOf: cutMarker.utf8)
+        return String(decoding: sliced, as: UTF8.self)
     }
 }

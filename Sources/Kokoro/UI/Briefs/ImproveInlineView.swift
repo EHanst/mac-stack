@@ -33,6 +33,7 @@ struct ImproveInlineView: View {
                 notice
                 switch improve.optimizerPhase {
                 case .running(let partial): runningBox(partial)
+                case .repairing(let partial, _): runningBox(partial)
                 default: revisionBox
                 }
             }
@@ -55,9 +56,18 @@ struct ImproveInlineView: View {
         HStack {
             if isRunning {
                 ProgressView().scaleEffect(0.6).frame(width: 14, height: 14)
-                Text("Improving…").font(.mtBodySmall)
-                Text("A model on this Mac can take a little while.")
-                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                if case .repairing(_, let missing) = improve.optimizerPhase {
+                    Text("Restoring omitted terms…").font(.mtBodySmall)
+                    if !missing.isEmpty {
+                        Text(missing.prefix(3).joined(separator: ", "))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(Color.mtOnSurfaceVariant)
+                    }
+                } else {
+                    Text("Improving…").font(.mtBodySmall)
+                    Text("A model on this Mac can take a little while.")
+                        .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                }
                 Spacer()
                 Button("Cancel") { improve.cancelOptimize(studio: studio) }.buttonStyle(MTTextButtonStyle())
             } else {
@@ -272,8 +282,10 @@ struct ImproveInlineView: View {
     }
 
     private var isRunning: Bool {
-        if case .running = improve.optimizerPhase { return true }
-        return false
+        switch improve.optimizerPhase {
+        case .running, .repairing: return true
+        default: return false
+        }
     }
 
     private static func modelLabel(_ id: String) -> String {
@@ -288,8 +300,10 @@ struct ImproveActionBar: View {
     private var studio: PromptStudioModel { services.promptStudio }
 
     private var isRunning: Bool {
-        if case .running = improve.optimizerPhase { return true }
-        return false
+        switch improve.optimizerPhase {
+        case .running, .repairing: return true
+        default: return false
+        }
     }
 
     var body: some View {

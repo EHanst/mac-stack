@@ -104,6 +104,8 @@ public struct Optimization: Sendable, Equatable {
 public enum OptimizerEvent: Sendable {
     /// The rewrite so far, as it streams in.
     case partial(String)
+    /// A repair pass is running in the background to restore dropped terms, keeping the last draft frozen on screen.
+    case repairing(missing: [String])
     case finished(Optimization)
 }
 
@@ -165,7 +167,7 @@ public struct PromptOptimizer: Sendable {
                 let route = RouteBox()
                 do {
                     // One pass: stream a reply for `messages` and return it whole.
-                    func pass(_ messages: [Message], budget: Int) async throws -> String {
+                    func pass(_ messages: [Message], budget: Int, yieldPartials: Bool = true) async throws -> String {
                         let stream = try await inference.generate(
                             messages: messages, tools: [],
                             options: GenerationOptions(maxTokens: budget, sampling: .rewrite),
@@ -180,7 +182,7 @@ public struct PromptOptimizer: Sendable {
                         for try await event in stream {
                             if case .token(let t) = event {
                                 raw += t
-                                if let partial = Self.partialImproved(raw) { continuation.yield(.partial(partial)) }
+                                if yieldPartials, let partial = Self.partialImproved(raw) { continuation.yield(.partial(partial)) }
                             }
                         }
                         return raw
@@ -191,13 +193,14 @@ public struct PromptOptimizer: Sendable {
                     // Dropped literals are systematic and easy to name, so give the model one chance to put
                     // them back before giving up on the rewrite.
                     if let missing = result.rejection?.missing, !missing.isEmpty, !Task.isCancelled {
+                        continuation.yield(.repairing(missing: missing))
                         let repair = Self.repairMessages(messages, reply: raw, missing: missing)
                         var repairRoom = room
                         if servedLocally, let limit = await inference.localContextLimit() {
                             repairRoom = limit - InferenceService.estimateTokens(repair) - Self.safetyMargin
                         }
                         if repairRoom >= Self.minimumRoom {
-                            let second = try await pass(repair, budget: repairRoom)
+                            let second = try await pass(repair, budget: repairRoom, yieldPartials: false)
                             let retried = Self.result(raw: second, original: trimmed, mode: mode, model: route.value, ceiling: room)
                             if retried.rejection == nil { result = retried }
                         }
@@ -314,7 +317,7 @@ public struct PromptOptimizer: Sendable {
             if !concise {
                 lines.append("")
                 lines.append("Apply these principles to the rewrite:")
-                lines.append(PromptPrinciples.rules)
+                lines.append(PromptPrinciples.rules(for: context.profile))
             }
         }
         lines.append("")
