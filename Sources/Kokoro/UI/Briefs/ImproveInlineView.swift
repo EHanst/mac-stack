@@ -31,10 +31,10 @@ struct ImproveInlineView: View {
             topRow.frame(height: 28)
             VStack(alignment: .leading, spacing: 8) {
                 notice
-                switch improve.optimizerPhase {
-                case .running(let partial): runningBox(partial)
-                case .repairing(let partial, _): runningBox(partial)
-                default: revisionBox
+                if isRunning || tab == .result {
+                    resultScroll
+                } else {
+                    revisionBox
                 }
             }
             .padding(10)
@@ -116,28 +116,36 @@ struct ImproveInlineView: View {
 
     // MARK: Boxes
 
-    private func runningBox(_ partial: String) -> some View {
-        // Until the first words arrive, keep showing the text being improved so nothing blanks out.
-        let waiting = partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return ScrollView {
+    /// One ScrollView for both the streaming text and the finished Result, so the user's scroll
+    /// position survives the swap instead of snapping to the top when the rewrite lands.
+    private var resultScroll: some View {
+        ScrollView {
             Group {
-                if waiting {
-                    Text(improve.revision).opacity(0.5)
-                } else {
-                    Text(partial)
+                switch improve.optimizerPhase {
+                case .running(let partial), .repairing(let partial, _):
+                    // Until the first words arrive, keep showing the text being improved so nothing blanks out.
+                    if partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        streamingText(improve.revision).opacity(0.5)
+                    } else {
+                        streamingText(partial)
+                    }
+                default:
+                    MarkdownText(text: improve.revision)
                 }
             }
-            .font(.mtBodyMedium)
-            .lineSpacing(3)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func streamingText(_ text: String) -> some View {
+        Text(text).font(.mtBodyMedium).lineSpacing(3)
     }
 
     @ViewBuilder
     private var revisionBox: some View {
         switch tab {
         case .result:
-            ScrollView { MarkdownText(text: improve.revision) }
+            EmptyView()
         case .changes:
             changesList
         case .edit:
