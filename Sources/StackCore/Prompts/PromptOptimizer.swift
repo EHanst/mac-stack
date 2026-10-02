@@ -176,7 +176,7 @@ public struct PromptOptimizer: Sendable {
                     return
                 }
                 // The only limit on the reply is what the hardware and model can hold.
-                let budget = room
+                let budget = min(room, context.tuning?.replyCap[mode] ?? room)
                 let route = RouteBox()
                 do {
                     // One pass: stream a reply for `messages` and return it whole.
@@ -201,6 +201,14 @@ public struct PromptOptimizer: Sendable {
                         return raw
                     }
                     var raw = try await pass(messages, budget: budget)
+                    // A reply that used up a model's own reply cap without closing is a runaway, not a long answer.
+                    if budget < room, !raw.contains("</improved>"), !raw.contains("<questions>") {
+                        continuation.yield(.finished(Optimization(
+                            original: draft, improved: draft, changes: [], questions: [], model: route.value,
+                            rejection: .init(reason: "The model ran on without finishing, so I kept your version.", missing: []))))
+                        continuation.finish()
+                        return
+                    }
                     var result = Self.result(raw: raw, original: trimmed, mode: mode, model: route.value, ceiling: room)
 
                     // Dropped literals are exact strings, so put them back by program; only plain words the

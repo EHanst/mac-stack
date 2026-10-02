@@ -8,19 +8,25 @@ public struct OptimizerTuning: Sendable, Equatable {
     /// Extra rules appended to the rewrite request, per mode, for a model that needs steering the baseline doesn't.
     public var extraRules: [OptimizeMode: String]
 
-    public init(sampling: SamplingParameters = .rewrite, extraRules: [OptimizeMode: String] = [:]) {
+    /// Hard ceiling on the reply per mode, for a model that can fall into a repetition loop. A reply that hits it
+    /// is rejected as too big and the user's draft is kept, instead of waiting out the whole context.
+    public var replyCap: [OptimizeMode: Int]
+
+    public init(sampling: SamplingParameters = .rewrite, extraRules: [OptimizeMode: String] = [:],
+                replyCap: [OptimizeMode: Int] = [:]) {
         self.sampling = sampling
         self.extraRules = extraRules
+        self.replyCap = replyCap
     }
 
     public static let standard = OptimizerTuning()
 
     /// Qwen3.5-9B writes about a quarter more than the 4B and adds sections the request never asked for.
     public static let qwen35_9b = OptimizerTuning(extraRules: [
-        .adapt: "Add nothing the draft does not say, and state each requirement once.",
+        .adapt: "Add nothing the draft does not say.",
         .improve: "State each requirement once, and leave out any section the request gives nothing for.",
         .expand: "State each requirement once, and leave out any section the request gives nothing for.",
-    ])
+    ], replyCap: [.adapt: 600])
 
     /// The tuning for the model that will answer, recognised by its provider id (`local:<folder>`).
     public static func forModel(_ id: ProviderID?) -> OptimizerTuning {

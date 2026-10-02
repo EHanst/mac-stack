@@ -42,3 +42,12 @@ struct OptimizerTuningTests {
         #expect(!text(with, .expand).contains("Keep it short."))
     }
 }
+
+@Suite("OptimizerTuning reply cap")
+struct OptimizerTuningCapTests {
+    @Test("only the 9B caps adapt replies; the baseline has no cap")
+    func caps() {
+        #expect(OptimizerTuning.qwen35_9b.replyCap[.adapt] != nil)
+        #expect(OptimizerTuning.standard.replyCap.isEmpty)
+    }
+}
