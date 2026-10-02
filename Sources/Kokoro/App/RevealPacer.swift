@@ -8,14 +8,14 @@ import Foundation
 /// once the stream has ended so the tail finishes promptly. Pure, so every rule is unit-tested.
 public struct RevealPacer: Equatable, Sendable {
     public static let baseRate = 110.0      // glyphs/second when caught up: snappy, still visible
-    public static let maxLag = 0.30         // seconds; time constant for draining a backlog
-    public static let settleRate = 700.0    // once the stream has ended
+    public static let maxLag = 0.12         // seconds; time constant for draining a backlog
+    public static let settleRate = 3000.0   // once the stream has ended
     public static let fadeDuration = 2.0    // seconds each glyph takes to fade in
     public static let edgeRange = 24.0...800.0
     public static let idleReset = 0.25      // seconds caught up before the next block restarts the slow start
     public static let idleSettle = 6.0      // how fast the fade edge tightens while waiting for more text
     public static let startRate = 15.0      // glyphs/second on the first frame: the cursor sets off slowly
-    public static let rampDuration = 1.5    // seconds to ease from startRate up to the full rate
+    public static let rampDuration = 1.0    // seconds to ease from startRate up to the full rate
     public static let maxStep = 0.1         // a stalled frame never jumps the cursor further than this
 
     /// Cursor position, in glyphs from the start of the text.

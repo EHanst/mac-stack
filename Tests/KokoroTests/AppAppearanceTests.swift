@@ -49,7 +49,7 @@ struct RevealPacerTests {
     @Test("caught-up text moves at the base rate")
     func baseRate() {
         var p = RevealPacer(elapsed: RevealPacer.rampDuration)
-        p.advance(dt: 0.1, target: 30, streaming: true)   // backlog 30 -> 100/s, below base
+        p.advance(dt: 0.1, target: 12, streaming: true)   // backlog 12 -> 100/s, below base
         #expect(abs(p.position - RevealPacer.baseRate * 0.1) < 0.0001)
     }
 
@@ -121,7 +121,7 @@ struct RevealPacerTests {
     func slowStartThenSpeedsUp() {
         var p = RevealPacer()
         p.advance(dt: 0.016, target: 10_000, streaming: true)
-        #expect(p.rate < 60)
+        #expect(p.rate < 120)
         var last = p.rate
         for _ in 0..<40 {
             p.advance(dt: 0.05, target: p.position + 10_000, streaming: true)   // a steady backlog
@@ -137,7 +137,7 @@ struct RevealPacerTests {
         p.advance(dt: 0.05, target: 5, streaming: true)
         for _ in 0..<10 { p.advance(dt: 0.05, target: 5, streaming: true) }   // caught up, 0.5s idle
         p.advance(dt: 0.016, target: 10_000, streaming: true)
-        #expect(p.rate < 60)
+        #expect(p.rate < 120)
         var q = RevealPacer(elapsed: RevealPacer.rampDuration)
         q.advance(dt: 0.05, target: 5, streaming: true)
         q.advance(dt: 0.05, target: 5, streaming: true)                        // 0.05s idle
