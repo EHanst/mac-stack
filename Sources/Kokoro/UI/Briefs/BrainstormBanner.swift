@@ -17,6 +17,8 @@ struct BrainstormBanner: View {
     var body: some View {
         if let brief = workbench.selected {
             content(brief)
+                // Opening the popover always brainstorms the current text (a no-op when already done).
+                .task { feedback.refreshBrainstorm(brief: brief) }
         }
     }
 
@@ -64,9 +66,12 @@ struct BrainstormBanner: View {
             }
             .padding(12)
         } else {
-            Text("No suggestions yet. They appear after the brief is edited.")
-                .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
-                .padding(12)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("No suggestions for this brief.")
+                    .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
+                Button("Brainstorm again") { feedback.refreshBrainstorm(brief: brief, force: true) }
+            }
+            .padding(12)
         }
     }
 }

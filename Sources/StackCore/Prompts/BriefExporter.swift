@@ -61,4 +61,39 @@ public enum BriefExporter {
         try Data(text.utf8).write(to: file, options: .atomic)
         return file
     }
+
+    /// The `.md` files under `<root>/.vibe/briefs/`, newest first.
+    public static func savedFiles(inProjectRoot root: URL) -> [URL] {
+        let dir = root.appendingPathComponent(".vibe/briefs", isDirectory: true)
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        func modified(_ u: URL) -> Date { (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
+        return urls.filter { $0.pathExtension.lowercased() == "md" }.sorted { modified($0) > modified($1) }
+    }
+
+    /// Title and body of a saved or hand-written markdown file. Front matter, when present, supplies the
+    /// title and is dropped from the body; otherwise the first non-empty line titles it. nil when empty.
+    public static func parse(_ text: String, fallbackTitle: String) -> (title: String, body: String)? {
+        var body = text
+        var title: String?
+        if text.hasPrefix("---\n"), let end = text.range(of: "\n---\n", range: text.index(text.startIndex, offsetBy: 3)..<text.endIndex) {
+            for line in text[text.index(text.startIndex, offsetBy: 4)..<end.lowerBound].split(separator: "\n") where line.hasPrefix("title:") {
+                var v = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+                if v.hasPrefix("\""), v.hasSuffix("\""), v.count >= 2 {
+                    v = String(v.dropFirst().dropLast())
+                        .replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\\\", with: "\\")
+                }
+                title = v
+            }
+            body = String(text[end.upperBound...])
+        }
+        body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return nil }
+        if title?.isEmpty != false {
+            let first = body.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+            let cleaned = first.drop { $0 == "#" || $0 == " " }
+            title = cleaned.isEmpty ? fallbackTitle : String(cleaned.prefix(60))
+        }
+        return (title!, body)
+    }
 }

@@ -13,6 +13,7 @@ struct BriefStudioView: View {
     @State private var draft = ""
     @State private var continuing = false
     @State private var showBrainstorm = false
+    @State private var loadError: String?
     @FocusState private var inputFocused: Bool
 
     private var model: BriefWorkbenchModel { services.briefs }
@@ -28,6 +29,14 @@ struct BriefStudioView: View {
         VStack(spacing: 0) {
             topBar
             continuationStatus
+            if let loadError {
+                HStack {
+                    Text(loadError).font(.mtBodySmall).foregroundStyle(Color.mtError)
+                    Button { self.loadError = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.bottom, 6)
+            }
             MTDivider()
             if fresh { welcome } else { BriefPane() }
             MTDivider()
@@ -75,7 +84,16 @@ struct BriefStudioView: View {
                     }
                 }
                 if model.briefs.isEmpty { Text("No briefs yet") }
+                if !model.savedFiles.isEmpty {
+                    Divider()
+                    Section("Saved files") {
+                        ForEach(model.savedFiles.prefix(15)) { file in
+                            Button(file.title) { load(file.url) }
+                        }
+                    }
+                }
                 Divider()
+                Button("Load from file…") { pickFileToLoad() }.hotkey(.loadFile)
                 Menu("New from template") {
                     ForEach(BriefTemplate.allCases, id: \.self) { template in
                         Button(template.rawValue) {
@@ -99,6 +117,8 @@ struct BriefStudioView: View {
             }
             .menuStyle(.button)
             .fixedSize()
+            .task { await model.refreshSavedFiles() }
+            .onHover { if $0 { Task { await model.refreshSavedFiles() } } }
 
             if !fresh {
                 if let brief = model.selected {
@@ -109,10 +129,9 @@ struct BriefStudioView: View {
                         .clipShape(Capsule())
                 }
                 Button { showBrainstorm = true } label: {
-                    Label { Text(brainstormLabel) } icon: {
-                        Image(systemName: "lightbulb")
-                    }
+                    HotkeyLabel(title: brainstormLabel, systemImage: "lightbulb", hotkey: .brainstorm)
                 }
+                .hotkey(.brainstorm)
                 .popover(isPresented: $showBrainstorm, arrowEdge: .bottom) {
                     ScrollView {
                         BrainstormBanner { question in
@@ -126,7 +145,8 @@ struct BriefStudioView: View {
                 BrainstormAutoRefresh()
             }
             Spacer()
-            Button { startOver() } label: { Label("Start over", systemImage: "arrow.counterclockwise") }
+            Button { startOver() } label: { HotkeyLabel(title: "Start over", systemImage: "arrow.counterclockwise", hotkey: .startOver) }
+                .hotkey(.startOver)
                 .help("Clear everything so what you type next starts a new brief")
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
@@ -149,6 +169,25 @@ struct BriefStudioView: View {
                 .multilineTextAlignment(.center).frame(maxWidth: 380)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func load(_ url: URL) {
+        Task {
+            if let error = await model.loadBrief(from: url) { loadError = error } else { services.sidecar.clear() }
+            await model.refreshSavedFiles()
+        }
+    }
+
+    private func pickFileToLoad() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.init(filenameExtension: "md"), .plainText].compactMap { $0 }
+        panel.prompt = "Load"
+        if let root = model.savedFiles.first?.url.deletingLastPathComponent() { panel.directoryURL = root }
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        load(url)
     }
 
     private func startOver() {
@@ -228,12 +267,20 @@ struct BriefInputBar: View {
                     .clipShape(RoundedRectangle(cornerRadius: Radius.card))
                     .onSubmit { send() }
                 if improving {
-                    Button("Undo") { improve.undoEdit() }.disabled(!improve.canUndoEdit)
+                    Button { improve.undoEdit() } label: { Text("Undo") }
+ .disabled(!improve.canUndoEdit)
+                        .help("Undo your last instruction. The rewrite stays open.")
                 } else if !fresh, let brief = model.selected {
-                    Button("Undo") { feedback.undo(briefID: brief.id) }
+                    Button { feedback.undo(briefID: brief.id) } label: { Text("Undo") }
                         .disabled(!feedback.canUndo(briefID: brief.id))
                 }
-                Button { send() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 28)) }
+                Button { send() } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 28))
+                        Text(Hotkey.send.glyph).font(.mtLabelSmall)
+                    }
+                }
+                    .hotkey(.send)
                     .buttonStyle(.plain)
                     .foregroundStyle(blank || editing ? Color.mtOnSurfaceVariant.opacity(0.4) : Color.mtPrimary)
                     .disabled(blank || editing)

@@ -19,6 +19,7 @@ struct BriefPane: View {
     @State private var exportRoots: [URL] = []
     @State private var exportMessage: String?
     @State private var copyNote: String?
+    @State private var originalExpanded = false
 
     private var model: BriefWorkbenchModel { services.briefs }
     private var improve: BriefImproveModel { services.improve }
@@ -40,10 +41,11 @@ struct BriefPane: View {
                 if improving {
                     ImproveInlineView(brief: brief)
                 } else {
+                    originalDraft(brief)
                     editor(brief, compiled: compiled)
                 }
                 statusLine(brief, compiled)
-                // Same slot either way: Copy and Save while editing, Save and Discard while improving.
+                // Same slot either way: Copy and Save while editing, Save and Discard rewrite while improving.
                 Group {
                     if improving { ImproveActionBar() } else { copyBar }
                 }
@@ -70,10 +72,39 @@ struct BriefPane: View {
     /// Improve is the main step until the brief has been improved; after that Copy takes over.
     @ViewBuilder
     private func improveButton(_ brief: Brief, empty: Bool) -> some View {
-        let button = Button("Improve") { improve.open(brief, studio: services.promptStudio) }
+        let button = Button { improve.open(brief, studio: services.promptStudio) } label: { HotkeyLabel(title: "Improve", hotkey: .improve) }
             .disabled(empty)
-            .keyboardShortcut("i", modifiers: [.command, .shift])
+            .hotkey(.improve)
         if brief.isEdited { button } else { button.buttonStyle(MTFilledButtonStyle()) }
+    }
+
+    /// The first thing typed, kept in view for reference once the brief has been rewritten.
+    /// Three lines by default; click to show it all.
+    @ViewBuilder
+    private func originalDraft(_ brief: Brief) -> some View {
+        let draft = brief.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if brief.body != nil, !draft.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Button { originalExpanded.toggle() } label: {
+                    Label("Original draft", systemImage: originalExpanded ? "chevron.down" : "chevron.right")
+                        .font(.mtLabelSmall)
+                }
+                .buttonStyle(.plain).foregroundStyle(Color.mtOnSurfaceVariant)
+                if originalExpanded {
+                    ScrollView {
+                        Text(draft).font(.mtBodySmall).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 160)
+                } else {
+                    Text(draft).font(.mtBodySmall).lineLimit(3).foregroundStyle(Color.mtOnSurfaceVariant)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(10)
+            .background(Color.mtSurfaceContainerHigh)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
     }
 
     private func editor(_ brief: Brief, compiled: CompiledPrompt) -> some View {
@@ -84,9 +115,15 @@ struct BriefPane: View {
                     get: { viewMode },
                     set: { viewMode = $0 }
                 )) {
-                    ForEach(BriefViewMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    ForEach(BriefViewMode.allCases, id: \.self) { Text("\($0.label)  \(Self.hotkey(for: $0).glyph)").tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .background {
+                    // Segments cannot carry shortcuts themselves, so hidden buttons do.
+                    ForEach(BriefViewMode.allCases, id: \.self) { mode in
+                        Button("") { viewMode = mode }.hotkey(Self.hotkey(for: mode)).hidden()
+                    }
+                }
                 if viewMode == .machine {
                     let compact = BriefCompiler.compile(brief, compact: true)
                     let savings = TokenSavings.percent(plain: compiled.tokens, compact: compact.tokens)
@@ -97,10 +134,11 @@ struct BriefPane: View {
                     Text("For programs that parse the brief · ~\(json.tokens) tokens")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 } else {
-                    Toggle("Edit", isOn: $editingHuman).toggleStyle(.button).controlSize(.small)
+                    Toggle(isOn: $editingHuman) { HotkeyLabel(title: "Edit", hotkey: .edit) }
+                        .toggleStyle(.button).controlSize(.small).hotkey(.edit)
                 }
                 Spacer()
-                Button("Revert") { model.restoreVersion(brief.versions.count - 1) }
+                Button { model.restoreVersion(brief.versions.count - 1) } label: { Text("Revert") }
                     .disabled(!brief.isEdited || brief.versions.isEmpty)
                     .help("Put back the previous version. What you have now is saved first, so this can be undone.")
                 improveButton(brief, empty: empty)
@@ -168,12 +206,8 @@ struct BriefPane: View {
     private func targetPicker(_ brief: Brief) -> some View {
         HStack(spacing: 16) {
             Picker("Target model", selection: Binding(get: { brief.target.modelFamily },
-                                                      set: { model.setTarget(modelFamily: $0, surface: brief.target.surface) })) {
+                                                      set: { model.setTarget(modelFamily: $0) })) {
                 Text("Claude").tag("claude"); Text("GPT").tag("gpt"); Text("Gemini").tag("gemini"); Text("Reasoning").tag("reasoning"); Text("Local").tag("local"); Text("Other").tag("generic")
-            }
-            Picker("Where", selection: Binding(get: { brief.target.surface },
-                                               set: { model.setTarget(modelFamily: brief.target.modelFamily, surface: $0) })) {
-                ForEach(Surface.allCases, id: \.self) { Text($0.displayName).tag($0) }
             }
             Spacer()
         }
@@ -203,37 +237,43 @@ struct BriefPane: View {
         let primary = model.selected?.isEdited == true ? lastCopy : nil
         return HStack {
             copyButton(.machine, primary: primary, empty: empty, title: "Copy for machine", icon: "cpu",
-                       help: "Compact, data-dense text that uses fewer tokens")
-                .keyboardShortcut("c", modifiers: [.command, .shift])
+                       help: "Compact, data-dense text that uses fewer tokens", hotkey: .copyMachine)
             if viewMode == .json {
                 copyButton(.json, primary: primary, empty: empty, title: "Copy JSON", icon: "curlybraces",
-                           help: "Pretty-printed JSON")
+                           help: "Pretty-printed JSON", hotkey: nil)
                 copyButton(.jsonMinified, primary: primary, empty: empty, title: "Minified", icon: "arrow.down.right.and.arrow.up.left",
-                           help: "The same JSON on one line, for pipelines")
+                           help: "The same JSON on one line, for pipelines", hotkey: nil)
             }
-            copyButton(.standard, primary: primary, empty: empty, title: "Copy", icon: "doc.on.doc", help: "Readable text")
-                .keyboardShortcut("c", modifiers: [.command, .option])
+            copyButton(.standard, primary: primary, empty: empty, title: "Copy", icon: "doc.on.doc", help: "Readable text", hotkey: .copyReadable)
             Menu("Save to project") {
-                ForEach(exportRoots, id: \.self) { root in
-                    Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }
+                ForEach(Array(exportRoots.enumerated()), id: \.element) { index, root in
+                    let save = Button(root.lastPathComponent) { exportMessage = model.exportSelected(to: root) }
+                    if index == 0 { save.hotkey(.save) } else { save }
                 }
                 if !exportRoots.isEmpty { Divider() }
-                Button("Add folder…") { addFolderAndSave() }
+                let add = Button("Add folder…") { addFolderAndSave() }
+                if exportRoots.isEmpty { add.hotkey(.save) } else { add }
             }
+            .help("Save to the first project (\(Hotkey.save.glyph))")
             .disabled(empty)
             .onHover { if $0 { Task { exportRoots = await model.exportRoots() } } }
-            Button("Versions") { showVersions = true }
+            Button { showVersions = true } label: { Text("Versions") }
                 .disabled(model.selected?.versions.isEmpty ?? true)
         }
     }
 
     @ViewBuilder
-    private func copyButton(_ kind: CopyKind, primary: CopyKind?, empty: Bool, title: String, icon: String, help: String) -> some View {
+    private func copyButton(_ kind: CopyKind, primary: CopyKind?, empty: Bool, title: String, icon: String, help: String, hotkey: Hotkey?) -> some View {
         let button = Button { copy(kind) } label: {
-            Label(copied == kind ? "Copied" : title, systemImage: icon)
+            if let hotkey {
+                HotkeyLabel(title: copied == kind ? "Copied" : title, systemImage: icon, hotkey: hotkey)
+            } else {
+                Label(copied == kind ? "Copied" : title, systemImage: icon)
+            }
         }
         .help(help)
         .disabled(empty)
+        .background { if let hotkey { Button("") { copy(kind) }.hotkey(hotkey).hidden().disabled(empty) } }
         if primary == kind { button.buttonStyle(MTFilledButtonStyle()) } else { button }
     }
 
@@ -254,6 +294,10 @@ struct BriefPane: View {
                 exportMessage = model.exportSelected(to: folder)
             }
         }
+    }
+
+    private static func hotkey(for mode: BriefViewMode) -> Hotkey {
+        switch mode { case .human: .viewHuman; case .machine: .viewMachine; case .json: .viewJSON }
     }
 
     private func copy(_ kind: CopyKind) {

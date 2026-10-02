@@ -88,7 +88,7 @@ public final class BriefImproveModel {
     }
 
     public func acceptAndContinue(studio: PromptStudioModel) {
-        guard let id = briefID, let brief = currentBrief() else { return }
+        guard let id = briefID, currentBrief() != nil else { return }
         let text = revision.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !studio.isRunning else { return }
         commit(text, briefID: id)
@@ -172,6 +172,16 @@ public final class BriefImproveModel {
         chatEditPhase = .idle
     }
 
+    public func improve(studio: PromptStudioModel) {
+        guard currentBrief() != nil, !studio.isRunning else { return }
+        let base = revision.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return }
+        persistDraft()
+        undoStack.removeAll()
+        mustNotShrink = false
+        startOptimize(base, studio: studio, mode: .improve)
+    }
+
     public func expand(studio: PromptStudioModel, finer: Bool = false) {
         guard currentBrief() != nil, !studio.isRunning else { return }
         let base = revision.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -180,6 +190,11 @@ public final class BriefImproveModel {
         undoStack.removeAll()
         mustNotShrink = false
         startOptimize(base, studio: studio, mode: .expand, finer: finer)
+    }
+
+    public func dismissNotice(studio: PromptStudioModel? = nil) {
+        studio?.dismissReview()
+        optimizerPhase = .idle
     }
 
     public func cancelOptimize(studio: PromptStudioModel) {

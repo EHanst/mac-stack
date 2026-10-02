@@ -74,4 +74,31 @@ struct BriefExporterTests {
         let name = BriefExporter.fileName(for: brief(title: "Deploy with AKIAIOSFODNN7EXAMPLE now"))
         #expect(!name.lowercased().contains("akiaiosfodnn7example"))
     }
+
+    @Test("a saved file parses back into its title and body")
+    func parseSaved() throws {
+        let root = tempRoot()
+        let file = try BriefExporter.export(brief(), toProjectRoot: root)
+        let parsed = try #require(BriefExporter.parse(try String(contentsOf: file, encoding: .utf8), fallbackTitle: "x"))
+        #expect(parsed.title == "Fix login timeout")
+        #expect(!parsed.body.hasPrefix("---"))
+        #expect(parsed.body.contains("retry"))
+    }
+
+    @Test("a plain markdown file without front matter loads whole, titled by its first line or the fallback")
+    func parsePlain() {
+        let p = BriefExporter.parse("# Notes\nDo X", fallbackTitle: "notes")
+        #expect(p?.title == "Notes")
+        #expect(p?.body == "# Notes\nDo X")
+        #expect(BriefExporter.parse("  \n", fallbackTitle: "notes") == nil)
+    }
+
+    @Test("saved files in a project are listed newest first, other files ignored")
+    func listSaved() throws {
+        let root = tempRoot()
+        let file = try BriefExporter.export(brief(), toProjectRoot: root)
+        try Data("x".utf8).write(to: file.deletingLastPathComponent().appendingPathComponent("note.txt"))
+        #expect(BriefExporter.savedFiles(inProjectRoot: root).map(\.lastPathComponent) == [file.lastPathComponent])
+        #expect(BriefExporter.savedFiles(inProjectRoot: tempRoot()).isEmpty)
+    }
 }

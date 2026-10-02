@@ -37,6 +37,12 @@ public struct TargetProfile: Codable, Sendable, Equatable {
         self.tokenBudget = tokenBudget
     }
 
+    /// The surface follows the model: Claude is assumed to run in Claude Code (reads the repo itself);
+    /// every other family gets files inlined.
+    public static func make(modelFamily: String) -> TargetProfile {
+        make(modelFamily: modelFamily, surface: modelFamily == "claude" ? .claudeCode : .other)
+    }
+
     public static func make(modelFamily: String, surface: Surface) -> TargetProfile {
         let target = TargetProfile(modelFamily: modelFamily, surface: surface, tokenBudget: 0)
         return TargetProfile(modelFamily: modelFamily, surface: surface, tokenBudget: target.model.maxUsefulTokens)
