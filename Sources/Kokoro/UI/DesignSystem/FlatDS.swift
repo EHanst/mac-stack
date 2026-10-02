@@ -1,6 +1,7 @@
 #if canImport(AppKit)
 #if SWIFT_PACKAGE
 import KokoroCore
+import StackCore
 #endif
 import SwiftUI
 
@@ -468,6 +469,42 @@ struct MTProgressChip: View {
         .background(Color.mtSurfaceContainerHighest)
         .clipShape(Capsule())
         .foregroundStyle(Color.mtOnSurface)
+    }
+}
+#endif
+
+// MARK: - Hotkeys
+
+#if canImport(AppKit)
+extension Hotkey {
+    var keyEquivalent: KeyEquivalent { KeyEquivalent(key) }
+    var modifiers: EventModifiers {
+        var m: EventModifiers = []
+        if command { m.insert(.command) }
+        if shift { m.insert(.shift) }
+        if option { m.insert(.option) }
+        return m
+    }
+}
+
+extension View {
+    /// Binds the shortcut. The glyph is shown by `HotkeyLabel` or, for icon-only buttons, by `hotkeyHelp`.
+    func hotkey(_ hotkey: Hotkey) -> some View { keyboardShortcut(hotkey.keyEquivalent, modifiers: hotkey.modifiers) }
+    func hotkeyHelp(_ text: String, _ hotkey: Hotkey) -> some View { help("\(text) (\(hotkey.glyph))") }
+}
+
+/// A button label with its shortcut shown at the trailing edge.
+struct HotkeyLabel: View {
+    let title: String
+    var systemImage: String?
+    let hotkey: Hotkey
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let systemImage { Image(systemName: systemImage) }
+            Text(title)
+            Text(hotkey.glyph).font(.mtLabelSmall).opacity(0.6)
+        }
     }
 }
 #endif

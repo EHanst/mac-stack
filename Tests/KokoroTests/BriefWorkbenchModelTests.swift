@@ -59,13 +59,13 @@ struct BriefWorkbenchModelTests {
         #expect(m.copyText(for: nil).isEmpty)
     }
 
-    @Test("changing surface keeps section text and recompiles")
+    @Test("changing the model infers the surface and keeps section text")
     func surface() async {
         let (m, _) = make()
         await m.newBrief(title: "t")
         m.setInput("Do X")
-        m.setTarget(modelFamily: "claude", surface: .chatGPTWeb)
-        #expect(m.selected?.target.surface == .chatGPTWeb)
+        m.setTarget(modelFamily: "gpt")
+        #expect(m.selected?.target.surface == .other)
         #expect(m.selected?.input == "Do X")
     }
 
@@ -77,6 +77,17 @@ struct BriefWorkbenchModelTests {
         let before = m.selected?.target
         _ = m.copyText(for: .claudeCode)
         #expect(m.selected?.target == before)
+    }
+
+    @Test("loading a markdown file makes it a new selected brief")
+    func loadFromFile() async throws {
+        let (m, _) = make()
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("load-\(UUID().uuidString).md")
+        try "---\ntitle: \"Loaded one\"\n---\n\nDo the thing".write(to: url, atomically: true, encoding: .utf8)
+        #expect(await m.loadBrief(from: url) == nil)
+        #expect(m.selected?.title == "Loaded one")
+        #expect(m.selected?.input == "Do the thing")
+        #expect(await m.loadBrief(from: url.appendingPathExtension("missing")) != nil)
     }
 
     @Test("deleting the selected brief selects a neighbor, then nothing")
@@ -180,7 +191,7 @@ struct BriefWorkbenchModelTests {
         brief.contextItems = [ContextItem(kind: .snippet, ref: "a.swift", text: big, mode: .inline)]
         m.replaceSelected(with: brief)
         let before = m.compiled?.warnings.map(\.code) ?? []
-        m.setTarget(modelFamily: "claude", surface: .chatGPTWeb)
+        m.setTarget(modelFamily: "gpt")
         #expect(m.selected?.input == "Do X")
         #expect(m.compiled != nil)
         #expect(before.contains(.overBudget) || before.contains(.itemDowngraded) || before.contains(.itemDropped))

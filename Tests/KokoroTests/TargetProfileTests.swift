@@ -48,4 +48,10 @@ struct TargetProfileTests {
         #expect(t.model.structure == .xmlTags)
         #expect(TargetProfile.make(modelFamily: "claude", surface: .claudeDesktop).model == .claude)
     }
+
+    @Test("the surface is inferred from the model family")
+    func inferredSurface() {
+        #expect(TargetProfile.make(modelFamily: "claude").surface == .claudeCode)
+        #expect(TargetProfile.make(modelFamily: "gpt").surface == .other)
+    }
 }

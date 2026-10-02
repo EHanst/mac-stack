@@ -16,6 +16,7 @@ struct ImproveInlineView: View {
     @State private var acceptedChanges: Set<Int> = []
     @State private var cachedChanges: [WordDiff.Change] = []
     @State private var showFullText = false
+    @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
 
     private enum Tab: String, CaseIterable {
         case result = "Result"
@@ -47,7 +48,7 @@ struct ImproveInlineView: View {
             improve.receiveOptimizerPhase(studio.phase)
             resetAccepted()
         }
-        .onChange(of: improve.revision) { _ in resetAccepted() }
+        .onChange(of: improve.revision) { _, _ in resetAccepted() }
     }
 
     // MARK: Top row and notices
@@ -69,12 +70,25 @@ struct ImproveInlineView: View {
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                 }
                 Spacer()
-                Button("Cancel") { improve.cancelOptimize(studio: studio) }.buttonStyle(MTTextButtonStyle())
+                Button { improve.cancelOptimize(studio: studio) } label: { HotkeyLabel(title: "Cancel", hotkey: .cancel) }
+                    .buttonStyle(MTTextButtonStyle()).hotkey(.cancel)
             } else {
                 Picker("", selection: $tab) {
                     ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
+                if tab == .result {
+                    // The same Human / Machine / JSON choice as the brief itself, applied to the rewrite.
+                    Picker("View", selection: $viewModeStorage) {
+                        ForEach(BriefViewMode.allCases, id: \.self) { Text("\($0.label)  \(Self.hotkey(for: $0).glyph)").tag($0.rawValue) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .background {
+                        ForEach(BriefViewMode.allCases, id: \.self) { mode in
+                            Button("") { viewModeStorage = mode.rawValue }.hotkey(Self.hotkey(for: mode)).hidden()
+                        }
+                    }
+                }
                 if let id = studio.modelID {
                     Text("Improved by \(Self.modelLabel(id))")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
@@ -88,17 +102,31 @@ struct ImproveInlineView: View {
     private var notice: some View {
         switch improve.optimizerPhase {
         case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle.fill")
-                .font(.mtBodyMedium).foregroundStyle(Color.mtError)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 8) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.mtBodyMedium).foregroundStyle(Color.mtError)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button("Dismiss") { improve.dismissNotice(studio: studio) }
+                    .buttonStyle(MTTextButtonStyle())
+                    .controlSize(.small)
+            }
         case .review(let result):
             VStack(alignment: .leading, spacing: 4) {
                 if let rejection = result.rejection {
-                    Label(rejection.reason, systemImage: "hand.raised.fill")
-                        .font(.mtBodyMedium).fixedSize(horizontal: false, vertical: true)
-                    if !rejection.missing.isEmpty {
-                        Text("Dropped: " + rejection.missing.prefix(6).joined(separator: ", "))
-                            .font(.system(.caption, design: .monospaced)).foregroundStyle(Color.mtOnSurfaceVariant)
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(rejection.reason, systemImage: "hand.raised.fill")
+                                .font(.mtBodyMedium).fixedSize(horizontal: false, vertical: true)
+                            if !rejection.missing.isEmpty {
+                                Text("Dropped: " + rejection.missing.prefix(6).joined(separator: ", "))
+                                    .font(.system(.caption, design: .monospaced)).foregroundStyle(Color.mtOnSurfaceVariant)
+                            }
+                        }
+                        Spacer()
+                        Button("Dismiss") { improve.dismissNotice(studio: studio) }
+                            .buttonStyle(MTTextButtonStyle())
+                            .controlSize(.small)
                     }
                 } else if !result.didChange && result.questions.isEmpty {
                     Label("That already reads clearly. Nothing to change.", systemImage: "checkmark.circle")
@@ -130,10 +158,28 @@ struct ImproveInlineView: View {
                         streamingText(partial)
                     }
                 default:
-                    MarkdownText(text: improve.revision)
+                    revisionView
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private static func hotkey(for mode: BriefViewMode) -> Hotkey {
+        switch mode { case .human: .viewHuman; case .machine: .viewMachine; case .json: .viewJSON }
+    }
+
+    /// The rewrite in the chosen form, compiled the same way the brief is when copied.
+    @ViewBuilder
+    private var revisionView: some View {
+        let mode = BriefViewMode.from(stored: viewModeStorage)
+        if mode == .human {
+            MarkdownText(text: improve.revision)
+        } else {
+            var preview = brief
+            let _ = preview.body = improve.revision
+            let compiled = BriefCompiler.compile(preview, form: mode == .json ? .json : .compact)
+            Text(compiled.text).font(AppTypography.monoFont(size: 13)).textSelection(.enabled)
         }
     }
 
@@ -176,11 +222,14 @@ struct ImproveInlineView: View {
                     Text("Untick any you don't want, then apply.")
                         .font(.mtBodySmall).foregroundStyle(Color.mtOnSurfaceVariant)
                     Spacer()
-                    Toggle("Full text", isOn: $showFullText).toggleStyle(.button).controlSize(.small)
-                        .help("Show the whole text with every change marked in place")
-                    Button("Keep all") { acceptedChanges = Set(list.map(\.id)) }.buttonStyle(MTTextButtonStyle())
-                    Button("Drop all") { acceptedChanges = [] }.buttonStyle(MTTextButtonStyle())
-                    Button("Apply") { applyAccepted() }
+                    Toggle(isOn: $showFullText) { Text("Full text") }
+                        .toggleStyle(.button).controlSize(.small)
+                    .help("Show the whole text with every change marked in place")
+                    Button { acceptedChanges = Set(list.map(\.id)) } label: { Text("Keep all") }
+                        .buttonStyle(MTTextButtonStyle())
+                    Button { acceptedChanges = [] } label: { Text("Drop all") }
+                        .buttonStyle(MTTextButtonStyle())
+                    Button { applyAccepted() } label: { Text("Apply") }
                         .buttonStyle(MTOutlinedButtonStyle())
                         .disabled(acceptedChanges.count == list.count)
                         .help("Rewrite the result to keep only the ticked changes")
@@ -306,6 +355,9 @@ struct ImproveActionBar: View {
     @Environment(AppServices.self) private var services
     private var improve: BriefImproveModel { services.improve }
     private var studio: PromptStudioModel { services.promptStudio }
+    @State private var copied = false
+
+    @AppStorage(DefaultsKey.briefViewMode) private var viewModeStorage: String = BriefViewMode.human.rawValue
 
     private var isRunning: Bool {
         switch improve.optimizerPhase {
@@ -314,22 +366,55 @@ struct ImproveActionBar: View {
         }
     }
 
+    /// The rewrite in the form chosen in the view picker, redacted like every other copy.
+    private func copyText() -> String {
+        guard var brief = services.briefs.selected else { return ContextRedactor.redact(improve.revision).text }
+        brief.body = improve.revision
+        let form: BriefCompiler.Form = switch BriefViewMode.from(stored: viewModeStorage) {
+        case .human: .readable
+        case .machine: .compact
+        case .json: .json
+        }
+        return BriefCompiler.compile(brief, form: form).text
+    }
+
     var body: some View {
         HStack {
             if !isRunning {
-                Button("Discard") { improve.keepMine() }.buttonStyle(MTTextButtonStyle())
-                    .help("Close without saving. The brief stays exactly as it was.")
-                Button("Expand") { improve.expand(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
+                let empty = improve.revision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                Button { improve.keepMine() } label: { HotkeyLabel(title: "Discard rewrite", hotkey: .cancel) }
+                    .buttonStyle(MTTextButtonStyle()).hotkey(.cancel)
+                    .help("Throw away this rewrite and go back to your brief, exactly as it was. Nothing is saved.")
+                Button { improve.improve(studio: studio) } label: { HotkeyLabel(title: "Improve", hotkey: .improve) }
+                    .buttonStyle(MTOutlinedButtonStyle()).hotkey(.improve)
+                    .help("Run an improve pass on this draft")
+                    .disabled(empty)
+                Button { improve.expand(studio: studio) } label: { Text("Expand") }
+                    .buttonStyle(MTOutlinedButtonStyle())
                     .help("Try again and turn this into a detailed specification")
-                Button("Finer") { improve.expand(studio: studio, finer: true) }.buttonStyle(MTOutlinedButtonStyle())
+                    .disabled(empty)
+                Button { improve.expand(studio: studio, finer: true) } label: { Text("Finer") }
+                    .buttonStyle(MTOutlinedButtonStyle())
                     .help("Split the current steps one level finer")
+                    .disabled(empty)
                 Spacer()
-                Button("Save and improve again") { improve.acceptAndContinue(studio: studio) }.buttonStyle(MTOutlinedButtonStyle())
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(copyText(), forType: .string)
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(2)); copied = false }
+                } label: { HotkeyLabel(title: copied ? "Copied" : "Copy", systemImage: "doc.on.doc", hotkey: .copyMachine) }
+                .hotkey(.copyMachine)
+                .help("Copy this improved prompt without saving it")
+                .disabled(empty)
+                Button { improve.acceptAndContinue(studio: studio) } label: { Text("Save and improve again") }
+                    .buttonStyle(MTOutlinedButtonStyle())
                     .help("Save this version to the brief, then run another improve pass on it")
-                Button("Save") { improve.accept() }.buttonStyle(MTFilledButtonStyle())
+                Button { improve.accept() } label: { HotkeyLabel(title: "Save", hotkey: .save) }
+                    .buttonStyle(MTFilledButtonStyle())
                     .help("Save this version as the brief and close")
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(improve.revision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .hotkey(.save)
+                    .disabled(empty)
             } else {
                 Spacer()
             }

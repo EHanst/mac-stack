@@ -19,6 +19,9 @@ public final class BriefWorkbenchModel {
     /// compiled prompt or exports it. The knowledge recorder listens; nothing here depends on it.
     public var onBriefAccepted: (@MainActor (Brief) -> Void)?
 
+    /// Briefs saved into projects (`.vibe/briefs/*.md`) that are not already in the list.
+    public private(set) var savedFiles: [SavedBriefFile] = []
+
     private let store: BriefStore
     private let saveDelay: Duration
     /// One save chain per brief, so editing B never cancels A's pending write.
@@ -179,8 +182,8 @@ public final class BriefWorkbenchModel {
         return true
     }
 
-    public func setTarget(modelFamily: String, surface: Surface) {
-        mutate { $0.target = .make(modelFamily: modelFamily, surface: surface); $0.updatedAt = Date() }
+    public func setTarget(modelFamily: String) {
+        mutate { $0.target = .make(modelFamily: modelFamily); $0.updatedAt = Date() }
     }
 
     public func deleteSelected() async {
@@ -270,6 +273,38 @@ public final class BriefWorkbenchModel {
         } catch {
             return error.localizedDescription
         }
+    }
+
+    public struct SavedBriefFile: Identifiable, Equatable, Sendable {
+        public let url: URL
+        public let title: String
+        public var id: String { url.path }
+    }
+
+    /// Re-reads the project folders. Files that belong to a brief already in the list are left out.
+    public func refreshSavedFiles() async {
+        let known = Set(briefs.map(BriefExporter.fileName(for:)))
+        var found: [SavedBriefFile] = []
+        for root in await exportRoots() {
+            for url in BriefExporter.savedFiles(inProjectRoot: root) where !known.contains(url.lastPathComponent) {
+                let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+                let name = url.deletingPathExtension().lastPathComponent
+                guard let parsed = BriefExporter.parse(text, fallbackTitle: name) else { continue }
+                found.append(.init(url: url, title: parsed.title))
+            }
+        }
+        savedFiles = found
+    }
+
+    /// Opens a markdown file as a new brief. Returns an error sentence, or nil on success.
+    @discardableResult
+    public func loadBrief(from url: URL) async -> String? {
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return "Could not read \(url.lastPathComponent)." }
+        guard let parsed = BriefExporter.parse(text, fallbackTitle: url.deletingPathExtension().lastPathComponent) else {
+            return "\(url.lastPathComponent) is empty."
+        }
+        await newBrief(title: parsed.title, input: parsed.body)
+        return nil
     }
 
     /// Every saved brief, with pending edits written first. For outside readers such as MCP.
