@@ -49,7 +49,7 @@ struct RevealRenderer: TextRenderer, Animatable {
             }
         }
         if let cursor, position < index {
-            let size = max(cursor.height * 1.15, 14)
+            let size = max(cursor.height * 1.6, 20)
             KokoroCursor.draw(in: &context, center: CGPoint(x: cursor.minX - size * 0.35, y: cursor.midY),
                               size: size, phase: position)
         }
